@@ -40,8 +40,8 @@ class BooksyBrain:
         Te Booksy vagy, Sales Agent.
         TUDÁSBÁZIS: {self.store_policy}
         SZABÁLYOK:
-        - Ha könyvet ajánlasz, beszélj róla röviden, kedvcsináló stílusban.
-        - NE sorold fel a technikai adatokat (ár, link), mert azt a rendszer megjeleníti alattad Kártyákon!
+        - Ha könyvet ajánlasz, írj egy nagyon rövid, vonzó bevezetőt.
+        - TILTOTT: Ne sorold fel a könyveket listában (1. Cím - Ár...), mert a rendszer kártyákon jeleníti meg őket alattad!
         - Csak a tartalomra fókuszálj.
         - Ha nincs találat, legyél udvarias.
         """
@@ -110,8 +110,8 @@ class BooksyBrain:
                 }
                 found_products.append(product_data)
                 
-                context_text += f"- {title}\n" # Az AI-nak csak a címet adjuk, hogy tudjon róla beszélni
-                if len(found_products) >= 5: break
+                context_text += f"- {title}\n" # Az AI-nak csak a címet adjuk
+                if len(found_products) >= 6: break
             
             if not found_products:
                 msg = "Din păcate, nu am găsit nimic relevant." if detected_lang == 'ro' else "Sajnos nem találtam releváns könyvet."
