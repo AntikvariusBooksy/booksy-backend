@@ -14,7 +14,7 @@ INDEX_NAME = "booksy-index"
 # Inicializáljuk a Webes Appot (FastAPI)
 app = FastAPI()
 
-# CORS beállítások (Hogy a weboldalad elérje)
+# CORS beállítások
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -40,10 +40,10 @@ class BooksyBrain:
         self.pc = Pinecone(api_key=self.api_key_pinecone)
         self.index = self.pc.Index(INDEX_NAME)
 
-        # ÜZLETI TUDÁSBÁZIS (Szigorított)
+        # ÜZLETI TUDÁSBÁZIS
         self.store_policy = """
         [SZÁLLÍTÁS / LIVRARE - PROTOKOLL]
-        A szállítási időről szóló kérdéseknél MINDIG fel kell sorolnod mindkét lehetőséget. Tilos csak a gyorsabbikat említeni!
+        A szállítási időről szóló kérdéseknél MINDIG fel kell sorolnod mindkét lehetőséget.
         
         A KÉPLET: Feldolgozás + Futár = Kézbesítés.
 
@@ -77,11 +77,13 @@ class BooksyBrain:
         1. NYELV: HU kérdés -> HU válasz. RO kérdés -> RO válasz.
         2. PÉNZNEM: Mindig 'RON'.
         
-        3. SZÁLLÍTÁSI IDŐ (KÖTELEZŐ):
-           Ha a felhasználó a szállítási időről érdeklődik, a válaszodnak KÖTELEZŐEN tartalmaznia kell mindkét forgatókönyvet:
-           - Említsd meg a "Raktáron" lévő termékek idejét (2-4 nap feldolgozás).
-           - ÉS KÖTELEZŐEN említsd meg a "Külső raktáras" (utánrendelhető) termékek idejét is (7-30 nap feldolgozás).
-           - SOHA ne hagyd ki a 7-30 napos opciót, mert félrevezető!
+        3. ANTI-HALLUCINÁCIÓ (KRITIKUS):
+           - CSAK ÉS KIZÁRÓLAG a 'Context'-ben kapott könyveket ajánlhatod!
+           - SOHA ne találj ki könyveket fejből!
+           - Ha a Context üres vagy nem releváns, mondd azt, hogy "Sajnos jelenleg nincs ilyen könyvünk."
+        
+        4. SZÁLLÍTÁS:
+           - Mindig említsd meg a 2-4 napos (raktár) ÉS a 7-30 napos (utánrendelés) opciót is.
 
         KÉT ÜZEMMÓD:
         A) KÖNYAJÁNLÓ (SEARCH): Context alapján. Formátum: [CÍM](URL) - ÁR RON.
@@ -114,6 +116,7 @@ class BooksyBrain:
         try:
             response = self.client_ai.embeddings.create(input=query_text, model="text-embedding-3-small")
             query_vector = response.data[0].embedding
+            # Keresés
             search_results = self.index.query(
                 vector=query_vector,
                 top_k=20, 
@@ -130,37 +133,60 @@ class BooksyBrain:
         detected_lang, intent, keywords = self.generate_search_params(user_input)
         
         context_text = ""
-        
+        has_results = False # Figyelő kapcsoló
+
         # 2. Adatgyűjtés
         if intent == "SEARCH":
             results = self.search_books(keywords, detected_lang)
             seen_titles = []
             count = 0
-            if not results.get('matches'):
-                context_text = "Nincs találat. / Nu am găsit rezultate."
-            else:
-                for match in results['matches']:
-                    meta = match['metadata']
-                    title = str(meta.get('title', 'N/A'))
-                    # Duplikáció szűrés
-                    is_dup = False
-                    for seen in seen_titles:
-                        if difflib.SequenceMatcher(None, title.lower(), seen.lower()).ratio() > 0.85:
-                            is_dup = True; break
-                    if is_dup: continue
-                    seen_titles.append(title)
-                    
-                    context_text += f"- [CÍM: {title}](URL: {meta.get('url')}) - ÁR: {meta.get('price')} RON\n"
-                    count += 1
-                    if count >= 6: break
+            
+            # --- BIZTONSÁGI ZÁR: Ha nincs találat a Pinecone-ban ---
+            if not results.get('matches') or len(results['matches']) == 0:
+                if detected_lang == 'ro':
+                    return "Din păcate, nu am găsit nicio carte pe acest subiect în stocul nostru actual. 😞 Poate încercați o altă căutare?"
+                else:
+                    return "Sajnos jelenleg nem találtam ilyen témájú könyvet a készletünkön. 😞 Esetleg próbáld meg más kulcsszóval!"
+            # -------------------------------------------------------
+
+            for match in results['matches']:
+                # Opcionális: Szűrhetünk Score alapján is (pl. 0.7 alatt kuka)
+                if match['score'] < 0.35: # Ha nagyon gyenge a találat, eldobjuk
+                    continue
+
+                meta = match['metadata']
+                title = str(meta.get('title', 'N/A'))
+                
+                # Duplikáció szűrés
+                is_dup = False
+                for seen in seen_titles:
+                    if difflib.SequenceMatcher(None, title.lower(), seen.lower()).ratio() > 0.85:
+                        is_dup = True; break
+                if is_dup: continue
+                seen_titles.append(title)
+                
+                context_text += f"- [CÍM: {title}](URL: {meta.get('url')}) - ÁR: {meta.get('price')} RON\n"
+                count += 1
+                has_results = True
+                if count >= 6: break
+            
+            # --- BIZTONSÁGI ZÁR 2: Ha volt találat, de mindet kiszűrtük (duplikáció vagy gyenge score miatt) ---
+            if not has_results:
+                 if detected_lang == 'ro':
+                    return "Din păcate, nu am găsit nicio carte relevantă în stoc. 😞"
+                 else:
+                    return "Sajnos nem találtam releváns könyvet a készleten. 😞"
+            # --------------------------------------------------------------------------------------------------
+
         else:
+            # INFO MÓD (Itt engedjük az AI-t beszélni a Policy alapján)
             context_text = "HASZNÁLD A TUDÁSBÁZIST!"
 
         # 3. Válasz generálás
         if detected_lang == 'ro':
-            lang_instruction = "IMPORTANT: Reply in ROMANIAN only! When discussing delivery time, YOU MUST mention both 'In Stock' (2-4 days) AND 'Backorder' (7-30 days) scenarios."
+            lang_instruction = "IMPORTANT: Reply in ROMANIAN only! STRICTLY NO HALLUCINATIONS. Only recommend books from the Context list."
         else:
-            lang_instruction = "IMPORTANT: Reply in HUNGARIAN only! When discussing delivery time, YOU MUST mention both 'In Stock' (2-4 days) AND 'Backorder' (7-30 days) scenarios."
+            lang_instruction = "IMPORTANT: Reply in HUNGARIAN only! STRICTLY NO HALLUCINATIONS. Only recommend books from the Context list."
 
         response = self.client_ai.chat.completions.create(
             model="gpt-4o-mini",
@@ -169,7 +195,7 @@ class BooksyBrain:
                 {"role": "system", "content": lang_instruction},
                 {"role": "user", "content": f"User Question: {user_input}\n\nContext:\n{context_text}"}
             ],
-            temperature=0.5
+            temperature=0.3 # Visszavettem a kreativitásból (0.5 -> 0.3)
         )
         return response.choices[0].message.content
 
@@ -179,7 +205,7 @@ bot = BooksyBrain()
 # --- API VÉGPONTOK ---
 @app.get("/")
 def home():
-    return {"status": "Booksy AI Server is Running", "version": "1.1"}
+    return {"status": "Booksy AI Server is Running", "version": "1.2 Secure"}
 
 @app.post("/chat")
 def chat_endpoint(request: ChatRequest):
