@@ -1,0 +1,15 @@
+# Titkos kulcsok (SOHA NE TÖLTSD FEL!)
+.env
+
+# Nagy adatfájlok (Feleslegesek a szervernek)
+export.xml
+booksy_data.json
+*.xml
+*.json
+
+# Python szemetek
+__pycache__/
+*.pyc
+venv/
+.idea/
+.vscode/
