@@ -1,5 +1,9 @@
 fastapi
 uvicorn
+pydantic
+python-dotenv
 openai
 pinecone
-python-dotenv
+requests
+beautifulsoup4
+apscheduler
