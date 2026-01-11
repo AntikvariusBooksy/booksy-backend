@@ -1,7 +1,6 @@
 import os
 import difflib
 import unicodedata
-import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,12 +8,10 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pinecone import Pinecone
 
-# --- KONFIGURÁCIÓ ---
 load_dotenv()
 INDEX_NAME = "booksy-index"
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -33,7 +30,6 @@ class HookRequest(BaseModel):
     cart_status: str 
     lang: str
 
-# --- SEGÉDFÜGGVÉNYEK ---
 def normalize_text(text):
     if not text: return ""
     text = str(text).lower()
@@ -46,188 +42,215 @@ class BooksyBrain:
         self.client_ai = OpenAI(api_key=self.api_key_openai)
         self.pc = Pinecone(api_key=self.api_key_pinecone)
         self.index = self.pc.Index(INDEX_NAME)
-
+        
+        # ITT A TUDÁSBÁZIS A KÉRDÉSEKHEZ
         self.store_policy = """
-        [SZÁLLÍTÁS: Feldolgozás (2-4 nap raktár / 7-30 nap külső) + Futár (24-48h RO, 2-4 nap HU).]
+        [SZEREPEK: Te Booksy vagy, az Antikvarius.ro segítőkész AI asszisztense.]
+        [SZÁLLÍTÁS ROMÁNIA: 24-48 óra, GLS futár. Ár: 25 RON (utánvét), 20 RON (kártya). Ingyenes 250 RON felett.]
+        [SZÁLLÍTÁS MAGYARORSZÁG: 2-4 munkanap, GLS futár. Ár: 2990 HUF. Ingyenes 25.000 HUF felett.]
+        [NÉMETORSZÁG/EU: Szállítás megoldható, egyedi díjszabás alapján. Kérlek vedd fel a kapcsolatot az info@antikvarius.ro címen.]
+        [FIZETÉS: Utánvét (csak RO/HU), Bankkártya (Stripe/Barion).]
+        [KAPCSOLAT: info@antikvarius.ro, Tel: +40 755 583 310]
         """
 
     def generate_sales_hook(self, ctx: HookRequest):
         try:
             response = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": f"Context: Lang {ctx.lang}, Page {ctx.page_title}, Cart {ctx.cart_status}. Generate short sales hook (max 6 words)."},
-                    {"role": "user", "content": "Hook me."}
-                ],
+                messages=[{"role": "system", "content": "Short friendly sales hook."}, {"role": "user", "content": "Hook."}],
                 temperature=0.7, max_tokens=30
             )
             return response.choices[0].message.content.strip()
-        except:
-            return "Bună! Te pot ajuta?" if ctx.lang == 'ro' else "Szia! Segíthetek?"
+        except: return "Szia! Segíthetek?"
 
-    def generate_search_params(self, user_input):
+    # --- 1. AZ "OKOS PORTÁS" (INTENT DETECTION) ---
+    def detect_intent_and_language(self, user_input):
         try:
+            # Ez a lépés dönti el, hogy könyvet keresünk VAGY beszélgetünk
             response = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": """
-                     Analyze user query.
-                     1. Language (hu/ro).
-                     2. Intent (SEARCH/INFO).
-                     3. Scope (ALL/SPECIFIC).
-                     4. KEYWORDS: Keep names intact!
-                     Output: LANG | SCOPE | INTENT | KEYWORDS
+                     Classify the user input.
+                     
+                     1. LANGUAGE: 'hu' (Hungarian) or 'ro' (Romanian).
+                     2. INTENT: 
+                        - 'SEARCH': User is looking for a specific book, author, category, or topic (e.g., "Berente Ági", "krimi", "könyvek").
+                        - 'INFO': User is asking about shipping, payment, contact, "hello", "help", or general questions (e.g., "mennyibe kerül a szállítás?", "buna ziua").
+                     
+                     OUTPUT FORMAT: LANG | INTENT
+                     Examples:
+                     "Berente Ági könyvek" -> hu | SEARCH
+                     "Cat costa transportul?" -> ro | INFO
+                     "Szia" -> hu | INFO
+                     "Harry Potter" -> hu | SEARCH
                      """},
                     {"role": "user", "content": user_input}
                 ],
                 temperature=0.1
             )
             parts = response.choices[0].message.content.split('|')
-            return parts[0].strip().lower(), parts[1].strip(), parts[2].strip(), parts[3].strip()
+            lang = parts[0].strip().lower()
+            intent = parts[1].strip().upper()
+            return lang if lang in ['hu', 'ro'] else 'hu', intent
         except:
-            return "hu", "SPECIFIC", "SEARCH", user_input
+            return 'hu', 'SEARCH' # Fallback
 
-    def search_books(self, query_text, lang_filter, scope):
+    # --- 2. KERESŐMOTOR (Csak akkor fut le, ha SEARCH az intent) ---
+    def search_engine_logic(self, query_text, lang_filter):
         try:
-            response = self.client_ai.embeddings.create(input=query_text, model="text-embedding-3-small")
+            stop_words = ['a', 'az', 'egy', 'es', 'konyv', 'konyvek', 'keresek', 'kiado', 'szerzo', 'cim', 'regeny', 'iro', 'vennek', 'carte', 'carti', 'caut']
+            normalized_query = normalize_text(query_text)
+            keywords = [w for w in normalized_query.split() if w not in stop_words and len(w) > 2]
             
-            # 1. KÖTELEZŐ KÉSZLET SZŰRÉS (Hogy ne legyen outofstock)
+            clean_query = " ".join(keywords) if keywords else query_text
+
+            response = self.client_ai.embeddings.create(input=clean_query, model="text-embedding-3-small")
+            
             filter_criteria = {"stock": "instock"}
-            if scope != 'ALL' and lang_filter in ['hu', 'ro']:
-                filter_criteria["lang"] = lang_filter
+            if lang_filter: filter_criteria["lang"] = lang_filter
             
             raw_results = self.index.query(
                 vector=response.data[0].embedding,
-                top_k=100, 
+                top_k=200, 
                 include_metadata=True, 
                 filter=filter_criteria
             )
 
             matches = raw_results.get('matches', [])
-            if not matches: return {"matches": []}
+            if not matches: return []
 
-            # --- 2. V17 INTELLIGENS VÁLOGATÁS ---
-            
-            stop_words = ['konyv', 'konyvek', 'konyvet', 'carte', 'carti', 'keresek', 'kiado', 'szerzo', 'cim']
-            normalized_query = normalize_text(query_text)
-            # Kulcsszavak (pl. "berente", "agi")
-            search_keywords = [w for w in normalized_query.split() if w not in stop_words and len(w) > 2]
-
-            final_results = []
+            scored_results = []
             seen_titles = set()
 
             for match in matches:
                 meta = match['metadata']
-                score = match['score']
                 title = str(meta.get('title', ''))
-                
-                # Duplikáció szűrés (Hogy ne legyen 2x ugyanaz)
                 if title in seen_titles: continue
                 seen_titles.add(title)
 
-                # Keresés a látható mezőkben (Cím, Szerző, Kategória)
-                full_text_search = normalize_text(title) + " " + \
-                                   normalize_text(str(meta.get('author', ''))) + " " + \
-                                   normalize_text(str(meta.get('category', '')))
-                
-                # SZABÁLYRENDSZER:
-                keep_it = False
-                
-                # A. Ha nincs kulcsszó (általános keresés), akkor a Score dönt
-                if not search_keywords:
-                    if score > 0.3: keep_it = True
-                
+                title_norm = normalize_text(title)
+                author_norm = normalize_text(str(meta.get('author', '')))
+                cat_norm = normalize_text(str(meta.get('category', '')))
+                full_text_norm = normalize_text(str(meta.get('full_search_text', '')))
+
+                relevance_score = 0
+                match_count = 0
+
+                if not keywords:
+                    relevance_score = match['score'] * 100
                 else:
-                    # B. Ha VAN kulcsszó (pl. név)
-                    
-                    # 1. Szöveges egyezés (Legalább egy kulcsszó benne van a címben/szerzőben)
-                    # Szigorítottuk: Ha több szó van, többnek kell egyeznie
-                    match_count = 0
-                    for kw in search_keywords:
-                        if kw in full_text_search:
+                    for kw in keywords:
+                        kw_score = 0
+                        found = False
+                        
+                        if kw in title_norm:
+                            kw_score += 100
+                            found = True
+                        elif kw in author_norm:
+                            kw_score += 80
+                            found = True
+                        elif kw in full_text_norm: # Leírásban keresés
+                            kw_score += 20
+                            found = True
+                        
+                        if found:
                             match_count += 1
-                    
-                    if match_count >= 1: # Ha legalább egy erős szó megvan (pl. Berente)
-                        keep_it = True
-                    
-                    # 2. BIZALMI ELV (High Score Override)
-                    # Ha a szövegben NINCS benne (pl. rejtett szerző), de az AI nagyon biztos benne
-                    # (Score > 0.72 - ez nagyon magas egyezés), akkor elhisszük neki.
-                    elif score > 0.72:
-                        # print(f"Trusting Vector for: {title} (Score: {score})") 
-                        keep_it = True
+                            relevance_score += kw_score
 
-                if keep_it:
-                    final_results.append(match)
+                    if match_count == len(keywords) and len(keywords) > 1:
+                        relevance_score += 200 
 
-            # Rendezés pontszám szerint
-            final_results.sort(key=lambda x: x['score'], reverse=True)
-            
-            return {"matches": final_results[:25]}
+                if keywords and relevance_score < 10:
+                    continue
+
+                match['final_relevance'] = relevance_score
+                scored_results.append(match)
+
+            scored_results.sort(key=lambda x: x['final_relevance'], reverse=True)
+            return scored_results[:20]
 
         except Exception as e:
-            print(f"Keresési hiba: {e}")
-            return {"matches": []}
+            print(f"Hiba: {e}")
+            return []
 
     def process_message(self, user_input):
-        detected_lang, scope, intent, keywords = self.generate_search_params(user_input)
-        context_text = ""
-        found_products = [] 
+        # 1. LÉPÉS: Mit akar a user?
+        lang, intent = self.detect_intent_and_language(user_input)
         
-        footer_hu = "\n\n💡 *Tipp: Jelenleg a nyelvednek megfelelő könyveket keresem. Ha mindent látni szeretnél, írd hozzá: „minden nyelven”!*"
-        footer_ro = "\n\n💡 *Sfat: Caut cărți în limba ta. Dacă vrei să vezi toate limbile, adaugă: „toate limbile”!*"
-
-        if intent == "SEARCH":
-            results = self.search_books(keywords, detected_lang, scope)
+        # 2. LÉPÉS: ÚTVÁLASZTÁS
+        
+        # --- A) HA NEM KÖNYVET KERES (PL. SZÁLLÍTÁS, ÜDVÖZLÉS) ---
+        if intent == 'INFO':
+            lang_instruction = "Reply in ROMANIAN." if lang == 'ro' else "Reply in HUNGARIAN."
+            system_prompt = f"Te Booksy vagy. {self.store_policy} Válaszolj a felhasználó kérdésére kedvesen és röviden."
             
-            if not results.get('matches'):
-                msg = "Nu am găsit rezultate în stoc." if detected_lang == 'ro' else "Sajnos nem találtam készleten lévő könyvet."
-                return {"reply": msg + (footer_ro if detected_lang == 'ro' else footer_hu), "products": []}
+            response = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": lang_instruction},
+                    {"role": "user", "content": user_input}
+                ],
+                temperature=0.3
+            )
+            return {"reply": response.choices[0].message.content, "products": []}
 
-            for match in results['matches']:
-                meta = match['metadata']
-                title = str(meta.get('title', 'N/A'))
-                
-                product_data = {
-                    "title": title,
-                    "price": meta.get('price', 'N/A'), 
-                    "url": meta.get('url', '#'),
-                    "image": meta.get('image_url', '') 
-                }
-                found_products.append(product_data)
-                
-                author = meta.get('author', 'N/A')
-                cat_tag = meta.get('category', 'N/A')
-                context_text += f"- {title} (Szerző: {author}, Ár: {meta.get('price')} RON, Kategória: {cat_tag})\n"
-                
-                if len(found_products) >= 8: break 
+        # --- B) HA KÖNYVET KERES (SEARCH) ---
+        matches = self.search_engine_logic(user_input, lang)
+        
+        context_text = ""
+        found_products = []
+        
+        footer_hu = "\n\n💡 *Tipp: Ha mindent látni szeretnél, írd hozzá: „minden nyelven”!*"
+        footer_ro = "\n\n💡 *Sfat: Adaugă: „toate limbile”!*"
+
+        if not matches:
+            msg = "Sajnos nem találtam készleten lévő könyvet." if lang == 'hu' else "Nu am găsit cărți în stoc."
+            return {"reply": msg + (footer_ro if lang == 'ro' else footer_hu), "products": []}
+
+        for match in matches:
+            meta = match['metadata']
+            title = str(meta.get('title', 'N/A'))
             
-            if not found_products:
-                msg = "Nu am găsit nimic relevant." if detected_lang == 'ro' else "Sajnos nem találtam releváns könyvet."
-                return {"reply": msg + (footer_ro if detected_lang == 'ro' else footer_hu), "products": []}
+            product_data = {
+                "title": title,
+                "price": meta.get('price', 'N/A'), 
+                "url": meta.get('url', '#'),
+                "image": meta.get('image_url', '') 
+            }
+            found_products.append(product_data)
+            
+            author = meta.get('author', '')
+            short_desc = str(meta.get('short_desc', ''))[:100]
+            
+            context_text += f"- {title} (Szerző: {author}, Ár: {meta.get('price')} RON, Info: {short_desc})\n"
+            
+            if len(found_products) >= 8: break 
 
-        else:
-            context_text = "HASZNÁLD A TUDÁSBÁZIST!"
+        lang_instruction = "Reply in ROMANIAN." if lang == 'ro' else "Reply in HUNGARIAN."
+        system_prompt = f"Te Booksy vagy. {self.store_policy} Ajánld a megtalált könyveket."
 
-        lang_instruction = "Reply in ROMANIAN only." if detected_lang == 'ro' else "Reply in HUNGARIAN only."
         response = self.client_ai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": f"Te Booksy vagy. {self.store_policy}"},
+                {"role": "system", "content": system_prompt},
                 {"role": "system", "content": lang_instruction},
-                {"role": "user", "content": f"User: {user_input}\nFound Instock Books:\n{context_text}"}
+                {"role": "user", "content": f"User: {user_input}\nFound Books:\n{context_text}"}
             ],
             temperature=0.3
         )
         
         final_reply = response.choices[0].message.content
-        if scope != 'ALL': final_reply += footer_ro if detected_lang == 'ro' else footer_hu
+        if lang == 'hu': final_reply += footer_hu
+        else: final_reply += footer_ro
+        
         return {"reply": final_reply, "products": found_products}
 
 bot = BooksyBrain()
 
 @app.get("/")
-def home(): return {"status": "Booksy V17 (Instock + Smart Trust Logic)"}
+def home(): return {"status": "Booksy V21 (Intent Router + Full Search)"}
 
 @app.post("/hook")
 def hook_endpoint(request: HookRequest):
