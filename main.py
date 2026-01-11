@@ -6,7 +6,7 @@ import re
 import unicodedata
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -68,10 +68,16 @@ def safe_str(val):
 
 def extract_author(short_desc):
     if not short_desc: return ""
-    match = re.search(r'(Szerző|Írta):\s*([^<|\n]+)', short_desc, re.IGNORECASE)
+    match = re.search(r'(Szerző|Írta|Author):\s*([^<|\n]+)', short_desc, re.IGNORECASE)
     return match.group(2).strip() if match else ""
 
-# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (V33 LOGIC) ---
+# ÚJ: KIADÓ KINYERÉSE
+def extract_publisher(short_desc):
+    if not short_desc: return ""
+    match = re.search(r'(Kiadó|Publisher):\s*([^<|\n]+)', short_desc, re.IGNORECASE)
+    return match.group(2).strip() if match else ""
+
+# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (V35 LOGIC) ---
 class AutoUpdater:
     def __init__(self):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -151,6 +157,7 @@ class AutoUpdater:
                     short_desc = clean_html(safe_str(short_desc_node.text)) if short_desc_node else desc[:500]
 
                     auth = extract_author(short_desc)
+                    pub = extract_publisher(short_desc) # KIADÓ KINYERÉSE
 
                     cat_node = item.find('g:product_type', ns) or item.find('Productcategories')
                     cat = safe_str(cat_node.text) if cat_node else ""
@@ -163,8 +170,11 @@ class AutoUpdater:
                     reg = safe_str(price_node.text) if price_node else "0"
                     sale = safe_str(sale_node.text) if sale_node else ""
                     
-                    full_txt = f"{title} {auth} {sku} {cat} {desc}"[:9500]
-                    d_hash = generate_content_hash(f"{bid}{title}{reg}{sale}{desc[:200]}")
+                    # Full textben is benne legyen a kiadó
+                    full_txt = f"{title} {auth} {pub} {sku} {cat} {desc}"[:9500]
+                    
+                    # Hashbe is beletesszük a pub-ot, hogy újraindexeljen ha változik
+                    d_hash = generate_content_hash(f"{bid}{title}{pub}{reg}{sale}{desc[:200]}")
 
                     need_emb = True
                     try:
@@ -176,11 +186,13 @@ class AutoUpdater:
                     except: pass
 
                     if need_emb:
-                        emb = self.client_ai.embeddings.create(input=f"{title}|{auth}|{cat}|{short_desc}"[:8000], model="text-embedding-3-small").data[0].embedding
+                        # Embeddingbe is beletesszük a kiadót
+                        emb = self.client_ai.embeddings.create(input=f"{title}|{auth}|{pub}|{cat}|{short_desc}"[:8000], model="text-embedding-3-small").data[0].embedding
 
                     meta = {
                         "title": title, "price": reg, "sale_price": sale, "url": url, "image_url": img, 
-                        "lang": "hu", "stock": "instock", "author": auth, "category": cat, 
+                        "lang": "hu", "stock": "instock", 
+                        "author": auth, "publisher": pub, "category": cat, # META-ba is mentjük
                         "short_desc": short_desc[:500], "full_search_text": full_txt, 
                         "content_hash": d_hash, "last_seen": current_sync_ts
                     }
@@ -231,7 +243,6 @@ class BooksyBrain:
 
     def search(self, q, search_lang_filter):
         try:
-            # V34: Ha 'all' a filter (minden nyelven), nem szűrünk nyelvre
             norm_q = normalize_text(q)
             stop = ['a','az','egy','es']
             kw = [w for w in norm_q.split() if w not in stop and len(w)>2]
@@ -241,7 +252,6 @@ class BooksyBrain:
             
             filt = {"stock": "instock"}
             
-            # CSAK AKKOR SZŰRÜNK, HA NEM 'all'
             if search_lang_filter != 'all' and search_lang_filter in ['hu','ro']: 
                 filt["lang"] = search_lang_filter
             
@@ -259,15 +269,19 @@ class BooksyBrain:
                 else:
                     tn = normalize_text(tit)
                     an = normalize_text(m['metadata'].get('author',''))
+                    pn = normalize_text(m['metadata'].get('publisher','')) # KIADÓ
                     fn = normalize_text(m['metadata'].get('full_search_text',''))
+                    
                     cnt = 0
                     for k in kw:
                         hit=False
                         if k in tn: score+=100; hit=True
                         elif k in an: score+=80; hit=True
+                        elif k in pn: score+=100; hit=True # KIADÓ = CÍM EREJŰ TALÁLAT!
                         elif k in fn: score+=20; hit=True
                         if hit: cnt+=1
                     if cnt==len(kw) and len(kw)>1: score+=200
+                
                 if kw and score<10: continue
                 m['final_relevance'] = score
                 final.append(m)
@@ -277,8 +291,8 @@ class BooksyBrain:
         except: return []
 
     def process(self, msg, context_url=""):
+        # 1. NYELV ÉS SZÁNDÉK DETEKTÁLÁS
         try:
-            # --- JAVÍTVA: Az üzeneteket EGY listában adjuk át, nem duplán ---
             res = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -287,14 +301,23 @@ class BooksyBrain:
                 ],
                 temperature=0.1
             )
-            # -----------------------------------------------------------------
-            
             p = res.choices[0].message.content.split('|')
             user_lang, intent = p[0].strip().lower(), p[1].strip().upper()
         except: user_lang, intent = 'hu', 'SEARCH'
 
-        site_lang = 'hu' if '/hu/' in str(context_url) else 'ro'
+        # 2. HELYES URL / SITE NYELV DETEKTÁLÁS
+        # Ha a context_url üres vagy None, akkor próbáljuk a user_lang-ből kitalálni
+        safe_url = str(context_url).lower() if context_url else ""
+        
+        if '/hu/' in safe_url:
+            site_lang = 'hu'
+        elif '/ro/' in safe_url:
+            site_lang = 'ro'
+        else:
+            # Fallback: Ha nincs URL infó, de a user magyarul ír, legyünk magyar módban
+            site_lang = user_lang if user_lang in ['hu', 'ro'] else 'ro'
 
+        # 3. INFO ÁG (Policy)
         if intent == 'INFO':
             pol = self.get_policy()
             instr = f"Reply in {user_lang.upper()}."
@@ -302,7 +325,7 @@ class BooksyBrain:
             ans = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"system","content":sys},{"role":"system","content":f"Policy:\n{pol}"},{"role":"system","content":instr},{"role":"user","content":msg}]).choices[0].message.content
             return {"reply": ans, "products": []}
 
-        # V34: "MINDEN NYELVEN" DETEKTÁLÁS
+        # 4. KERESÉS ÁG
         force_all = False
         if "minden nyelven" in msg.lower() or "toate limbile" in msg.lower() or "all languages" in msg.lower():
             force_all = True
@@ -315,14 +338,12 @@ class BooksyBrain:
         if not matches:
             txt = "Sajnos nem találtam." if user_lang=='hu' else "Nu am găsit."
             
-            # Ha NEM "minden nyelven" kerestünk, ajánljuk fel!
             if not force_all:
                 if user_lang == 'hu':
                     txt += " (Tipp: Ha a teljes raktárkészletben - pl. román fordításokban - is keresnél, írd mögé: 'minden nyelven'!)"
                 else:
                     txt += " (Sfat: Pentru a căuta în tot stocul - inclusiv maghiar - scrie: 'toate limbile'!)"
             
-            # Cross-Language figyelmeztetés (Ha nem "minden nyelven" volt és eltér a site)
             if not force_all and user_lang != site_lang:
                 if user_lang == 'hu': txt += "\n(Egyébként a román részlegen vagyunk. Átváltsak a magyarra?)"
                 else: txt += "\n(Suntem pe secțiunea maghiară. Să trec pe cea română?)"
@@ -335,24 +356,24 @@ class BooksyBrain:
         for m in matches:
             meta = m['metadata']
             price = meta.get('sale_price') or meta.get('price')
-            p = {"title":meta.get('title'), "price":price, "url":meta.get('url'), "image":meta.get('image_url')}
+            # Címben feltüntetjük a kiadót is, ha van
+            display_title = meta.get('title')
+            publisher = meta.get('publisher')
+            if publisher:
+                display_title += f" ({publisher})"
+                
+            p = {"title":display_title, "price":price, "url":meta.get('url'), "image":meta.get('image_url')}
             prods.append(p)
-            ctx += f"- {p['title']} ({price})\n"
+            ctx += f"- {display_title} ({price})\n"
             if len(prods)>=8: break
             
         sys = "You are a helpful antique book assistant. Recommend these books."
         
-        # OKOS LÁBJEGYZET ÖSSZEÁLLÍTÁSA (V34)
         footer_note = ""
-        
-        # Csak akkor okoskodunk, ha NEM "minden nyelven" kerestünk
         if not force_all:
-            # 1. Cross-Language figyelmeztetés (ez a fontosabb)
             if user_lang != site_lang:
                 if user_lang == 'hu': footer_note = "\n\n(Megjegyzés: Ezek a könyvek a román részlegről vannak, ahol jelenleg tartózkodsz. Ha magyar könyveket keresel, kattints a magyar zászlóra!)"
                 else: footer_note = "\n\n(Notă: Aceste cărți sunt din secțiunea maghiară. Dacă cauți cărți în română, schimbă limba site-ului!)"
-            
-            # 2. Ha jó helyen vagyunk, de lehet, hogy máshol is van találat (Smart Tip)
             else:
                 if user_lang == 'hu': footer_note = "\n\n💡 Tipp: Csak a magyar részlegen kerestem. Ha a román fordítások is érdekelnek, írd a kereséshez: 'minden nyelven'!"
                 else: footer_note = "\n\n💡 Sfat: Am căutat doar în secțiunea română. Dacă vrei să vezi și traducerile maghiare, scrie: 'toate limbile'!"
@@ -368,6 +389,7 @@ scheduler = BackgroundScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Frissítés indítása: Ha épp deployoltál, ez lefuthat, de a force-update biztosabb
     scheduler.add_job(bot.updater.run_daily_update, 'cron', hour=3, minute=0)
     scheduler.start()
     yield
@@ -377,7 +399,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V34 (Omnisearch & Tips)"}
+def home(): return {"status": "Booksy V35 (Publisher Fix + URL Guard)"}
 
 @app.post("/smart-hook")
 def smart_hook_endpoint(request: SmartHookRequest): return {"hook": bot.generate_smart_hook(request)}
@@ -388,4 +410,4 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "Started"}
+    return {"status": "Started Update (Publisher extraction enabled)"}
