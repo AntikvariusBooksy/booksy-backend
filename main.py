@@ -18,10 +18,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # --- KONFIGURÁCIÓ ---
 load_dotenv()
 INDEX_NAME = "booksy-index"
-# A Renderen beállított feed URL
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 
+# ITT AZ ÚJ LISTA (Benne a KAPCSOLAT is)
 POLICY_URLS = {
+    "KAPCSOLAT": "https://www.antikvarius.ro/contact/",
     "FIZETÉS": "https://www.antikvarius.ro/hu/fizetesi-informaciok/",
     "SZÁLLÍTÁS": "https://www.antikvarius.ro/hu/szallitasi-informaciok/",
     "ÁSZF": "https://www.antikvarius.ro/hu/altalanos-szerzodesi-es-felhasznalasi-feltetelek/"
@@ -64,7 +65,7 @@ def extract_author(short_desc):
     match = re.search(r'(Szerző|Írta):\s*([^<|\n]+)', short_desc, re.IGNORECASE)
     return match.group(2).strip() if match else ""
 
-# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (V29 SMART SYNC) ---
+# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (V30 SMART SYNC + CONTACT) ---
 class AutoUpdater:
     def __init__(self):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -74,10 +75,12 @@ class AutoUpdater:
         self.index = self.pc.Index(INDEX_NAME)
 
     def scrape_policy(self):
-        """Jogi szövegek frissítése"""
-        print("🔄 [AUTO] Jogi információk frissítése...")
+        """Jogi szövegek és Kapcsolat infók Smart Frissítése"""
+        print("🔄 [AUTO] Jogi és Kapcsolat információk ellenőrzése...")
+        
         full_policy_text = "[TUDÁSBÁZIS AZ ÜGYFÉLSZOLGÁLATHOZ - FRISSÍTVE: MA]\n"
         
+        # 1. Letöltjük az összes oldal szövegét
         for category, url in POLICY_URLS.items():
             try:
                 resp = requests.get(url, timeout=15)
@@ -85,14 +88,37 @@ class AutoUpdater:
                     soup = BeautifulSoup(resp.content, 'html.parser')
                     for script in soup(["script", "style", "nav", "footer", "header"]): script.extract()
                     text = ' '.join(soup.get_text(separator=' ').split())
-                    full_policy_text += f"\n--- {category} INFORMÁCIÓK ---\n{text[:4000]}\n"
+                    full_policy_text += f"\n--- {category} INFORMÁCIÓK ---\n{text[:5000]}\n"
             except Exception as e:
                 print(f"⚠️ Hiba a {category} letöltésekor: {e}")
 
+        # 2. Smart Delta Ellenőrzés (Hash)
+        new_hash = generate_content_hash(full_policy_text)
+        
         try:
-            res = self.client_ai.embeddings.create(input="policy", model="text-embedding-3-small")
-            self.index.upsert(vectors=[("store_policy", res.data[0].embedding, {"type": "policy", "content": full_policy_text})])
-            print("✅ [AUTO] Jogi infók mentve.")
+            existing = self.index.fetch(ids=["store_policy"])
+            if existing and 'vectors' in existing and 'store_policy' in existing['vectors']:
+                stored_meta = existing['vectors']['store_policy'].get('metadata', {})
+                stored_hash = stored_meta.get('content_hash', '')
+                
+                if stored_hash == new_hash:
+                    print("✅ [AUTO] Jogi infók változatlanok. (Spóroltunk)")
+                    return # KILÉPÉS, NEM KELL FRISSÍTENI
+        except: pass
+
+        # 3. Ha változott, feltöltjük
+        try:
+            print("💾 [AUTO] Változás észlelve a szabályzatban/kapcsolatban -> Frissítés...")
+            res = self.client_ai.embeddings.create(input="policy definition", model="text-embedding-3-small")
+            
+            metadata = {
+                "type": "policy",
+                "content": full_policy_text,
+                "content_hash": new_hash # Elmentjük az új hash-t
+            }
+            
+            self.index.upsert(vectors=[("store_policy", res.data[0].embedding, metadata)])
+            print("✅ [AUTO] Jogi és Kapcsolat infók sikeresen frissítve.")
         except Exception as e:
             print(f"❌ [AUTO] Hiba a policy mentéskor: {e}")
 
@@ -108,16 +134,13 @@ class AutoUpdater:
                 print(f"❌ [AUTO] Feed hiba: {response.status_code}")
                 return
 
-            # XML parse
             try:
                 tree = ET.fromstring(response.content)
             except ET.ParseError:
-                # Ha a szerver nem szabványos XML-t küld, próbáljuk javítani
                 tree = ET.fromstring(response.content.decode('utf-8', 'ignore'))
 
-            # Google Feedben általában <channel><item> van
             items = tree.findall('.//item')
-            if not items: items = tree.findall('.//post') # Fallback
+            if not items: items = tree.findall('.//post')
             
             print(f"📚 [AUTO] Feed elemszám: {len(items)}")
             
@@ -125,95 +148,71 @@ class AutoUpdater:
             uploaded_count = 0
             skipped_hash_count = 0
             
-            # Google Namespace
             ns = {'g': 'http://base.google.com/ns/1.0'}
 
             for item in items:
                 try:
-                    # 1. KÉSZLET ELLENŐRZÉS (Google Format: g:availability)
-                    # Értékek: "in stock", "out of stock", "preorder"
+                    # KÉSZLET ELLENŐRZÉS
                     avail_node = item.find('g:availability', ns)
-                    if avail_node is None: avail_node = item.find('StockStatus') # Fallback
-                    
+                    if avail_node is None: avail_node = item.find('StockStatus')
                     availability = safe_str(avail_node.text).lower() if avail_node is not None else "in stock"
                     
-                    # Ha "out of stock" vagy "outofstock", akkor ugrunk
-                    if "out" in availability:
-                        continue
+                    if "out" in availability: continue
 
-                    # 2. ADATOK
+                    # ADATOK
                     id_node = item.find('g:id', ns)
                     if id_node is None: id_node = item.find('ID')
                     if id_node is None or not id_node.text: continue
                     book_id = safe_str(id_node.text)
 
-                    # Cím
                     title_node = item.find('g:title', ns)
                     if title_node is None: title_node = item.find('Title')
                     title = safe_str(title_node.text) if title_node is not None else "Nincs cím"
 
-                    # Leírás (Google feedben gyakran g:description a hosszú)
                     desc_node = item.find('g:description', ns)
                     if desc_node is None: desc_node = item.find('Content')
                     raw_desc = safe_str(desc_node.text) if desc_node is not None else ""
-                    clean_desc = clean_html(raw_desc) # Ez a hosszú leírás
+                    clean_desc = clean_html(raw_desc)
 
-                    # Szerző (Próbáljuk kinyerni a leírásból, ha nincs külön mező)
-                    author = extract_author(clean_desc[:500]) # Első 500 karakterben szokott lenni
+                    author = extract_author(clean_desc[:500])
 
-                    # Kategória (g:product_type)
                     cat_node = item.find('g:product_type', ns)
                     if cat_node is None: cat_node = item.find('Productcategories')
                     cat_raw = safe_str(cat_node.text) if cat_node is not None else ""
 
-                    # Link & Kép
                     link_node = item.find('g:link', ns) or item.find('link') or item.find('Permalink')
                     url = safe_str(link_node.text) if link_node is not None else ""
 
                     img_node = item.find('g:image_link', ns) or item.find('ImageURL')
                     img = safe_str(img_node.text) if img_node is not None else ""
 
-                    # Ár (g:price / g:sale_price - Pl: "2500 HUF")
                     price_node = item.find('g:price', ns) or item.find('Price')
                     sale_node = item.find('g:sale_price', ns) or item.find('SalePrice')
                     
                     regular_price = safe_str(price_node.text) if price_node is not None else "0"
                     sale_price = safe_str(sale_node.text) if sale_node is not None else ""
-                    
-                    # Google feedben gyakran benne van a pénznem (HUF/RON), azt le kell vágni, ha számolni akarunk,
-                    # de megjelenítéshez jó így is. A "final_price" logikához kellhet tisztítás.
                     final_price = sale_price if sale_price else regular_price
 
-                    # 3. FULL TEXT & HASH
-                    # Mivel a Google feedben nincs külön "ShortDescription", a clean_desc az elsődleges
+                    # FULL TEXT & HASH
                     full_search_text = f"{title} {author} {cat_raw} {clean_desc}"
                     full_search_text = full_search_text[:9500]
 
-                    # Hash generálás (változás figyelés)
                     data_to_hash = f"{book_id}{title}{final_price}{clean_desc[:200]}"
                     content_hash = generate_content_hash(data_to_hash)
 
-                    # SMART DELTA ELLENŐRZÉS
-                    # Ha a Pinecone-ban lévő hash egyezik, nem töltjük fel újra.
-                    # De a "last_seen" dátumot frissíteni KÉNE, hogy ne törlődjön.
-                    # Ezt a Pinecone 'update' metódusával oldjuk meg metadata only? 
-                    # Egyszerűbb, ha az "upsert" megtörténik, de a vektorgenerálást (OpenAI) spóroljuk meg.
-                    
                     need_embedding = True
                     try:
                         existing = self.index.fetch(ids=[book_id])
                         if existing and 'vectors' in existing and book_id in existing['vectors']:
                             stored_meta = existing['vectors'][book_id].get('metadata', {})
                             if stored_meta.get('content_hash') == content_hash:
-                                # Változatlan tartalom -> Megspóroljuk az OpenAI hívást!
-                                # Csak a 'last_seen' frissítése miatt visszatöltjük a régi vektort
+                                # Változatlan -> Csak a last_seen frissítése miatt kell visszatölteni
                                 embedding_vector = existing['vectors'][book_id]['values']
                                 need_embedding = False
                                 skipped_hash_count += 1
                     except: pass
 
                     if need_embedding:
-                        # Ha új vagy változott, kérünk új vektort
                         ai_input = f"CÍM: {title} | SZERZŐ: {author} | KAT: {cat_raw} | TARTALOM: {clean_desc[:1000]}"
                         res = self.client_ai.embeddings.create(input=ai_input[:8000], model="text-embedding-3-small")
                         embedding_vector = res.data[0].embedding
@@ -224,14 +223,14 @@ class AutoUpdater:
                         "sale_price": sale_price,
                         "url": url,
                         "image_url": img,
-                        "lang": "hu", # A feed alapján lehetne detektálni
+                        "lang": "hu",
                         "stock": "instock",
                         "author": author,
                         "category": cat_raw,
                         "short_desc": clean_desc[:500],
                         "full_search_text": full_search_text,
                         "content_hash": content_hash,
-                        "last_seen": current_sync_ts # <--- TÜKÖRSZINKRON BÉLYEGZŐ!
+                        "last_seen": current_sync_ts
                     }
                     
                     batch_vectors.append((book_id, embedding_vector, metadata))
@@ -247,26 +246,23 @@ class AutoUpdater:
             if batch_vectors:
                 self.index.upsert(vectors=batch_vectors)
             
-            print(f"✅ [AUTO] Feltöltés kész. Frissítve: {uploaded_count}, Változatlan (OpenAI spórolt): {skipped_hash_count}")
+            print(f"✅ [AUTO] Könyvek kész. Frissítve: {uploaded_count}, Változatlan: {skipped_hash_count}")
 
-            # 4. TAKARÍTÁS (MIRROR SYNC)
-            # Törlünk minden olyan könyvet, amit NEM láttunk ebben a körben (tehát last_seen < mostani indítás)
-            # Kivéve a 'store_policy'-t!
+            # TAKARÍTÁS (MIRROR SYNC)
             print("🧹 [AUTO] Tükörszinkron takarítás...")
             try:
-                # Pinecone delete by filter (Metadata szűrés)
                 self.index.delete(
                     filter={
                         "last_seen": {"$lt": current_sync_ts},
-                        "type": {"$ne": "policy"} # A policy-t ne törölje!
+                        "type": {"$ne": "policy"} 
                     }
                 )
-                print("🧹 [AUTO] Készlethiányos/Törölt könyvek eltávolítva.")
+                print("🧹 [AUTO] Elavult elemek törölve.")
             except Exception as e:
-                print(f"⚠️ [AUTO] Törlési hiba (Lehet, hogy a Serverless indexen még nem aktív a filter delete): {e}")
+                print(f"⚠️ [AUTO] Törlési hiba: {e}")
 
         except Exception as e:
-            print(f"❌ [AUTO] Kritikus hiba a frissítés közben: {e}")
+            print(f"❌ [AUTO] Kritikus hiba: {e}")
 
     def run_daily_update(self):
         print("⏰ [SCHEDULER] Napi szinkronizáció indul...")
@@ -307,7 +303,6 @@ class BooksyBrain:
             filt = {"stock": "instock"}
             if lang_filter in ['hu', 'ro']: filt["lang"] = lang_filter
             
-            # Keresés
             raw = self.index.query(vector=res.data[0].embedding, top_k=200, include_metadata=True, filter=filt)
             if not raw.get('matches'): return []
 
@@ -321,7 +316,6 @@ class BooksyBrain:
 
                 title_n = normalize_text(title)
                 auth_n = normalize_text(str(meta.get('author', '')))
-                # Itt keressük a full textben is!
                 full_n = normalize_text(str(meta.get('full_search_text', '')))
                 
                 score = 0
@@ -332,7 +326,7 @@ class BooksyBrain:
                         hit = False
                         if kw in title_n: score += 100; hit = True
                         elif kw in auth_n: score += 80; hit = True
-                        elif kw in full_n: score += 20; hit = True # Ha csak a leírásban van, kevesebb pont
+                        elif kw in full_n: score += 20; hit = True
                         if hit: matches_cnt += 1
                     if matches_cnt == len(keywords) and len(keywords) > 1: score += 200
                 
@@ -345,7 +339,6 @@ class BooksyBrain:
         except: return []
 
     def process_message(self, user_input):
-        # 1. Intent & Lang
         try:
             res = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
@@ -355,7 +348,6 @@ class BooksyBrain:
             lang, intent = p[0].strip().lower(), p[1].strip().upper()
         except: lang, intent = 'hu', 'SEARCH'
 
-        # 2. Logic
         if intent == 'INFO':
             policy = self.get_dynamic_policy()
             prompt = f"Te Booksy vagy. Válaszolj EZEK alapján:\n{policy}\nHa nincs válasz, küldd a kapcsolati oldalt."
@@ -365,7 +357,6 @@ class BooksyBrain:
             )
             return {"reply": ai_res.choices[0].message.content, "products": []}
         
-        # Search
         matches = self.search_engine_logic(user_input, lang)
         
         ctx = ""
@@ -379,7 +370,7 @@ class BooksyBrain:
             meta = m['metadata']
             p = {
                 "title": str(meta.get('title')), 
-                "price": str(meta.get('final_price') or meta.get('price')), # Végső ár
+                "price": str(meta.get('final_price') or meta.get('price')), 
                 "url": str(meta.get('url')), 
                 "image": str(meta.get('image_url'))
             }
@@ -400,10 +391,9 @@ scheduler = BackgroundScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Hajnali 3:00-kor fut az automata frissítés
     scheduler.add_job(bot.updater.run_daily_update, 'cron', hour=3, minute=0)
     scheduler.start()
-    print("⏰ Automata Google Feed tükörszinkronizáció beidőzítve (03:00).")
+    print("⏰ Automata Google & Policy szinkronizáció beidőzítve (03:00).")
     yield
     scheduler.shutdown()
 
@@ -411,7 +401,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V29 (Auto Google Sync)"}
+def home(): return {"status": "Booksy V30 (Contact Info Added)"}
 
 @app.post("/hook")
 def hook_endpoint(request: HookRequest): return {"hook": bot.generate_sales_hook(request)}
