@@ -278,11 +278,17 @@ class BooksyBrain:
 
     def process(self, msg, context_url=""):
         try:
+            # --- JAVÍTVA: Az üzeneteket EGY listában adjuk át, nem duplán ---
             res = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role":"system", "content":"Detect Language (hu/ro) and Intent (SEARCH/INFO). Output: LANG | INTENT"}], 
-                messages=[{"role":"user", "content":msg}], temperature=0.1
+                messages=[
+                    {"role":"system", "content":"Detect Language (hu/ro) and Intent (SEARCH/INFO). Output: LANG | INTENT"},
+                    {"role":"user", "content":msg}
+                ],
+                temperature=0.1
             )
+            # -----------------------------------------------------------------
+            
             p = res.choices[0].message.content.split('|')
             user_lang, intent = p[0].strip().lower(), p[1].strip().upper()
         except: user_lang, intent = 'hu', 'SEARCH'
