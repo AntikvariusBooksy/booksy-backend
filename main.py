@@ -35,7 +35,6 @@ class HookRequest(BaseModel):
 
 # --- SEGÉDFÜGGVÉNYEK ---
 def normalize_text(text):
-    """Ékezetmentesítés, kisbetűsítés, tisztítás"""
     if not text: return ""
     text = str(text).lower()
     return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
@@ -68,8 +67,6 @@ class BooksyBrain:
 
     def generate_search_params(self, user_input):
         try:
-            # Itt most KEVÉSBÉ hagyjuk az AI-t fantáziálni a kulcsszavakról,
-            # hogy a szigorú szűrés pontos maradjon.
             response = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -78,7 +75,7 @@ class BooksyBrain:
                      1. Language (hu/ro).
                      2. Intent (SEARCH/INFO).
                      3. Scope (ALL/SPECIFIC).
-                     4. KEYWORDS: Extract the main entities (Author, Title, Topic). Remove filler words.
+                     4. KEYWORDS: Keep names intact!
                      Output: LANG | SCOPE | INTENT | KEYWORDS
                      """},
                     {"role": "user", "content": user_input}
@@ -92,16 +89,16 @@ class BooksyBrain:
 
     def search_books(self, query_text, lang_filter, scope):
         try:
-            # 1. KÉSZLET SZŰRÉS (KÖTELEZŐ!)
+            response = self.client_ai.embeddings.create(input=query_text, model="text-embedding-3-small")
+            
+            # 1. KÖTELEZŐ KÉSZLET SZŰRÉS (Hogy ne legyen outofstock)
             filter_criteria = {"stock": "instock"}
             if scope != 'ALL' and lang_filter in ['hu', 'ro']:
                 filter_criteria["lang"] = lang_filter
             
-            # 2. Vektoros Keresés (Nagy merítés)
-            response = self.client_ai.embeddings.create(input=query_text, model="text-embedding-3-small")
             raw_results = self.index.query(
                 vector=response.data[0].embedding,
-                top_k=100, # 100-at kérünk, hogy biztos benne legyen a jó
+                top_k=100, 
                 include_metadata=True, 
                 filter=filter_criteria
             )
@@ -109,64 +106,64 @@ class BooksyBrain:
             matches = raw_results.get('matches', [])
             if not matches: return {"matches": []}
 
-            # --- 3. V16 KULCSSZÓ KÉNYSZERÍTÉS (Enforcement) ---
+            # --- 2. V17 INTELLIGENS VÁLOGATÁS ---
             
-            # Kulcsszavak tisztítása
-            stop_words = [
-                'a', 'az', 'egy', 'es', 'vagy', 'hogy', 'van', 
-                'konyv', 'konyvek', 'konyvet', 'konyvei', # Fontos: a 'könyvei' is kuka
-                'carte', 'carti', 'cartile', 
-                'keresek', 'keres', 'szeretnek', 'vennek', 
-                'kiado', 'szerzo', 'cim', 'regeny'
-            ]
-            
+            stop_words = ['konyv', 'konyvek', 'konyvet', 'carte', 'carti', 'keresek', 'kiado', 'szerzo', 'cim']
             normalized_query = normalize_text(query_text)
-            # Csak a lényegi szavakat tartjuk meg (min 3 karakter)
-            keywords = [w for w in normalized_query.split() if w not in stop_words and len(w) > 2]
+            # Kulcsszavak (pl. "berente", "agi")
+            search_keywords = [w for w in normalized_query.split() if w not in stop_words and len(w) > 2]
 
-            filtered_results = []
+            final_results = []
+            seen_titles = set()
 
             for match in matches:
                 meta = match['metadata']
-                # Egyesítjük a kereshető mezőket egy nagy stringgé
-                searchable_content = normalize_text(str(meta.get('title', ''))) + " " + \
-                                     normalize_text(str(meta.get('author', ''))) + " " + \
-                                     normalize_text(str(meta.get('category', '')))
+                score = match['score']
+                title = str(meta.get('title', ''))
                 
-                # SZABÁLY:
-                # Ha a felhasználó írt kulcsszavakat (pl. "Berente", "Agi"),
-                # akkor LEGALÁBB AZ EGYIKNEK benne kell lennie a könyvben.
-                # De ha többszavas a név, akkor inkább az ÖSSZESNEK (Szigorú AND).
-                
-                if not keywords:
-                    # Ha nincs kulcsszó (pl. csak "könyvek"), akkor a vektor dönt
-                    filtered_results.append(match)
-                    continue
+                # Duplikáció szűrés (Hogy ne legyen 2x ugyanaz)
+                if title in seen_titles: continue
+                seen_titles.add(title)
 
-                # KÉNYSZERÍTÉS: Minden kulcsszó benne van?
-                # Ezzel dobjuk ki a "Berkesi"-t (mert nincs benne az "Agi" és a "Berente")
-                all_keywords_present = True
-                for kw in keywords:
-                    if kw not in searchable_content:
-                        all_keywords_present = False
-                        break
+                # Keresés a látható mezőkben (Cím, Szerző, Kategória)
+                full_text_search = normalize_text(title) + " " + \
+                                   normalize_text(str(meta.get('author', ''))) + " " + \
+                                   normalize_text(str(meta.get('category', '')))
                 
-                if all_keywords_present:
-                    filtered_results.append(match)
+                # SZABÁLYRENDSZER:
+                keep_it = False
+                
+                # A. Ha nincs kulcsszó (általános keresés), akkor a Score dönt
+                if not search_keywords:
+                    if score > 0.3: keep_it = True
+                
+                else:
+                    # B. Ha VAN kulcsszó (pl. név)
+                    
+                    # 1. Szöveges egyezés (Legalább egy kulcsszó benne van a címben/szerzőben)
+                    # Szigorítottuk: Ha több szó van, többnek kell egyeznie
+                    match_count = 0
+                    for kw in search_keywords:
+                        if kw in full_text_search:
+                            match_count += 1
+                    
+                    if match_count >= 1: # Ha legalább egy erős szó megvan (pl. Berente)
+                        keep_it = True
+                    
+                    # 2. BIZALMI ELV (High Score Override)
+                    # Ha a szövegben NINCS benne (pl. rejtett szerző), de az AI nagyon biztos benne
+                    # (Score > 0.72 - ez nagyon magas egyezés), akkor elhisszük neki.
+                    elif score > 0.72:
+                        # print(f"Trusting Vector for: {title} (Score: {score})") 
+                        keep_it = True
 
-            # Ha a szigorú szűrés után maradt valami, azt adjuk vissza
-            if filtered_results:
-                print(f"Enforced Filter: Found {len(filtered_results)} exact matches.")
-                # Rendezés ár vagy score szerint? Maradjunk a score-nál (relevancia)
-                filtered_results.sort(key=lambda x: x['score'], reverse=True)
-                return {"matches": filtered_results[:25]}
+                if keep_it:
+                    final_results.append(match)
+
+            # Rendezés pontszám szerint
+            final_results.sort(key=lambda x: x['score'], reverse=True)
             
-            # Ha a szigorú szűrés túl sok mindent kievett (üres lett), 
-            # akkor visszatérünk a vektoros eredményhez, de csak a nagyon erősekhez.
-            # Ez a "Safety Net".
-            print("Enforced filter found nothing, falling back to strong vector matches.")
-            strong_matches = [m for m in matches if m['score'] > 0.60]
-            return {"matches": strong_matches[:25]}
+            return {"matches": final_results[:25]}
 
         except Exception as e:
             print(f"Keresési hiba: {e}")
@@ -182,23 +179,14 @@ class BooksyBrain:
 
         if intent == "SEARCH":
             results = self.search_books(keywords, detected_lang, scope)
-            seen_titles = []
             
             if not results.get('matches'):
-                msg = "Nu am găsit rezultate în stoc." if detected_lang == 'ro' else "Sajnos nem találtam készleten lévő könyvet ezzel a kereséssel."
+                msg = "Nu am găsit rezultate în stoc." if detected_lang == 'ro' else "Sajnos nem találtam készleten lévő könyvet."
                 return {"reply": msg + (footer_ro if detected_lang == 'ro' else footer_hu), "products": []}
 
             for match in results['matches']:
-                # Itt már nem kell score filter, mert a search_books már szűrt
                 meta = match['metadata']
                 title = str(meta.get('title', 'N/A'))
-                
-                is_dup = False
-                for seen in seen_titles:
-                    if difflib.SequenceMatcher(None, title.lower(), seen.lower()).ratio() > 0.85:
-                        is_dup = True; break
-                if is_dup: continue
-                seen_titles.append(title)
                 
                 product_data = {
                     "title": title,
@@ -210,7 +198,6 @@ class BooksyBrain:
                 
                 author = meta.get('author', 'N/A')
                 cat_tag = meta.get('category', 'N/A')
-                
                 context_text += f"- {title} (Szerző: {author}, Ár: {meta.get('price')} RON, Kategória: {cat_tag})\n"
                 
                 if len(found_products) >= 8: break 
@@ -223,14 +210,12 @@ class BooksyBrain:
             context_text = "HASZNÁLD A TUDÁSBÁZIST!"
 
         lang_instruction = "Reply in ROMANIAN only." if detected_lang == 'ro' else "Reply in HUNGARIAN only."
-        system_prompt = f"Te Booksy vagy. {self.store_policy} Csak a listázott könyvekről beszélj."
-
         response = self.client_ai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": f"Te Booksy vagy. {self.store_policy}"},
                 {"role": "system", "content": lang_instruction},
-                {"role": "user", "content": f"User: {user_input}\nFound Books:\n{context_text}"}
+                {"role": "user", "content": f"User: {user_input}\nFound Instock Books:\n{context_text}"}
             ],
             temperature=0.3
         )
@@ -242,7 +227,7 @@ class BooksyBrain:
 bot = BooksyBrain()
 
 @app.get("/")
-def home(): return {"status": "Booksy V16 (Instock + Strict Keyword Enforcement)"}
+def home(): return {"status": "Booksy V17 (Instock + Smart Trust Logic)"}
 
 @app.post("/hook")
 def hook_endpoint(request: HookRequest):
