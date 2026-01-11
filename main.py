@@ -21,8 +21,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Adatmodellek
 class ChatRequest(BaseModel):
     message: str
+
+class HookRequest(BaseModel):
+    url: str
+    page_title: str
+    visitor_type: str # 'new' vagy 'returning'
+    cart_status: str  # 'empty', 'active', 'just_added'
+    lang: str
 
 class BooksyBrain:
     def __init__(self):
@@ -36,26 +44,64 @@ class BooksyBrain:
         [SZÁLLÍTÁS: Feldolgozás (2-4 nap raktár / 7-30 nap külső) + Futár (24-48h RO, 2-4 nap HU).]
         """
 
-    def generate_search_params(self, user_input):
+    # --- 1. PROAKTÍV HOOK GENERÁTOR (A buborék szövege) ---
+    def generate_sales_hook(self, ctx: HookRequest):
+        system_prompt = f"""
+        You are Booksy, an AI Sales Agent for an antique bookstore.
+        Your goal: Generate a SHORT (max 6-8 words), catchy, friendly 'hook' message for the chat bubble.
+        
+        Context:
+        - User Language: {ctx.lang} (Reply in this language!)
+        - Visitor Type: {ctx.visitor_type} (If 'returning', be warm like "Welcome back!")
+        - Page: {ctx.page_title}
+        - Cart Action: {ctx.cart_status}
+        
+        Rules:
+        1. If 'cart_status' is 'just_added': Congratulate or suggest matching book.
+        2. If 'page_title' suggests a specific book/category: Refer to it subtly.
+        3. Keep it SUPER SHORT.
+        """
         try:
-            # OKOS ELEMZÉS: Nyelv + Szándék + Keresési Hatókör (Scope)
+            response = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": "Generate hook."}
+                ],
+                temperature=0.7,
+                max_tokens=30
+            )
+            return response.choices[0].message.content.strip()
+        except:
+            return "Bună! Te pot ajuta?" if ctx.lang == 'ro' else "Szia! Segíthetek?"
+
+    # --- 2. QUERY EXPANSION (A Kereső Agya - V11) ---
+    def generate_search_params(self, user_input):
+        """
+        Itt történik a varázslat: A 'Krimi' szót kibővítjük 'Bűnügyi, Thriller' szavakra,
+        hogy megtalálja a kategóriákat is.
+        """
+        try:
             response = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": """
-                     Analyze the user's query.
-                     1. Language: 'hu' or 'ro'.
-                     2. Intent: 'SEARCH' (books) or 'INFO' (shipping, contact).
-                     3. Scope: If user says "minden nyelven", "toate limbile", "all books", "bármilyen nyelv" -> 'ALL'. Otherwise -> 'SPECIFIC'.
-                     4. Keywords: extract search terms.
+                     Analyze the user's search query for an online bookstore.
                      
-                     Output Format: LANG | SCOPE | INTENT | KEYWORDS
-                     Example: hu | ALL | SEARCH | Harry Potter
-                     Example: ro | SPECIFIC | SEARCH | Sadoveanu
+                     Tasks:
+                     1. Detect Language (hu/ro).
+                     2. Detect Intent (SEARCH/INFO).
+                     3. Detect Scope (ALL/SPECIFIC).
+                     4. EXPAND KEYWORDS: If the user asks for a genre/topic (e.g., 'krimi', 'scifi'), 
+                        list related category names used in bookstores.
+                        Example: User 'krimi' -> Keywords: 'krimi bűnügyi detektív thriller mystery'
+                        Example: User 'gyerekkönyv' -> Keywords: 'gyerekkönyv mese ifjúsági képeskönyv'
+                     
+                     Output Format: LANG | SCOPE | INTENT | EXPANDED_KEYWORDS
                      """},
                     {"role": "user", "content": user_input}
                 ],
-                temperature=0.1
+                temperature=0.3
             )
             parts = response.choices[0].message.content.split('|')
             return parts[0].strip().lower(), parts[1].strip(), parts[2].strip(), parts[3].strip()
@@ -64,19 +110,18 @@ class BooksyBrain:
 
     def search_books(self, query_text, lang_filter, scope):
         try:
+            # Az OpenAI "Expanded Keywords"-jét vektorizáljuk
             response = self.client_ai.embeddings.create(input=query_text, model="text-embedding-3-small")
             
-            # --- FILTER LOGIKA ---
             filter_criteria = {"stock": "instock"}
-            
-            # Csak akkor szűrünk nyelvre, ha a Scope NEM 'ALL'
             if scope != 'ALL' and lang_filter in ['hu', 'ro']:
                 filter_criteria["lang"] = lang_filter
             
+            # Súlyozott keresés (Mivel az adatbázisban a Kategória van elöl, ez nagyon pontos lesz)
             search_results = self.index.query(
                 vector=response.data[0].embedding,
                 top_k=25, 
-                include_metadata=True,
+                include_metadata=True, 
                 filter=filter_criteria
             )
             return search_results
@@ -85,30 +130,24 @@ class BooksyBrain:
             return {"matches": []}
 
     def process_message(self, user_input):
-        # 1. Elemzés (Most már a SCOPE-ot is kinyerjük)
         detected_lang, scope, intent, keywords = self.generate_search_params(user_input)
-        
         context_text = ""
         found_products = [] 
         
-        # Lábléc szövegek (A kötelező tájékoztató)
         footer_hu = "\n\n💡 *Tipp: Jelenleg a nyelvednek megfelelő könyveket keresem. Ha mindent látni szeretnél, írd hozzá: „minden nyelven”!*"
         footer_ro = "\n\n💡 *Sfat: Caut cărți în limba ta. Dacă vrei să vezi toate limbile, adaugă: „toate limbile”!*"
 
         if intent == "SEARCH":
-            # 2. Keresés (átadjuk a scope-ot is)
             results = self.search_books(keywords, detected_lang, scope)
             seen_titles = []
             
-            # Ha nincs találat
             if not results.get('matches'):
                 msg = "Nu am găsit rezultate." if detected_lang == 'ro' else "Sajnos nem találtam ilyen könyvet."
-                # Itt is kiírjuk a tippet, hátha azért nem talált, mert rossz nyelven kereste
                 tip = footer_ro if detected_lang == 'ro' else footer_hu
                 return {"reply": msg + tip, "products": []}
 
             for match in results['matches']:
-                if match['score'] < 0.40: continue
+                if match['score'] < 0.35: continue # Kicsit engedékenyebb score, mert a kategória egyezés erős
                 meta = match['metadata']
                 title = str(meta.get('title', 'N/A'))
                 
@@ -120,18 +159,18 @@ class BooksyBrain:
                 if is_dup: continue
                 seen_titles.append(title)
                 
-                # Termék adat
+                # Termék adat (ÁR az adatbázisból jön, ami már kezeli az akciót)
                 product_data = {
                     "title": title,
-                    "price": meta.get('price', 'N/A'),
+                    "price": meta.get('price', 'N/A'), 
                     "url": meta.get('url', '#'),
                     "image": meta.get('image_url', '') 
                 }
                 found_products.append(product_data)
                 
-                # Context az AI-nak (zárójelben a nyelvvel, ha vegyes a lista)
-                lang_tag = meta.get('lang', '?')
-                context_text += f"- {title} ({lang_tag})\n"
+                # Context AI-nak (Category-t is beleírjuk!)
+                cat_tag = meta.get('category', '')
+                context_text += f"- {title} (Ár: {meta.get('price')} RON, Kategória: {cat_tag})\n"
                 
                 if len(found_products) >= 6: break
             
@@ -143,11 +182,9 @@ class BooksyBrain:
         else:
             context_text = "HASZNÁLD A TUDÁSBÁZIST!"
 
-        # 3. Válasz generálás
-        if detected_lang == 'ro':
-            lang_instruction = "Reply in ROMANIAN only."
-        else:
-            lang_instruction = "Reply in HUNGARIAN only."
+        # Válasz generálás
+        if detected_lang == 'ro': lang_instruction = "Reply in ROMANIAN only."
+        else: lang_instruction = "Reply in HUNGARIAN only."
 
         response = self.client_ai.chat.completions.create(
             model="gpt-4o-mini",
@@ -160,23 +197,19 @@ class BooksyBrain:
         )
         
         final_reply = response.choices[0].message.content
-        
-        # 4. Footer hozzáadása (Ha NEM kért kifejezetten mindent)
         if scope != 'ALL':
-            if detected_lang == 'ro':
-                final_reply += footer_ro
-            else:
-                final_reply += footer_hu
+            final_reply += footer_ro if detected_lang == 'ro' else footer_hu
         
-        return {
-            "reply": final_reply,
-            "products": found_products
-        }
+        return {"reply": final_reply, "products": found_products}
 
 bot = BooksyBrain()
 
 @app.get("/")
-def home(): return {"status": "Booksy V5 (All Languages Support)"}
+def home(): return {"status": "Booksy V11 (Smart Search + Categories + Hooks)"}
+
+@app.post("/hook")
+def hook_endpoint(request: HookRequest):
+    return {"hook": bot.generate_sales_hook(request)}
 
 @app.post("/chat")
 def chat_endpoint(request: ChatRequest):
