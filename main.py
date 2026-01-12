@@ -6,6 +6,7 @@ import re
 import unicodedata
 import html
 import xml.etree.ElementTree as ET
+import gc  # GARBAGE COLLECTOR
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
@@ -34,7 +35,12 @@ def normalize_text(text):
 
 def clean_html_structural(raw_html):
     if not raw_html: return ""
-    s = html.unescape(str(raw_html))
+    # Csak akkor hívjuk a html.unescape-et, ha tényleg kell, spóroljunk CPU/RAM-ot
+    if '&' in str(raw_html):
+        s = html.unescape(str(raw_html))
+    else:
+        s = str(raw_html)
+        
     s = s.replace('</div>', '\n').replace('</p>', '\n').replace('<br>', '\n').replace('<br/>', '\n')
     cleanr = re.compile('<.*?>')
     cleantext = re.sub(cleanr, ' ', s)
@@ -60,7 +66,6 @@ def extract_publisher(text_content):
     return ""
 
 def fuzzy_find(item, tag_suffixes):
-    """Memóriakímélő kereső egy adott Element-en belül"""
     if isinstance(tag_suffixes, str): tag_suffixes = [tag_suffixes]
     for child in item:
         tag_name = child.tag.split('}')[-1].lower()
@@ -69,7 +74,7 @@ def fuzzy_find(item, tag_suffixes):
                 return safe_str(child.text)
     return ""
 
-# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (STREAMING) ---
+# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (PARANOID STREAMING) ---
 class AutoUpdater:
     def __init__(self):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -79,96 +84,97 @@ class AutoUpdater:
         self.index = self.pc.Index(INDEX_NAME)
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Streaming Indítása: {XML_FEED_URL}")
+        print(f"🔄 [AUTO] Streaming Indítása (V44): {XML_FEED_URL}")
         current_sync_ts = int(time.time())
         
         try:
-            # STREAM=True a kulcs!
-            response = requests.get(XML_FEED_URL, stream=True, timeout=120)
+            # 1. Requests session optimalizálás
+            session = requests.Session()
+            response = session.get(XML_FEED_URL, stream=True, timeout=120)
+            
             if response.status_code != 200: 
                 print("❌ Hiba: Nem érhető el az XML.")
                 return
 
-            # Raw stream dekódolása
             response.raw.decode_content = True
             
-            # ITERPARSE: Nem tölti be az egészet, csak halad előre
-            events = ET.iterparse(response.raw, events=("end",))
+            # 2. Iterparse beállítása
+            events = ET.iterparse(response.raw, events=("start", "end"))
+            context = iter(events)
             
-            print("🚀 [MODE] V43 Streaming Memory-Safe Mode")
+            # Root elem elkapása a takarításhoz
+            event, root = next(context)
+
+            print("🚀 [MODE] V44 Paranoid Memory Saver")
             
             batch = []
             count_total = 0
             count_processed = 0
             
-            for event, elem in events:
-                # Csak az <item> vagy <post> elemek érdekelnek
-                tag_local = elem.tag.split('}')[-1].lower()
-                
-                if tag_local in ['item', 'post']:
-                    count_total += 1
-                    try:
-                        # 1. ID Keresés
-                        bid = fuzzy_find(elem, ['id', 'g:id', 'post_id'])
+            for event, elem in context:
+                if event == "end":
+                    tag_local = elem.tag.split('}')[-1].lower()
+                    
+                    if tag_local in ['item', 'post']:
+                        count_total += 1
+                        try:
+                            bid = fuzzy_find(elem, ['id', 'g:id', 'post_id'])
+                            
+                            if bid:
+                                title = fuzzy_find(elem, ['title', 'g:title']) or "Nincs cím"
+                                desc = fuzzy_find(elem, ['description', 'g:description'])
+                                short_desc = fuzzy_find(elem, ['shortdescription', 'excerpt'])
+                                full_raw_text = f"{desc} {short_desc}"
+                                
+                                # Szűrés
+                                is_bookman = "Bookman" in full_raw_text or "bookman" in full_raw_text
+                                should_process = is_bookman or (count_total % 200 == 0)
+                                
+                                if should_process:
+                                    structured_text = clean_html_structural(full_raw_text)
+                                    auth = extract_author(structured_text)
+                                    pub = extract_publisher(structured_text)
+                                    if not pub and is_bookman: pub = "Bookman Kiadó"
+
+                                    if is_bookman: print(f"✅ [FOUND] {title} ({pub})")
+                                    elif count_total % 500 == 0: print(f"⏳ [PROG] {count_total}...")
+
+                                    d_hash = f"stream_v44_{current_sync_ts}"
+                                    emb_text = f"Cím: {title}. Szerző: {auth}. Kiadó: {pub}. Leírás: {structured_text[:600]}"
+                                    emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
+                                    
+                                    meta = {
+                                        "title": title, "url": fuzzy_find(elem, ['link', 'g:link']), 
+                                        "image_url": fuzzy_find(elem, ['image_link', 'g:image_link']),
+                                        "price": fuzzy_find(elem, ['price', 'g:price']) or "0",
+                                        "lang": "hu", "stock": "instock", 
+                                        "author": auth, "publisher": pub, 
+                                        "full_search_text": f"{title} {auth} {pub}".lower(),
+                                        "content_hash": d_hash, "last_seen": current_sync_ts
+                                    }
+                                    batch.append((bid, emb, meta))
+                                    count_processed += 1
+
+                        except Exception as e: pass
                         
-                        if bid:
-                            # 2. Adatok
-                            title = fuzzy_find(elem, ['title', 'g:title']) or "Nincs cím"
-                            desc = fuzzy_find(elem, ['description', 'g:description'])
-                            short_desc = fuzzy_find(elem, ['shortdescription', 'excerpt'])
-                            full_raw_text = f"{desc} {short_desc}"
-                            
-                            # 3. Szűrés (Bookman + Minta)
-                            is_bookman = "Bookman" in full_raw_text or "bookman" in full_raw_text
-                            # Minden 200. könyv + az összes Bookman
-                            should_process = is_bookman or (count_total % 200 == 0)
-                            
-                            if should_process:
-                                # HTML Tisztítás (csak ezen a kicsi darabon)
-                                structured_text = clean_html_structural(full_raw_text)
-                                auth = extract_author(structured_text)
-                                pub = extract_publisher(structured_text)
-                                
-                                if not pub and is_bookman: pub = "Bookman Kiadó"
+                        # 3. KÖTELEZŐ TAKARÍTÁS (A legfontosabb sor!)
+                        elem.clear()
+                        root.clear() # A gyökérelemet is ürítjük!
+                        
+                        # 4. KÉNYSZERÍTETT MEMÓRIA FELSZABADÍTÁS
+                        if count_total % 200 == 0:
+                            gc.collect()
+                        
+                        # Batch feltöltés
+                        if len(batch) >= 20:
+                            self.index.upsert(vectors=batch)
+                            batch = []
 
-                                # Embedding
-                                if is_bookman: print(f"✅ [FOUND] Bookman: {title}")
-                                else: 
-                                    if count_total % 1000 == 0: print(f"⏳ [PROGRESS] Feldolgozva: {count_total}...")
-
-                                d_hash = f"stream_v43_{current_sync_ts}"
-                                emb_text = f"Cím: {title}. Szerző: {auth}. Kiadó: {pub}. Leírás: {structured_text[:600]}"
-                                emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
-                                
-                                meta = {
-                                    "title": title, "url": fuzzy_find(elem, ['link', 'g:link']), 
-                                    "image_url": fuzzy_find(elem, ['image_link', 'g:image_link']),
-                                    "price": fuzzy_find(elem, ['price', 'g:price']) or "0",
-                                    "lang": "hu", "stock": "instock", 
-                                    "author": auth, "publisher": pub, 
-                                    "full_search_text": f"{title} {auth} {pub}".lower(),
-                                    "content_hash": d_hash, "last_seen": current_sync_ts
-                                }
-                                batch.append((bid, emb, meta))
-                                count_processed += 1
-
-                    except Exception as e:
-                        pass # Egy hibás elem ne állítsa meg a streamet
-                    
-                    # FONTOS: Töröljük a memóriából a feldolgozott elemet!
-                    elem.clear()
-                    
-                    # Batch feltöltés
-                    if len(batch) >= 20:
-                        self.index.upsert(vectors=batch)
-                        batch = []
-
-            # Maradék
             if batch: self.index.upsert(vectors=batch)
-            print(f"🏁 [VÉGE] Összesen átnézve: {count_total}, Feldolgozva: {count_processed}")
+            print(f"🏁 [VÉGE] Átnézve: {count_total}, Feldolgozva: {count_processed}")
 
         except Exception as e:
-            print(f"❌ Hiba a stream közben: {e}")
+            print(f"❌ Hiba: {e}")
 
 # --- BRAIN ---
 class BooksyBrain:
@@ -238,7 +244,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V43 (Streaming RAM-Saver)"}
+def home(): return {"status": "Booksy V44 (Paranoid GC)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
@@ -246,7 +252,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "Streaming Update Started"}
+    return {"status": "V44 Update Started"}
 
 if __name__ == "__main__":
     import uvicorn
