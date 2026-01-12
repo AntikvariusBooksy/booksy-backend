@@ -6,7 +6,7 @@ import re
 import unicodedata
 import html
 import xml.etree.ElementTree as ET
-import gc  # GARBAGE COLLECTOR
+import gc
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
@@ -33,22 +33,26 @@ def normalize_text(text):
     text = str(text).lower()
     return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
 
+def safe_str(val):
+    """
+    Kinyeri a szöveget és EGYBŐL dekódolja a HTML entitásokat.
+    Így a '&#8211;' -> '–' lesz mindenhol (címben is).
+    """
+    if val is None: return ""
+    # 1. Stringgé alakítjuk
+    text = str(val).strip()
+    # 2. Dekódoljuk a HTML jeleket (&amp;, &#8211;, &lt; stb.)
+    return html.unescape(text)
+
 def clean_html_structural(raw_html):
     if not raw_html: return ""
-    # Csak akkor hívjuk a html.unescape-et, ha tényleg kell, spóroljunk CPU/RAM-ot
-    if '&' in str(raw_html):
-        s = html.unescape(str(raw_html))
-    else:
-        s = str(raw_html)
-        
+    # Itt a safe_str már megcsinálta az unescape-et, de a biztonság kedvéért kezeljük
+    s = str(raw_html)
     s = s.replace('</div>', '\n').replace('</p>', '\n').replace('<br>', '\n').replace('<br/>', '\n')
     cleanr = re.compile('<.*?>')
     cleantext = re.sub(cleanr, ' ', s)
     cleantext = cleantext.replace("<![CDATA[", "").replace("]]>", "")
     return "\n".join([line.strip() for line in cleantext.split('\n') if line.strip()])
-
-def safe_str(val):
-    return str(val).strip() if val is not None else ""
 
 def extract_author(text_content):
     if not text_content: return ""
@@ -71,10 +75,11 @@ def fuzzy_find(item, tag_suffixes):
         tag_name = child.tag.split('}')[-1].lower()
         for suffix in tag_suffixes:
             if tag_name == suffix.lower():
+                # A safe_str hívás itt történik, tehát minden kinyert adat tiszta lesz!
                 return safe_str(child.text)
     return ""
 
-# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (PARANOID STREAMING) ---
+# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (FULL PRODUCTION) ---
 class AutoUpdater:
     def __init__(self):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -84,11 +89,10 @@ class AutoUpdater:
         self.index = self.pc.Index(INDEX_NAME)
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Streaming Indítása (V44): {XML_FEED_URL}")
+        print(f"🔄 [AUTO] FULL UPDATE Indítása: {XML_FEED_URL}")
         current_sync_ts = int(time.time())
         
         try:
-            # 1. Requests session optimalizálás
             session = requests.Session()
             response = session.get(XML_FEED_URL, stream=True, timeout=120)
             
@@ -97,19 +101,15 @@ class AutoUpdater:
                 return
 
             response.raw.decode_content = True
-            
-            # 2. Iterparse beállítása
             events = ET.iterparse(response.raw, events=("start", "end"))
             context = iter(events)
-            
-            # Root elem elkapása a takarításhoz
             event, root = next(context)
 
-            print("🚀 [MODE] V44 Paranoid Memory Saver")
+            print("🚀 [MODE] V45 Full Database Update (Clean Titles + Streaming)")
             
             batch = []
             count_total = 0
-            count_processed = 0
+            count_uploaded = 0
             
             for event, elem in context:
                 if event == "end":
@@ -126,52 +126,60 @@ class AutoUpdater:
                                 short_desc = fuzzy_find(elem, ['shortdescription', 'excerpt'])
                                 full_raw_text = f"{desc} {short_desc}"
                                 
-                                # Szűrés
-                                is_bookman = "Bookman" in full_raw_text or "bookman" in full_raw_text
-                                should_process = is_bookman or (count_total % 200 == 0)
+                                # --- FELDOLGOZÁS ---
+                                structured_text = clean_html_structural(full_raw_text)
+                                auth = extract_author(structured_text)
+                                pub = extract_publisher(structured_text)
                                 
-                                if should_process:
-                                    structured_text = clean_html_structural(full_raw_text)
-                                    auth = extract_author(structured_text)
-                                    pub = extract_publisher(structured_text)
-                                    if not pub and is_bookman: pub = "Bookman Kiadó"
+                                # Fallback: Ha a szövegben benne van a Bookman, de nem ismerte fel a regex
+                                if not pub and ("Bookman" in full_raw_text or "bookman" in full_raw_text):
+                                    pub = "Bookman Kiadó"
 
-                                    if is_bookman: print(f"✅ [FOUND] {title} ({pub})")
-                                    elif count_total % 500 == 0: print(f"⏳ [PROG] {count_total}...")
+                                # Hash ellenőrzés (hogy ne generáljunk feleslegesen, ha nem változott)
+                                price = fuzzy_find(elem, ['price', 'g:price']) or "0"
+                                sale = fuzzy_find(elem, ['sale_price', 'g:sale_price']) or ""
+                                d_hash = generate_content_hash(f"{bid}{title}{pub}{price}{sale}")
+                                
+                                # FORCE UPDATE a javítás miatt
+                                need_emb = True 
 
-                                    d_hash = f"stream_v44_{current_sync_ts}"
+                                if need_emb:
+                                    if count_total % 200 == 0: 
+                                        print(f"⏳ [PROG] {count_total} feldolgozva... Utolsó: {title}")
+
                                     emb_text = f"Cím: {title}. Szerző: {auth}. Kiadó: {pub}. Leírás: {structured_text[:600]}"
                                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
                                     
                                     meta = {
-                                        "title": title, "url": fuzzy_find(elem, ['link', 'g:link']), 
+                                        "title": title, # Most már tiszta lesz!
+                                        "url": fuzzy_find(elem, ['link', 'g:link']), 
                                         "image_url": fuzzy_find(elem, ['image_link', 'g:image_link']),
-                                        "price": fuzzy_find(elem, ['price', 'g:price']) or "0",
-                                        "lang": "hu", "stock": "instock", 
+                                        "price": price, "lang": "hu", "stock": "instock", 
                                         "author": auth, "publisher": pub, 
                                         "full_search_text": f"{title} {auth} {pub}".lower(),
                                         "content_hash": d_hash, "last_seen": current_sync_ts
                                     }
                                     batch.append((bid, emb, meta))
-                                    count_processed += 1
+                                    count_uploaded += 1
 
                         except Exception as e: pass
                         
-                        # 3. KÖTELEZŐ TAKARÍTÁS (A legfontosabb sor!)
                         elem.clear()
-                        root.clear() # A gyökérelemet is ürítjük!
+                        root.clear()
                         
-                        # 4. KÉNYSZERÍTETT MEMÓRIA FELSZABADÍTÁS
-                        if count_total % 200 == 0:
-                            gc.collect()
+                        if count_total % 200 == 0: gc.collect()
                         
-                        # Batch feltöltés
-                        if len(batch) >= 20:
+                        if len(batch) >= 50:
                             self.index.upsert(vectors=batch)
                             batch = []
 
             if batch: self.index.upsert(vectors=batch)
-            print(f"🏁 [VÉGE] Átnézve: {count_total}, Feldolgozva: {count_processed}")
+            
+            print("🧹 [AUTO] Takarítás...")
+            try: self.index.delete(filter={"last_seen": {"$lt": current_sync_ts}, "type": {"$ne": "policy"}})
+            except: pass
+            
+            print(f"🏁 [VÉGE] Teljes adatbázis frissítve! ({count_uploaded} elem)")
 
         except Exception as e:
             print(f"❌ Hiba: {e}")
@@ -195,6 +203,7 @@ class BooksyBrain:
             for m in res['matches']:
                 meta = m['metadata']
                 score = m['score'] * 100 
+                
                 pub_norm = normalize_text(meta.get('publisher', ''))
                 auth_norm = normalize_text(meta.get('author', ''))
                 title_norm = normalize_text(meta.get('title', ''))
@@ -213,7 +222,7 @@ class BooksyBrain:
         site_lang = 'hu'
         if context_url and '/ro/' in str(context_url).lower(): site_lang = 'ro'
         matches = self.search(msg, site_lang)
-        if not matches: return {"reply": "Sajnos nem találtam.", "products": []}
+        if not matches: return {"reply": "Sajnos nem találtam a keresésnek megfelelő könyvet.", "products": []}
         
         prods = []
         ctx_text = ""
@@ -226,7 +235,7 @@ class BooksyBrain:
             ctx_text += f"- {display}\n"
             if len(prods)>=8: break
             
-        sys_prompt = f"User: {msg}. Found:\n{ctx_text}\nTask: Recommend these."
+        sys_prompt = f"User: {msg}. Found:\n{ctx_text}\nTask: Recommend these books."
         ans = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user", "content":sys_prompt}]).choices[0].message.content
         return {"reply": ans, "products": prods}
 
@@ -244,7 +253,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V44 (Paranoid GC)"}
+def home(): return {"status": "Booksy V45 (Clean Titles)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
@@ -252,7 +261,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V44 Update Started"}
+    return {"status": "Full Clean Update Started"}
 
 if __name__ == "__main__":
     import uvicorn
