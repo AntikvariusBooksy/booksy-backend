@@ -1,13 +1,12 @@
 import os
 import time
-import requests # Visszatérünk ehhez a letöltéshez, mert jobban kezeli a fájlba írást
+import requests
 import hashlib
 import re
 import unicodedata
 import html
 import xml.etree.ElementTree as ET
 import gc
-import shutil
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
@@ -22,7 +21,7 @@ from typing import List, Optional
 load_dotenv()
 INDEX_NAME = "booksy-index"
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
-TEMP_FILE = "temp_feed.xml" # Ideiglenes fájl
+TEMP_FILE = "temp_feed.xml"
 
 # --- ADATMODELLEK ---
 class ChatRequest(BaseModel):
@@ -75,7 +74,7 @@ def fuzzy_find(item, tag_suffixes):
 def generate_content_hash(data_string):
     return hashlib.md5(data_string.encode('utf-8')).hexdigest()
 
-# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (DISK BUFFER) ---
+# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (V49 Logic - Disk Buffer) ---
 class AutoUpdater:
     def __init__(self):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -85,87 +84,71 @@ class AutoUpdater:
         self.index = self.pc.Index(INDEX_NAME)
 
     def download_feed(self):
-        """Letölti a teljes XML-t a lemezre, retry logikával."""
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         for attempt in range(3):
             try:
-                print(f"⬇️ [DOWNLOAD] Letöltés indítása (Kísérlet {attempt+1}/3)...")
+                print(f"⬇️ [DOWNLOAD] Letöltés (Kísérlet {attempt+1}/3)...")
                 with requests.get(XML_FEED_URL, headers=headers, stream=True, timeout=300) as r:
                     r.raise_for_status()
                     with open(TEMP_FILE, 'wb') as f:
                         for chunk in r.iter_content(chunk_size=8192):
                             f.write(chunk)
-                
-                # Ellenőrzés: ha túl kicsi a fájl, valószínűleg hibás
                 file_size = os.path.getsize(TEMP_FILE)
-                if file_size < 10000: # 10KB alatt gyanús
-                    raise Exception("A letöltött fájl túl kicsi, valószínűleg hibás.")
-                
-                print(f"✅ [DOWNLOAD] Sikeres letöltés! Méret: {file_size / 1024 / 1024:.2f} MB")
+                if file_size < 10000: raise Exception("Túl kicsi fájl.")
+                print(f"✅ [DOWNLOAD] Siker! Méret: {file_size / 1024 / 1024:.2f} MB")
                 return True
             except Exception as e:
-                print(f"⚠️ Hiba a letöltésnél: {e}")
+                print(f"⚠️ Hiba: {e}")
                 time.sleep(5)
-        
         return False
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Frissítés indítása (Disk Buffer Mode)")
+        print(f"🔄 [AUTO] Frissítés indítása (V50)")
         current_sync_ts = int(time.time())
         
-        # 1. LÉPÉS: LETÖLTÉS
-        if not self.download_feed():
-            print("❌ Nem sikerült letölteni a feedet 3 kísérlet után sem.")
-            return
+        if not self.download_feed(): return
 
-        # 2. LÉPÉS: FELDOLGOZÁS LEMEZRŐL
         try:
-            print("🚀 [MODE] V49 Parsing from Disk (Network Safe)")
-            
-            # Iterparse a helyi fájlról
+            print("🚀 [MODE] Parsing from Disk")
             context = ET.iterparse(TEMP_FILE, events=("end",))
-            
             batch = []
             count_total = 0
-            count_processed = 0
             
             for event, elem in context:
                 tag_local = elem.tag.split('}')[-1].lower()
-                
                 if tag_local in ['item', 'post']:
                     count_total += 1
                     try:
                         bid = fuzzy_find(elem, ['id', 'g:id', 'post_id'])
-                        
                         if bid:
                             title = fuzzy_find(elem, ['title', 'g:title']) or "Nincs cím"
                             desc = fuzzy_find(elem, ['description', 'g:description'])
                             short_desc = fuzzy_find(elem, ['shortdescription', 'excerpt'])
                             full_raw_text = f"{desc} {short_desc}"
                             
-                            # Adatkinyerés
                             structured_text = clean_html_structural(full_raw_text)
                             auth = extract_author(structured_text)
                             pub = extract_publisher(structured_text)
                             if not pub and ("Bookman" in full_raw_text or "bookman" in full_raw_text):
                                 pub = "Bookman Kiadó"
 
-                            # Hash ellenőrzés
                             price = fuzzy_find(elem, ['price', 'g:price']) or "0"
                             sale = fuzzy_find(elem, ['sale_price', 'g:sale_price']) or ""
-                            # Force update a javítások miatt
+                            
+                            # Hash Check - Élesben már bekapcsolhatjuk a hash ellenőrzést, 
+                            # mert a tegnapi force update helyrerakta az adatokat!
                             d_hash = generate_content_hash(f"{bid}{title}{pub}{price}{sale}")
-                            need_emb = True # Most mindent frissítünk
+                            
+                            need_emb = True
+                            try:
+                                ex = self.index.fetch(ids=[bid])
+                                if ex and 'vectors' in ex and bid in ex['vectors']:
+                                    if ex['vectors'][bid]['metadata'].get('content_hash') == d_hash:
+                                        need_emb = False
+                            except: pass
 
                             if need_emb:
-                                if "Bookman" in pub and count_processed % 5 == 0:
-                                    print(f"✅ [FOUND] {title} ({pub})")
-                                elif count_total % 500 == 0: 
-                                    print(f"⏳ [PROG] {count_total} feldolgozva...")
-
+                                if count_total % 500 == 0: print(f"⏳ [PROG] {count_total}...")
                                 emb_text = f"Cím: {title}. Szerző: {auth}. Kiadó: {pub}. Leírás: {structured_text[:600]}"
                                 emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
                                 
@@ -179,35 +162,24 @@ class AutoUpdater:
                                     "content_hash": d_hash, "last_seen": current_sync_ts
                                 }
                                 batch.append((bid, emb, meta))
-                                count_processed += 1
 
                     except Exception as e: pass
-                    
-                    # Memória takarítás
                     elem.clear()
-                    
                     if count_total % 500 == 0: gc.collect()
-                    
                     if len(batch) >= 50:
                         self.index.upsert(vectors=batch)
                         batch = []
 
             if batch: self.index.upsert(vectors=batch)
-            
-            print("🧹 [AUTO] Régi elemek törlése...")
+            print("🧹 [AUTO] Takarítás...")
             try: self.index.delete(filter={"last_seen": {"$lt": current_sync_ts}, "type": {"$ne": "policy"}})
             except: pass
-            
-            # Töröljük a temp fájlt
-            if os.path.exists(TEMP_FILE):
-                os.remove(TEMP_FILE)
-            
-            print(f"🏁 [VÉGE] Kész! ({count_processed} könyv frissítve)")
+            if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
+            print(f"🏁 [VÉGE] Kész! ({count_total} könyv ellenőrizve)")
 
-        except Exception as e:
-            print(f"❌ Hiba a feldolgozásnál: {e}")
+        except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN ---
+# --- BRAIN (V50: STRICT MODE) ---
 class BooksyBrain:
     def __init__(self):
         self.updater = AutoUpdater()
@@ -216,50 +188,117 @@ class BooksyBrain:
 
     def search(self, q, search_lang_filter):
         try:
+            # Embedding keresés
             vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
             filt = {"stock": "instock"}
             if search_lang_filter != 'all': filt["lang"] = search_lang_filter
-            res = self.index.query(vector=vec, top_k=80, include_metadata=True, filter=filt)
+            
+            res = self.index.query(vector=vec, top_k=60, include_metadata=True, filter=filt)
             
             q_norm = normalize_text(q)
             results = []
+            
             for m in res['matches']:
                 meta = m['metadata']
                 score = m['score'] * 100 
                 
+                # --- PONTRENDSZER ---
                 pub_norm = normalize_text(meta.get('publisher', ''))
                 auth_norm = normalize_text(meta.get('author', ''))
                 title_norm = normalize_text(meta.get('title', ''))
                 
-                if q_norm in pub_norm and len(q_norm) > 3: score += 1000 
+                # Ha Bookmant keres, az legyen az első!
+                if "bookman" in q_norm and "bookman" in pub_norm:
+                    score += 2000 # Brutális boost
+                
+                if q_norm in pub_norm: score += 500
                 if q_norm in auth_norm: score += 300
                 if q_norm in title_norm: score += 200
                 
                 m['custom_score'] = score
                 results.append(m)
+            
             results.sort(key=lambda x: x['custom_score'], reverse=True)
             return results[:10]
-        except: return []
+            
+        except Exception as e:
+            print(f"Search error: {e}")
+            return []
 
     def process(self, msg, context_url=""):
+        # 1. Nyelv detektálása
         site_lang = 'hu'
         if context_url and '/ro/' in str(context_url).lower(): site_lang = 'ro'
-        matches = self.search(msg, site_lang)
-        if not matches: return {"reply": "Sajnos nem találtam a keresésnek megfelelő könyvet.", "products": []}
         
+        # 2. Keresés
+        matches = self.search(msg, site_lang)
+        
+        # 3. Prompt Építés (SZIGORÚ MÓD)
         prods = []
         ctx_text = ""
+        
+        if not matches:
+            if site_lang == 'hu':
+                return {"reply": "Sajnos nem találtam a keresésednek megfelelő könyvet a kínálatunkban. Próbálj meg más kulcsszót!", "products": []}
+            else:
+                return {"reply": "Din păcate, nu am găsit nicio carte care să corespundă căutării tale. Încearcă un alt cuvânt cheie!", "products": []}
+
         for m in matches:
             meta = m['metadata']
-            display = meta.get('title')
-            if meta.get('publisher'): display += f" ({meta.get('publisher')})"
-            p = {"title": display, "price": meta.get('price'), "url": meta.get('url'), "image": meta.get('image_url')}
-            prods.append(p)
-            ctx_text += f"- {display}\n"
-            if len(prods)>=8: break
+            display_title = meta.get('title')
+            publisher = meta.get('publisher', '')
             
-        sys_prompt = f"User: {msg}. Found:\n{ctx_text}\nTask: Recommend these books."
-        ans = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user", "content":sys_prompt}]).choices[0].message.content
+            # Jelöljük meg a promptban a kiadót
+            info_line = f"- Cím: {display_title} | Szerző: {meta.get('author')} | Kiadó: {publisher} | Ár: {meta.get('price')}\n"
+            ctx_text += info_line
+            
+            # Frontendnek (JSON)
+            p = {"title": display_title, "price": meta.get('price'), "url": meta.get('url'), "image": meta.get('image_url')}
+            prods.append(p)
+            if len(prods)>=8: break # Max 8 kártya
+            
+        # 4. AI Utasítás (System Prompt) - NYELVSPECIFIKUS
+        if site_lang == 'hu':
+            sys_prompt = f"""
+            Te a Booksy vagy, az Antikvarius.ro segítőkész asszisztense.
+            
+            A felhasználó ezt kérdezte: "{msg}"
+            
+            AZ ADATBÁZISBAN TALÁLT KÖNYVEK LISTÁJA (EZEKBŐL DOLGOZZ):
+            {ctx_text}
+            
+            SZIGORÚ UTASÍTÁSOK:
+            1. KIZÁRÓLAG magyarul válaszolj!
+            2. Csak a fenti listában szereplő könyveket ajánld. SOHA ne találj ki könyveket, amik nincsenek a listán.
+            3. Ha a felhasználó a "Bookman" kiadót kereste, emeld ki, hogy ezek a saját kiadású könyveitek.
+            4. Legyél rövid, kedves és lényegretörő.
+            """
+        else: # Román
+            sys_prompt = f"""
+            Ești Booksy, asistentul inteligent al Antikvarius.ro.
+            
+            Utilizatorul a căutat: "{msg}"
+            
+            CĂRȚI GĂSITE ÎN BAZA DE DATE (FOLOSEȘTE DOAR ACESTEA):
+            {ctx_text}
+            
+            INSTRUCȚIUNI STRICTE:
+            1. Răspunde DOAR în limba română!
+            2. Recomandă doar cărțile din lista de mai sus. NU inventa niciodată cărți care nu sunt pe listă.
+            3. Dacă utilizatorul a căutat editura "Bookman", menționează că acestea sunt ediții proprii.
+            4. Fii scurt, politicos și la obiect.
+            """
+
+        # 5. Generálás
+        try:
+            ans = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role":"user", "content":sys_prompt}],
+                temperature=0.3 # Alacsony hőmérséklet a hallucinációk ellen
+            ).choices[0].message.content
+        except Exception as e:
+            ans = "Hiba történt a válasz generálása közben." if site_lang == 'hu' else "A apărut o eroare."
+
         return {"reply": ans, "products": prods}
 
 # --- APP ---
@@ -276,7 +315,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V49 (Disk Buffer Mode)"}
+def home(): return {"status": "Booksy V50 (Strict Librarian Mode)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
@@ -284,7 +323,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V49 Update Started (Downloading First...)"}
+    return {"status": "Daily Update Started"}
 
 if __name__ == "__main__":
     import uvicorn
