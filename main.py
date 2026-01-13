@@ -1,6 +1,7 @@
 import os
 import time
-import requests
+import urllib.request
+import urllib.error
 import hashlib
 import re
 import unicodedata
@@ -74,7 +75,7 @@ def fuzzy_find(item, tag_suffixes):
 def generate_content_hash(data_string):
     return hashlib.md5(data_string.encode('utf-8')).hexdigest()
 
-# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (V49 Logic - Disk Buffer) ---
+# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (MARAD A V49/V50 STABIL) ---
 class AutoUpdater:
     def __init__(self):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -103,9 +104,8 @@ class AutoUpdater:
         return False
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Frissítés indítása (V50)")
+        print(f"🔄 [AUTO] Frissítés indítása (V51)")
         current_sync_ts = int(time.time())
-        
         if not self.download_feed(): return
 
         try:
@@ -135,11 +135,11 @@ class AutoUpdater:
                             price = fuzzy_find(elem, ['price', 'g:price']) or "0"
                             sale = fuzzy_find(elem, ['sale_price', 'g:sale_price']) or ""
                             
-                            # Hash Check - Élesben már bekapcsolhatjuk a hash ellenőrzést, 
-                            # mert a tegnapi force update helyrerakta az adatokat!
+                            # Hash ellenőrzés
                             d_hash = generate_content_hash(f"{bid}{title}{pub}{price}{sale}")
-                            
                             need_emb = True
+                            
+                            # Itt most már bekapcsolhatjuk az ellenőrzést, mert az adatbázis friss!
                             try:
                                 ex = self.index.fetch(ids=[bid])
                                 if ex and 'vectors' in ex and bid in ex['vectors']:
@@ -153,8 +153,7 @@ class AutoUpdater:
                                 emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
                                 
                                 meta = {
-                                    "title": title,
-                                    "url": fuzzy_find(elem, ['link', 'g:link']), 
+                                    "title": title, "url": fuzzy_find(elem, ['link', 'g:link']), 
                                     "image_url": fuzzy_find(elem, ['image_link', 'g:image_link']),
                                     "price": price, "lang": "hu", "stock": "instock", 
                                     "author": auth, "publisher": pub, 
@@ -175,11 +174,11 @@ class AutoUpdater:
             try: self.index.delete(filter={"last_seen": {"$lt": current_sync_ts}, "type": {"$ne": "policy"}})
             except: pass
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
-            print(f"🏁 [VÉGE] Kész! ({count_total} könyv ellenőrizve)")
+            print(f"🏁 [VÉGE] Kész! ({count_total} könyv)")
 
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V50: STRICT MODE) ---
+# --- BRAIN (V51: HYBRID SEARCH) ---
 class BooksyBrain:
     def __init__(self):
         self.updater = AutoUpdater()
@@ -188,28 +187,48 @@ class BooksyBrain:
 
     def search(self, q, search_lang_filter):
         try:
-            # Embedding keresés
+            q_norm = normalize_text(q)
+            results = []
+            
+            # --- 1. SPECIÁLIS "BOOKMAN" SZŰRŐ (HARD FILTER) ---
+            if "bookman" in q_norm:
+                print("🔎 [SEARCH] Bookman detected -> Using Hard Filter")
+                # Létrehozunk egy dummy vektort a kereséshez, de a FILTER a lényeg!
+                vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
+                
+                # CSAK azokat kérjük le, ahol a publisher pontosan "Bookman Kiadó"
+                direct_res = self.index.query(
+                    vector=vec, 
+                    top_k=20, 
+                    include_metadata=True, 
+                    filter={"publisher": "Bookman Kiadó", "stock": "instock"}
+                )
+                
+                # Ezeket azonnal betesszük az eredmények közé, maximális prioritással
+                for m in direct_res['matches']:
+                    m['custom_score'] = 10000 # Hatalmas pontszám, hogy ez legyen elöl
+                    results.append(m)
+            
+            # --- 2. NORMÁL SZEMANTIKUS KERESÉS ---
+            # Ez minden másra fut, vagy kiegészítésként
             vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
             filt = {"stock": "instock"}
             if search_lang_filter != 'all': filt["lang"] = search_lang_filter
             
-            res = self.index.query(vector=vec, top_k=60, include_metadata=True, filter=filt)
+            normal_res = self.index.query(vector=vec, top_k=60, include_metadata=True, filter=filt)
             
-            q_norm = normalize_text(q)
-            results = []
-            
-            for m in res['matches']:
+            for m in normal_res['matches']:
+                # Ha már megtaláltuk a Bookman szűrővel, ne rakjuk be duplán
+                if any(r['id'] == m['id'] for r in results):
+                    continue
+                    
                 meta = m['metadata']
                 score = m['score'] * 100 
                 
-                # --- PONTRENDSZER ---
+                # Súlyozás
                 pub_norm = normalize_text(meta.get('publisher', ''))
                 auth_norm = normalize_text(meta.get('author', ''))
                 title_norm = normalize_text(meta.get('title', ''))
-                
-                # Ha Bookmant keres, az legyen az első!
-                if "bookman" in q_norm and "bookman" in pub_norm:
-                    score += 2000 # Brutális boost
                 
                 if q_norm in pub_norm: score += 500
                 if q_norm in auth_norm: score += 300
@@ -218,6 +237,7 @@ class BooksyBrain:
                 m['custom_score'] = score
                 results.append(m)
             
+            # Rendezés
             results.sort(key=lambda x: x['custom_score'], reverse=True)
             return results[:10]
             
@@ -226,78 +246,64 @@ class BooksyBrain:
             return []
 
     def process(self, msg, context_url=""):
-        # 1. Nyelv detektálása
         site_lang = 'hu'
         if context_url and '/ro/' in str(context_url).lower(): site_lang = 'ro'
         
-        # 2. Keresés
         matches = self.search(msg, site_lang)
         
-        # 3. Prompt Építés (SZIGORÚ MÓD)
         prods = []
         ctx_text = ""
         
         if not matches:
             if site_lang == 'hu':
-                return {"reply": "Sajnos nem találtam a keresésednek megfelelő könyvet a kínálatunkban. Próbálj meg más kulcsszót!", "products": []}
+                return {"reply": "Sajnos nem találtam a keresésednek megfelelő könyvet.", "products": []}
             else:
-                return {"reply": "Din păcate, nu am găsit nicio carte care să corespundă căutării tale. Încearcă un alt cuvânt cheie!", "products": []}
+                return {"reply": "Nu am găsit nicio carte.", "products": []}
 
         for m in matches:
             meta = m['metadata']
             display_title = meta.get('title')
             publisher = meta.get('publisher', '')
             
-            # Jelöljük meg a promptban a kiadót
-            info_line = f"- Cím: {display_title} | Szerző: {meta.get('author')} | Kiadó: {publisher} | Ár: {meta.get('price')}\n"
+            info_line = f"- {display_title} (Szerző: {meta.get('author')}, Kiadó: {publisher}, Ár: {meta.get('price')})\n"
             ctx_text += info_line
             
-            # Frontendnek (JSON)
             p = {"title": display_title, "price": meta.get('price'), "url": meta.get('url'), "image": meta.get('image_url')}
             prods.append(p)
-            if len(prods)>=8: break # Max 8 kártya
+            if len(prods)>=8: break
             
-        # 4. AI Utasítás (System Prompt) - NYELVSPECIFIKUS
         if site_lang == 'hu':
             sys_prompt = f"""
             Te a Booksy vagy, az Antikvarius.ro segítőkész asszisztense.
-            
-            A felhasználó ezt kérdezte: "{msg}"
-            
-            AZ ADATBÁZISBAN TALÁLT KÖNYVEK LISTÁJA (EZEKBŐL DOLGOZZ):
+            Kérdés: "{msg}"
+            Talált könyvek:
             {ctx_text}
             
-            SZIGORÚ UTASÍTÁSOK:
-            1. KIZÁRÓLAG magyarul válaszolj!
-            2. Csak a fenti listában szereplő könyveket ajánld. SOHA ne találj ki könyveket, amik nincsenek a listán.
-            3. Ha a felhasználó a "Bookman" kiadót kereste, emeld ki, hogy ezek a saját kiadású könyveitek.
-            4. Legyél rövid, kedves és lényegretörő.
+            Utasítások:
+            1. Csak a fenti könyveket ajánld!
+            2. Ha a találatok között van 'Bookman Kiadó', emeld ki, hogy ezek a saját kiadásaitok!
+            3. Magyarul válaszolj.
             """
-        else: # Román
+        else:
             sys_prompt = f"""
-            Ești Booksy, asistentul inteligent al Antikvarius.ro.
-            
-            Utilizatorul a căutat: "{msg}"
-            
-            CĂRȚI GĂSITE ÎN BAZA DE DATE (FOLOSEȘTE DOAR ACESTEA):
+            Ești Booksy. Întrebare: "{msg}"
+            Cărți găsite:
             {ctx_text}
             
-            INSTRUCȚIUNI STRICTE:
-            1. Răspunde DOAR în limba română!
-            2. Recomandă doar cărțile din lista de mai sus. NU inventa niciodată cărți care nu sunt pe listă.
-            3. Dacă utilizatorul a căutat editura "Bookman", menționează că acestea sunt ediții proprii.
-            4. Fii scurt, politicos și la obiect.
+            Instrucțiuni:
+            1. Recomandă doar cărțile din listă.
+            2. Dacă vezi 'Bookman Kiadó', menționează că sunt ediții proprii.
+            3. Răspunde în română.
             """
 
-        # 5. Generálás
         try:
             ans = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role":"user", "content":sys_prompt}],
-                temperature=0.3 # Alacsony hőmérséklet a hallucinációk ellen
+                temperature=0.3
             ).choices[0].message.content
-        except Exception as e:
-            ans = "Hiba történt a válasz generálása közben." if site_lang == 'hu' else "A apărut o eroare."
+        except:
+            ans = "Hiba történt."
 
         return {"reply": ans, "products": prods}
 
@@ -315,7 +321,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V50 (Strict Librarian Mode)"}
+def home(): return {"status": "Booksy V51 (Hybrid Hard-Filter)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
