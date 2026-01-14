@@ -24,7 +24,7 @@ INDEX_NAME = "booksy-index"
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 TEMP_FILE = "temp_feed.xml"
 
-# --- TUDÁSBÁZIS (RO LINKS - FIX) ---
+# --- TUDÁSBÁZIS (RO LINKS) ---
 POLICY_PAGES = [
     {"url": "https://www.antikvarius.ro/termeni-si-conditii-de-utilizare/", "lang": "ro", "name": "Termeni și condiții"},
     {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Informații despre plată"},
@@ -70,12 +70,21 @@ def generate_content_hash(data_string):
     return hashlib.md5(data_string.encode('utf-8')).hexdigest()
 
 def detect_hungarian_intent(msg):
-    hu_words = ["szia", "könyv", "keres", "hogy", "miért", "mennyi", "szállítás", "fizetés", "van", "nincs", "mikor", "kiadó", "szerző", "cím", "magyar"]
+    hu_words = [
+        "szia", "sziasztok", "helló", "hello", 
+        "könyv", "konyv", "könyvek", "konyvek", "könyvet", 
+        "keres", "keresek", "keresem", "szeretnék", "szeretnek", "vásárolni",
+        "hogy", "miért", "mennyi", "mennyibe", "ár", "ara", 
+        "szállítás", "szallitas", "fizetés", "fizetes", "futár",
+        "van", "nincs", "mikor", "hol", 
+        "kiadó", "kiado", "szerző", "szerzo", "cím", "cim", 
+        "magyar", "magyarul"
+    ]
     msg_norm = normalize_text(msg)
     if any(w in msg_norm for w in hu_words): return True
     return False
 
-# --- AUTOMATIZÁLT FRISSÍTŐ MOTOR (V64 - CATEGORY OVERRIDE) ---
+# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V66) ---
 class AutoUpdater:
     def __init__(self):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -85,7 +94,7 @@ class AutoUpdater:
         self.index = self.pc.Index(INDEX_NAME)
 
     def download_feed(self):
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        headers = {'User-Agent': 'BooksyBot/1.0'}
         for attempt in range(3):
             try:
                 print(f"⬇️ [DOWNLOAD] XML Feed Letöltés (Kísérlet {attempt+1}/3)...")
@@ -131,7 +140,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés Indítása (V64)")
+        print(f"🔄 [AUTO] Napi Frissítés Indítása (V66)")
         current_sync_ts = int(time.time())
         
         # 1. Policy
@@ -166,13 +175,11 @@ class AutoUpdater:
                             category = item_data.get('product_type') or item_data.get('category') or ""
                             cat_norm = normalize_text(category)
                             
-                            # --- 1. PUBLISHER Logic (V64 FIX) ---
-                            # Ha a kategória nevében benne van a "Bookman", akkor a kiadó fixen Bookman!
+                            # --- BOOKMAN KIADÓ JAVÍTÁS ---
                             pub = "Ismeretlen"
                             if "bookman" in cat_norm:
                                 pub = "Bookman Kiadó"
                             else:
-                                # Ha nincs a kategóriában, keressük a szövegben regex-szel
                                 match_pub = re.search(r'(Kiadó|Kiadás|Publisher)(?:\s|<[^>]+>)*:?(?:\s|<[^>]+>)+([^<\n\r]+)', full_raw_text, re.IGNORECASE)
                                 if match_pub:
                                     extracted = match_pub.group(2).strip()
@@ -182,20 +189,21 @@ class AutoUpdater:
                             match_auth = re.search(r'(Szerző|Írta|Author|Szerzők)(?:\s|<[^>]+>)*:?(?:\s|<[^>]+>)+([^<\n\r]+)', full_raw_text, re.IGNORECASE)
                             auth = match_auth.group(2).strip() if match_auth else "Ismeretlen"
 
-                            # --- 2. LANG Logic (URL alapú gyökérkategória) ---
+                            # --- NYELVI LOGIKA ---
                             detected_lang = "hu"
                             if "carti in limba romana" in cat_norm: detected_lang = "ro"
                             elif "magyar nyelvu konyvek" in cat_norm: detected_lang = "hu"
                             
                             price = item_data.get('sale_price') or item_data.get('price') or "0"
                             
-                            # Hash
+                            # HASH (Ez a kulcs a takarékossághoz)
                             hash_input = "".join([f"{k}:{v}" for k, v in sorted(item_data.items())])
                             hash_input += f"|{detected_lang}|{pub}|{auth}"
                             d_hash = generate_content_hash(hash_input)
                             
                             need_emb = True
                             try:
+                                # Ellenőrizzük, hogy létezik-e már és változott-e
                                 fetch_res = self.index.fetch(ids=[bid])
                                 if fetch_res and 'vectors' in fetch_res and bid in fetch_res['vectors']:
                                     existing_meta = fetch_res['vectors'][bid]['metadata']
@@ -206,8 +214,10 @@ class AutoUpdater:
                             
                             if need_emb:
                                 if count_total % 500 == 0: print(f"⏳ [PROG] {count_total}... (Upd: {count_updated})")
+                                
                                 emb_text = f"Nyelv: {detected_lang}. Cím: {title}. Szerző: {auth}. Kategória: {category}. Kiadó: {pub}. Leírás: {clean_desc[:800]}"
                                 emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
+                                
                                 meta = {
                                     "title": title, "url": item_data.get('link', ''), "image_url": item_data.get('image_link', ''),
                                     "price": price, "publisher": pub, "author": auth, "category": category,
@@ -224,22 +234,26 @@ class AutoUpdater:
 
                     except Exception as e: pass
                     elem.clear()
+                    # MEMÓRIA TAKARÍTÁS (FONTOS!)
                     if count_total % 500 == 0: gc.collect()
                     if len(batch) >= 50:
                         self.index.upsert(vectors=batch)
                         batch = []
 
             if batch: self.index.upsert(vectors=batch)
+            
+            # Takarítás (Régi könyvek törlése)
             print("🧹 [AUTO] Takarítás...")
             one_week_ago = current_sync_ts - (7 * 24 * 60 * 60)
             try: self.index.delete(filter={"last_seen": {"$lt": one_week_ago}, "type": "book"})
             except: pass
+            
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
             print(f"🏁 [VÉGE] Összes: {count_total}, Frissítve: {count_updated}, Skip: {count_skipped}")
 
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V64) ---
+# --- BRAIN (V66) ---
 class BooksyBrain:
     def __init__(self):
         self.updater = AutoUpdater()
@@ -257,30 +271,35 @@ class BooksyBrain:
                 vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
                 return self.index.query(vector=vec, top_k=3, include_metadata=True, filter={"type": "policy"})['matches']
 
-            # 2. BOOKMAN FILTER
-            if "bookman" in q_norm:
-                vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
-                direct_res = self.index.query(vector=vec, top_k=20, include_metadata=True, filter={"publisher": "Bookman Kiadó", "stock": "instock"})
-                for m in direct_res['matches']:
-                    m['custom_score'] = 10000 
-                    results.append(m)
-            
-            # 3. NORMÁL
+            # 2. KERESÉS (Okos súlyozás)
             vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
             filt = {"stock": "instock", "type": "book"}
-            if search_lang_filter != 'all': filt["lang"] = search_lang_filter
-            normal_res = self.index.query(vector=vec, top_k=60, include_metadata=True, filter=filt)
             
-            for m in normal_res['matches']:
+            # Ha NEM Bookman-t keres, használjuk a nyelvi szűrőt.
+            if "bookman" not in q_norm and search_lang_filter != 'all':
+                filt["lang"] = search_lang_filter
+            
+            matches = self.index.query(vector=vec, top_k=80, include_metadata=True, filter=filt)
+            
+            for m in matches['matches']:
                 if any(r['id'] == m['id'] for r in results): continue
                 meta = m['metadata']
                 score = m['score'] * 100 
                 
-                if q_norm in normalize_text(meta.get('title', '')): score += 1000
-                if q_norm in normalize_text(meta.get('author', '')): score += 600
-                if q_norm in normalize_text(meta.get('category', '')): score += 400
-                if q_norm in normalize_text(meta.get('publisher', '')): score += 300
-                if q_norm in normalize_text(meta.get('description', '')): score += 100
+                title_norm = normalize_text(meta.get('title', ''))
+                auth_norm = normalize_text(meta.get('author', ''))
+                pub_norm = normalize_text(meta.get('publisher', ''))
+                cat_norm = normalize_text(meta.get('category', ''))
+                
+                if q_norm in title_norm: score += 50
+                if q_norm in auth_norm: score += 30
+                if q_norm in cat_norm: score += 80
+                if q_norm in pub_norm: score += 40
+
+                # BOOKMAN BOOST (Ha kategóriában, kiadóban VAGY szövegben van)
+                if "bookman" in q_norm:
+                    if "bookman" in cat_norm or "bookman" in pub_norm or "bookman" in normalize_text(meta.get('description', '')):
+                         score += 500
                 
                 m['custom_score'] = score
                 results.append(m)
@@ -290,14 +309,9 @@ class BooksyBrain:
         except: return []
 
     def process(self, msg, context_url=""):
-        # 1. SITE CONTEXT (A TE PONTOS SZABÁLYOD ALAPJÁN)
-        site_lang = 'ro' # Alapértelmezett (https://www.antikvarius.ro/)
-        if context_url and '/hu/' in str(context_url).lower(): # Ha van benne /hu/
-            site_lang = 'hu'
-        
-        # 2. INTENT OVERRIDE
-        if detect_hungarian_intent(msg):
-            site_lang = 'hu'
+        site_lang = 'ro'
+        if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
+        if detect_hungarian_intent(msg): site_lang = 'hu'
         
         matches = self.search(msg, site_lang)
         
@@ -324,26 +338,23 @@ class BooksyBrain:
             sys_prompt = f"""Te a Booksy vagy, az Antikvarius.ro asszisztense.
             Kérdés: "{msg}"
             ADATOK: {ctx_text}
-            
             UTASÍTÁS:
-            1. Válaszolj kedvesen és röviden.
+            1. Válaszolj magyarul, kedvesen, röviden.
             2. NE HASZNÁLJ KÉPET/LINKET A SZÖVEGBEN!
             3. Policy info: Románul van, FORDÍTSD LE MAGYARRA.
-            4. Ha Bookman kiadó, emeld ki.
             Válasz nyelve: MAGYAR."""
         else:
             sys_prompt = f"""Ești Booksy. Date: {ctx_text}
             Instructiuni:
-            1. Răspunde scurt și politicos.
+            1. Răspunde în română, scurt.
             2. NU include imagini/link-uri în text.
-            3. Răspunde în română."""
+            3. Folosește datele de mai sus."""
 
         try:
             ans = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini", messages=[{"role":"user", "content":sys_prompt}], temperature=0.3
             ).choices[0].message.content
         except: ans = "Hiba."
-        
         return {"reply": ans, "products": prods}
 
 # --- APP ---
@@ -361,7 +372,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V64 (CATEGORY BOOKMAN FIX)"}
+def home(): return {"status": "Booksy V66 (FINAL OPTIMIZED)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
@@ -369,7 +380,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V64 Update Running"}
+    return {"status": "V66 Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
