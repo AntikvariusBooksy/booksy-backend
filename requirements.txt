@@ -1,9 +1,9 @@
 fastapi
 uvicorn
-pydantic
+requests
 python-dotenv
 openai
-pinecone
-requests
-beautifulsoup4
 apscheduler
+chromadb
+pydantic
+pysqlite3-binary
