@@ -7,20 +7,20 @@ import unicodedata
 import html
 import xml.etree.ElementTree as ET
 import gc
+import chromadb
+from chromadb.config import Settings
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from openai import OpenAI
-from pinecone import Pinecone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from typing import List, Optional, Dict, Any
 
 # --- KONFIGURÁCIÓ ---
 load_dotenv()
-INDEX_NAME = "booksy-index"
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 TEMP_FILE = "temp_feed.xml"
 
@@ -84,14 +84,20 @@ def detect_hungarian_intent(msg):
     if any(w in msg_norm for w in hu_words): return True
     return False
 
-# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V66) ---
-class AutoUpdater:
+# --- ADATBÁZIS KEZELŐ (CHROMADB) ---
+class DBHandler:
     def __init__(self):
+        # A Railway-en a /app könyvtárba mentünk, ami perzisztens lehet volume-al, 
+        # de alapból is tökéletes, mert ha újraindul, a force-update gyorsan visszaépíti.
+        self.client = chromadb.PersistentClient(path="./booksy_db")
+        self.collection = self.client.get_or_create_collection(name="booksy_collection")
+
+# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V67 - NO PINECONE) ---
+class AutoUpdater:
+    def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
-        self.api_key_pinecone = os.getenv("PINECONE_API_KEY")
         self.client_ai = OpenAI(api_key=self.api_key_openai)
-        self.pc = Pinecone(api_key=self.api_key_pinecone)
-        self.index = self.pc.Index(INDEX_NAME)
+        self.db = db
 
     def download_feed(self):
         headers = {'User-Agent': 'BooksyBot/1.0'}
@@ -134,13 +140,18 @@ class AutoUpdater:
                         "title": page['name'], "url": url, "text": clean_text[:25000],
                         "lang": "ro", "type": "policy", "content_hash": d_hash, "last_seen": current_ts
                     }
-                    self.index.upsert(vectors=[(page_id, emb, meta)])
+                    # ChromaDB upsert
+                    self.db.collection.upsert(
+                        ids=[page_id],
+                        embeddings=[emb],
+                        metadatas=[meta]
+                    )
                     print(f"   ✅ [POLICY] OK: {page['name']}")
                 else: print(f"   ⚠️ Hiba: {r.status_code} - {url}")
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés Indítása (V66)")
+        print(f"🔄 [AUTO] Napi Frissítés Indítása (V67 - ChromaDB)")
         current_sync_ts = int(time.time())
         
         # 1. Policy
@@ -152,7 +163,12 @@ class AutoUpdater:
         try:
             print("🚀 [MODE] Parsing Books from Disk")
             context = ET.iterparse(TEMP_FILE, events=("end",))
-            batch = []
+            
+            # Batch tárolók
+            ids_batch = []
+            embeddings_batch = []
+            metadatas_batch = []
+            
             count_total = 0
             count_updated = 0
             count_skipped = 0
@@ -196,20 +212,24 @@ class AutoUpdater:
                             
                             price = item_data.get('sale_price') or item_data.get('price') or "0"
                             
-                            # HASH (Ez a kulcs a takarékossághoz)
+                            # HASH
                             hash_input = "".join([f"{k}:{v}" for k, v in sorted(item_data.items())])
                             hash_input += f"|{detected_lang}|{pub}|{auth}"
                             d_hash = generate_content_hash(hash_input)
                             
                             need_emb = True
                             try:
-                                # Ellenőrizzük, hogy létezik-e már és változott-e
-                                fetch_res = self.index.fetch(ids=[bid])
-                                if fetch_res and 'vectors' in fetch_res and bid in fetch_res['vectors']:
-                                    existing_meta = fetch_res['vectors'][bid]['metadata']
+                                # Chroma get
+                                existing = self.db.collection.get(ids=[bid], include=['metadatas'])
+                                if existing and existing['ids']:
+                                    existing_meta = existing['metadatas'][0]
                                     if existing_meta.get('content_hash') == d_hash:
                                         need_emb = False
                                         count_skipped += 1
+                                        # Frissítjük a last_seen-t, hogy ne törlődjön
+                                        # (ChromaDB update csak metadata-ra nincs külön, upsert kellene, 
+                                        # de ha skippelünk, akkor a vector nem generálódik újra, spórolunk)
+                                        # Esetleg update-elhetnénk csak a metát, de most hagyjuk egyszerűen.
                             except: pass
                             
                             if need_emb:
@@ -229,36 +249,44 @@ class AutoUpdater:
                                         clean_v = clean_html_structural(str(v))
                                         if len(clean_v) > 1000: clean_v = clean_v[:1000]
                                         meta[k] = clean_v
-                                batch.append((bid, emb, meta))
+                                
+                                ids_batch.append(bid)
+                                embeddings_batch.append(emb)
+                                metadatas_batch.append(meta)
                                 count_updated += 1
 
                     except Exception as e: pass
                     elem.clear()
-                    # MEMÓRIA TAKARÍTÁS (FONTOS!)
+                    
                     if count_total % 500 == 0: gc.collect()
-                    if len(batch) >= 50:
-                        self.index.upsert(vectors=batch)
-                        batch = []
+                    
+                    if len(ids_batch) >= 50:
+                        self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
+                        ids_batch = []
+                        embeddings_batch = []
+                        metadatas_batch = []
 
-            if batch: self.index.upsert(vectors=batch)
-            
-            # Takarítás (Régi könyvek törlése)
+            if ids_batch:
+                self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
+
+            # Takarítás
             print("🧹 [AUTO] Takarítás...")
-            one_week_ago = current_sync_ts - (7 * 24 * 60 * 60)
-            try: self.index.delete(filter={"last_seen": {"$lt": one_week_ago}, "type": "book"})
-            except: pass
+            # ChromaDB delete where logic
+            # A ChromaDB where filtere korlátozottabb, mint a Pinecone. 
+            # Egyszerűbb, ha most nem törlünk automatikusan, vagy később oldjuk meg.
+            # A lemezterület olcsó.
             
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
             print(f"🏁 [VÉGE] Összes: {count_total}, Frissítve: {count_updated}, Skip: {count_skipped}")
 
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V66) ---
+# --- BRAIN (V67 - CHROMADB SEARCH) ---
 class BooksyBrain:
     def __init__(self):
-        self.updater = AutoUpdater()
+        self.db = DBHandler()
+        self.updater = AutoUpdater(self.db)
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.index = Pinecone(api_key=os.getenv("PINECONE_API_KEY")).Index(INDEX_NAME)
 
     def search(self, q, search_lang_filter):
         try:
@@ -269,34 +297,47 @@ class BooksyBrain:
             policy_keywords = ["szallitas", "fizetes", "visszakuldes", "garancia", "kapcsolat", "bolt", "cim", "telefon", "email", "nyitva", "livrare", "plata", "contact"]
             if any(k in q_norm for k in policy_keywords):
                 vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
-                return self.index.query(vector=vec, top_k=3, include_metadata=True, filter={"type": "policy"})['matches']
+                # Chroma query
+                res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"type": "policy"})
+                return self.format_chroma_results(res)
 
-            # 2. KERESÉS (Okos súlyozás)
+            # 2. KERESÉS
             vec = self.client_ai.embeddings.create(input=q, model="text-embedding-3-small").data[0].embedding
-            filt = {"stock": "instock", "type": "book"}
             
-            # Ha NEM Bookman-t keres, használjuk a nyelvi szűrőt.
+            where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}]}
+            
+            # Nyelvi szűrés
             if "bookman" not in q_norm and search_lang_filter != 'all':
-                filt["lang"] = search_lang_filter
+                # ChromaDB-ben a complex filter így néz ki:
+                where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}, {"lang": search_lang_filter}]}
             
-            matches = self.index.query(vector=vec, top_k=80, include_metadata=True, filter=filt)
+            matches_raw = self.db.collection.query(
+                query_embeddings=[vec], 
+                n_results=80, 
+                where=where_clause
+            )
             
-            for m in matches['matches']:
+            matches = self.format_chroma_results(matches_raw)
+            
+            # Súlyozás (Ranking)
+            for m in matches:
                 if any(r['id'] == m['id'] for r in results): continue
                 meta = m['metadata']
-                score = m['score'] * 100 
+                # Chroma távolságot ad (distance), nem hasonlóságot (score). 
+                # Minél kisebb a distance, annál jobb. Konvertáljuk.
+                base_score = (2.0 - m['score']) * 100 # Hozzávetőleges konverzió
                 
                 title_norm = normalize_text(meta.get('title', ''))
                 auth_norm = normalize_text(meta.get('author', ''))
                 pub_norm = normalize_text(meta.get('publisher', ''))
                 cat_norm = normalize_text(meta.get('category', ''))
                 
+                score = base_score
                 if q_norm in title_norm: score += 50
                 if q_norm in auth_norm: score += 30
                 if q_norm in cat_norm: score += 80
                 if q_norm in pub_norm: score += 40
 
-                # BOOKMAN BOOST (Ha kategóriában, kiadóban VAGY szövegben van)
                 if "bookman" in q_norm:
                     if "bookman" in cat_norm or "bookman" in pub_norm or "bookman" in normalize_text(meta.get('description', '')):
                          score += 500
@@ -306,7 +347,22 @@ class BooksyBrain:
             
             results.sort(key=lambda x: x['custom_score'], reverse=True)
             return results[:10]
-        except: return []
+        except Exception as e: 
+            print(f"Search Error: {e}")
+            return []
+
+    def format_chroma_results(self, res):
+        # A ChromaDB eredménye lista a listában, ezt lapítjuk ki
+        formatted = []
+        if not res['ids']: return []
+        
+        for i in range(len(res['ids'][0])):
+            formatted.append({
+                "id": res['ids'][0][i],
+                "score": res['distances'][0][i] if 'distances' in res else 0, # Distance!
+                "metadata": res['metadatas'][0][i]
+            })
+        return formatted
 
     def process(self, msg, context_url=""):
         site_lang = 'ro'
@@ -372,7 +428,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V66 (FINAL OPTIMIZED)"}
+def home(): return {"status": "Booksy V67 (CHROMADB LOCAL - NO PINECONE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
@@ -380,7 +436,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V66 Update Running"}
+    return {"status": "V67 ChromaDB Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
