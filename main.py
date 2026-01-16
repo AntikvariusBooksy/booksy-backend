@@ -1,3 +1,4 @@
+# BOOKSY BRAIN - V69 (STRICT RON & DYNAMIC LANG)
 # --- SQLITE FIX (CHROMADB-HEZ KÖTELEZŐ RAILWAY-EN) ---
 __import__('pysqlite3')
 import sys
@@ -96,7 +97,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V69 - Strict ROM Prompt) ---
+# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V69) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -154,7 +155,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés Indítása (V69 - Strict ROM)")
+        print(f"🔄 [AUTO] Napi Frissítés Indítása (V69)")
         current_sync_ts = int(time.time())
         
         self.update_policies(current_sync_ts)
@@ -343,6 +344,12 @@ class BooksyBrain:
         ctx_text = ""
         is_policy = matches and matches[0]['metadata'].get('type') == 'policy'
         
+        # Címkék nyelvi beállítása, hogy ne zavarjuk össze az AI-t magyar feliratokkal román szövegben
+        lbl_title = "Cím" if site_lang == "hu" else "Titlu"
+        lbl_price = "Ár" if site_lang == "hu" else "Pret"
+        lbl_pub = "Kiadó" if site_lang == "hu" else "Editura"
+        lbl_cat = "Kategória" if site_lang == "hu" else "Categorie"
+        
         if not matches:
              err_msg = "Sajnos nem találtam könyvet." if site_lang == 'hu' else "Nu am găsit nimic."
              return {"reply": err_msg, "products": []}
@@ -350,14 +357,14 @@ class BooksyBrain:
         for m in matches:
             meta = m['metadata']
             
-            # --- ÁRVÁLTÁS KIVÉVE - EREDETI HASZNÁLATA ---
+            # EREDETI ÁR (nincs váltás)
             final_price = meta.get('price')
             
             if is_policy:
                 ctx_text += f"--- POLICY (Nyelv: {meta.get('lang')}) ---\n{meta.get('text', '')}\n"
             else:
-                details = f"Cím: {meta.get('title')}, Ár: {final_price}, Kiadó: {meta.get('publisher')}, Kategória: {meta.get('category')}"
-                ctx_text += f"--- KÖNYV ---\n{details}\n"
+                details = f"{lbl_title}: {meta.get('title')}, {lbl_price}: {final_price}, {lbl_pub}: {meta.get('publisher')}, {lbl_cat}: {meta.get('category')}"
+                ctx_text += f"--- BOOK/CARTE ---\n{details}\n"
                 p = {"title": meta.get('title'), "price": final_price, "url": meta.get('url'), "image": meta.get('image_url')}
                 prods.append(p)
                 if len(prods)>=8: break
@@ -368,14 +375,16 @@ class BooksyBrain:
             1. Válaszolj magyarul, kedvesen, röviden. 
             2. NE HASZNÁLJ KÉPET/LINKET. 
             3. Policy: Fordítsd magyarra.
-            4. ÁRAK: Az adatbázisban lévő árakat (pl. '25 RON' vagy '25') VÁLTOZTATÁS NÉLKÜL írd ki. NE írj mögé, hogy HUF! NE váltsd át! Hagyd meg eredetiben (RON)."""
+            4. ÁRAK: Az adatbázisban lévő számok (pl. 25, 910) MÁR a helyes árak (RON). 
+            NE ÍRJ MÖGÉJÜK SEMMIT (se HUF, se Ft)! Csak a számot írd ki, esetleg mögé, hogy "RON". 
+            TILOS átváltani! TILOS HUF-ot írni!"""
         else:
-            # ITT A JAVÍTÁS:
             sys_prompt = f"""Ești Booksy. Date: {ctx_text}
             Instructiuni: 
             1. Răspunde în română, scurt. 
             2. NU include imagini/link-uri.
-            3. PRETURI: Păstrează prețurile EXACT așa cum sunt în date (de exemplu '25 RON' sau '25'). NU le converti în HUF! NU adăuga 'HUF'."""
+            3. PRETURI: Păstrează prețurile EXACT așa cum sunt în date (de exemplu '25 RON' sau '910'). 
+            NU le converti în HUF! NU adăuga 'HUF'! Scrie doar 'RON' sau nimic."""
 
         try:
             ans = self.client_ai.chat.completions.create(
