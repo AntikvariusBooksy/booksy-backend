@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V69 (STRICT RON & DYNAMIC LANG)
+# BOOKSY BRAIN - V72 (RAW RON - TEXT CLEANING ONLY)
 # --- SQLITE FIX (CHROMADB-HEZ KÖTELEZŐ RAILWAY-EN) ---
 __import__('pysqlite3')
 import sys
@@ -91,13 +91,31 @@ def detect_hungarian_intent(msg):
     if any(w in msg_norm for w in hu_words): return True
     return False
 
+# --- ÁR TISZTÍTÓ (V72 - RON ONLY) ---
+def clean_price_raw(raw_price):
+    """
+    Ez a függvény eltávolítja a szöveget (pl. 'RON') a számból,
+    majd visszaadja a számot + ' RON' stringet.
+    Így nem számít, hogy a feedben "24 RON" vagy "24,00" van.
+    """
+    if not raw_price: return "0 RON"
+    
+    s = str(raw_price).strip()
+    
+    # Csak számjegyeket, pontot és vesszőt tartunk meg
+    cleaned_num = re.sub(r"[^\d.,]", "", s)
+    
+    if not cleaned_num: return s 
+    
+    return f"{cleaned_num} RON"
+
 # --- ADATBÁZIS KEZELŐ (CHROMADB) ---
 class DBHandler:
     def __init__(self):
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V69) ---
+# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V72) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -155,7 +173,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés Indítása (V69)")
+        print(f"🔄 [AUTO] Napi Frissítés Indítása (V72 - Raw RON Clean)")
         current_sync_ts = int(time.time())
         
         self.update_policies(current_sync_ts)
@@ -209,7 +227,9 @@ class AutoUpdater:
                             if "carti in limba romana" in cat_norm: detected_lang = "ro"
                             elif "magyar nyelvu konyvek" in cat_norm: detected_lang = "hu"
                             
-                            price = item_data.get('sale_price') or item_data.get('price') or "0"
+                            # --- ÁR KEZELÉS (V72: TISZTÍTÁS CSAK) ---
+                            raw_price = item_data.get('sale_price') or item_data.get('price') or "0"
+                            final_ron_price = clean_price_raw(raw_price)
                             
                             hash_input = "".join([f"{k}:{v}" for k, v in sorted(item_data.items())])
                             hash_input += f"|{detected_lang}|{pub}|{auth}"
@@ -233,7 +253,8 @@ class AutoUpdater:
                                 
                                 meta = {
                                     "title": title, "url": item_data.get('link', ''), "image_url": item_data.get('image_link', ''),
-                                    "price": price, "publisher": pub, "author": auth, "category": category,
+                                    "price": final_ron_price,
+                                    "publisher": pub, "author": auth, "category": category,
                                     "stock": "instock", "lang": detected_lang, "content_hash": d_hash,
                                     "last_seen": current_sync_ts, "type": "book"
                                 }
@@ -268,7 +289,7 @@ class AutoUpdater:
 
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V69 - Strict ROM Prompt) ---
+# --- BRAIN (V72) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -344,7 +365,6 @@ class BooksyBrain:
         ctx_text = ""
         is_policy = matches and matches[0]['metadata'].get('type') == 'policy'
         
-        # Címkék nyelvi beállítása, hogy ne zavarjuk össze az AI-t magyar feliratokkal román szövegben
         lbl_title = "Cím" if site_lang == "hu" else "Titlu"
         lbl_price = "Ár" if site_lang == "hu" else "Pret"
         lbl_pub = "Kiadó" if site_lang == "hu" else "Editura"
@@ -357,8 +377,9 @@ class BooksyBrain:
         for m in matches:
             meta = m['metadata']
             
-            # EREDETI ÁR (nincs váltás)
-            final_price = meta.get('price')
+            # Röptében is tisztítunk (ha esetleg régi adat jönne)
+            raw_db_price = meta.get('price')
+            final_price = clean_price_raw(raw_db_price) 
             
             if is_policy:
                 ctx_text += f"--- POLICY (Nyelv: {meta.get('lang')}) ---\n{meta.get('text', '')}\n"
@@ -375,16 +396,13 @@ class BooksyBrain:
             1. Válaszolj magyarul, kedvesen, röviden. 
             2. NE HASZNÁLJ KÉPET/LINKET. 
             3. Policy: Fordítsd magyarra.
-            4. ÁRAK: Az adatbázisban lévő számok (pl. 25, 910) MÁR a helyes árak (RON). 
-            NE ÍRJ MÖGÉJÜK SEMMIT (se HUF, se Ft)! Csak a számot írd ki, esetleg mögé, hogy "RON". 
-            TILOS átváltani! TILOS HUF-ot írni!"""
+            4. ÁRAK: Az adatokban lévő ár (pl. "24,00 RON") a helyes. Írd ki pontosan így! Ne számolj át semmit!"""
         else:
             sys_prompt = f"""Ești Booksy. Date: {ctx_text}
             Instructiuni: 
             1. Răspunde în română, scurt. 
             2. NU include imagini/link-uri.
-            3. PRETURI: Păstrează prețurile EXACT așa cum sunt în date (de exemplu '25 RON' sau '910'). 
-            NU le converti în HUF! NU adăuga 'HUF'! Scrie doar 'RON' sau nimic."""
+            3. PRETURI: Datele conțin prețul corect (de ex "24,00 RON"). Scrie-l exact așa!"""
 
         try:
             ans = self.client_ai.chat.completions.create(
@@ -408,7 +426,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V69 (FINAL STRICT RON PROMPT)"}
+def home(): return {"status": "Booksy V72 (RAW RON)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
@@ -416,7 +434,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V69 Force Update Running"}
+    return {"status": "V72 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
