@@ -96,7 +96,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V68 - Simple RON) ---
+# --- OPTIMALIZÁLT FRISSÍTŐ MOTOR (V69 - Strict ROM Prompt) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -154,7 +154,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés Indítása (V68 - Simple RON)")
+        print(f"🔄 [AUTO] Napi Frissítés Indítása (V69 - Strict ROM)")
         current_sync_ts = int(time.time())
         
         self.update_policies(current_sync_ts)
@@ -267,7 +267,7 @@ class AutoUpdater:
 
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V68 - Simple RON) ---
+# --- BRAIN (V69 - Strict ROM Prompt) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -350,7 +350,7 @@ class BooksyBrain:
         for m in matches:
             meta = m['metadata']
             
-            # --- ÁRVÁLTÁS KIVÉVE - EREDETIT HASZNÁLUNK ---
+            # --- ÁRVÁLTÁS KIVÉVE - EREDETI HASZNÁLATA ---
             final_price = meta.get('price')
             
             if is_policy:
@@ -363,7 +363,6 @@ class BooksyBrain:
                 if len(prods)>=8: break
             
         if site_lang == 'hu':
-            # Itt van a változás: szigorú utasítás a RON megőrzésére
             sys_prompt = f"""Te a Booksy vagy, az Antikvarius.ro asszisztense. Kérdés: "{msg}" ADATOK: {ctx_text}
             UTASÍTÁS: 
             1. Válaszolj magyarul, kedvesen, röviden. 
@@ -371,7 +370,12 @@ class BooksyBrain:
             3. Policy: Fordítsd magyarra.
             4. ÁRAK: Az adatbázisban lévő árakat (pl. '25 RON' vagy '25') VÁLTOZTATÁS NÉLKÜL írd ki. NE írj mögé, hogy HUF! NE váltsd át! Hagyd meg eredetiben (RON)."""
         else:
-            sys_prompt = f"""Ești Booksy. Date: {ctx_text} Instructiuni: 1. Răspunde în română, scurt. 2. NU include imagini/link-uri."""
+            # ITT A JAVÍTÁS:
+            sys_prompt = f"""Ești Booksy. Date: {ctx_text}
+            Instructiuni: 
+            1. Răspunde în română, scurt. 
+            2. NU include imagini/link-uri.
+            3. PRETURI: Păstrează prețurile EXACT așa cum sunt în date (de exemplu '25 RON' sau '25'). NU le converti în HUF! NU adăuga 'HUF'."""
 
         try:
             ans = self.client_ai.chat.completions.create(
@@ -395,7 +399,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V68 (FINAL SIMPLE - RON ONLY)"}
+def home(): return {"status": "Booksy V69 (FINAL STRICT RON PROMPT)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
@@ -403,7 +407,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url)
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V68 Force Update Running"}
+    return {"status": "V69 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
