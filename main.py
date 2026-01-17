@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V83 (AGENTIC AI + MATHEMATICAL PRICE FILTERING)
+# BOOKSY BRAIN - V84 (CRASH FIX: TYPE SAFETY & ERROR HANDLING)
 # --- SQLITE FIX (CHROMADB-HEZ KÖTELEZŐ RAILWAY-EN) ---
 __import__('pysqlite3')
 import sys
@@ -88,15 +88,32 @@ def clean_price_raw(raw_price):
     if not cleaned_num: return s 
     return f"{cleaned_num} RON"
 
-# V83: ÁR PARSOLÓ (Szövegből Float számot csinál a matekhoz)
-def parse_price_to_float(price_str):
+# V84: JAVÍTOTT PARSOLÓ (Biztonságosabb)
+def parse_price_to_float(price_input):
     try:
-        # Kiveszünk mindent ami nem szám vagy pont/vessző
-        s = str(price_str).replace("RON", "").replace(" ", "").strip()
-        s = s.replace(",", ".") # tizedesvessző csere
+        if price_input is None: return None
+        # String tisztítás (ha véletlenül string jönne az AI-tól)
+        s = str(price_input).replace("RON", "").replace("lei", "").replace(" ", "").strip()
+        s = s.replace(",", ".") 
         return float(s)
     except:
-        return 0.0
+        return None
+
+def detect_hungarian_intent(msg):
+    hu_words = [
+        "szia", "sziasztok", "helló", "hello", 
+        "könyv", "konyv", "könyvek", "konyvek", "könyvet", 
+        "keres", "keresek", "keresem", "szeretnék", "szeretnek", "vásárolni",
+        "hogy", "miért", "mennyi", "mennyibe", "ár", "ara", 
+        "szállítás", "szallitas", "fizetés", "fizetes", "futár",
+        "van", "nincs", "mikor", "hol", 
+        "kiadó", "kiado", "szerző", "szerzo", "cím", "cim", 
+        "magyar", "magyarul", "minden nyelven",
+        "tudsz", "ajánlani", "ajánlj", "valamit", "lesz", "kérek", "mutass"
+    ]
+    msg_norm = normalize_text(msg)
+    if any(w in msg_norm for w in hu_words): return True
+    return False
 
 # --- ADATBÁZIS ---
 class DBHandler:
@@ -163,7 +180,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V83 - MATH FILTER)")
+        print(f"🔄 [AUTO] Napi Frissítés (V84 - CRASH FIX)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         if not self.download_feed(): return
@@ -266,7 +283,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V83 - MATH PRICE FILTER) ---
+# --- BRAIN (V84 - ROBUST) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -280,33 +297,15 @@ class BooksyBrain:
                 "type": "function",
                 "function": {
                     "name": "search_database",
-                    "description": "Keresés az adatbázisban. Kezeli a könyveket és az infókat.",
+                    "description": "Keresés az adatbázisban.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Kulcsszavak tisztítva (pl. 'Sadoveanu', 'történelem')."
-                            },
-                            "filter_lang": {
-                                "type": "string",
-                                "enum": ["hu", "ro", "all"],
-                                "description": "Szűrés nyelvre."
-                            },
-                            "search_type": {
-                                "type": "string",
-                                "enum": ["book", "policy"],
-                                "description": "'policy' vagy 'book'."
-                            },
-                            # V83: ÚJ PARAMÉTEREK AZ AI SZÁMÁRA
-                            "min_price": {
-                                "type": "number",
-                                "description": "Minimális ár (ha a user kéri, pl. 'drágább mint 10')."
-                            },
-                            "max_price": {
-                                "type": "number",
-                                "description": "Maximális ár (ha a user kéri, pl. 'olcsóbb mint 20')."
-                            }
+                            "query": { "type": "string" },
+                            "filter_lang": { "type": "string", "enum": ["hu", "ro", "all"] },
+                            "search_type": { "type": "string", "enum": ["book", "policy"] },
+                            "min_price": { "type": "number", "description": "Minimális ár." },
+                            "max_price": { "type": "number", "description": "Maximális ár." }
                         },
                         "required": ["query", "filter_lang", "search_type"]
                     }
@@ -314,7 +313,6 @@ class BooksyBrain:
             }
         ]
 
-    # V83: MATEKOS KERESŐ MOTOR
     def execute_search(self, query, filter_lang, search_type, min_price=None, max_price=None):
         try:
             q_norm = normalize_text(query)
@@ -324,32 +322,33 @@ class BooksyBrain:
                 res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"type": "policy"})
                 return self.format_chroma_results(res)
 
-            # KÖNYV KERESÉS
             vec = self.client_ai.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
-            
             where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}]}
             if filter_lang != 'all' and "bookman" not in q_norm:
                 where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}, {"lang": filter_lang}]}
             
-            # Több találatot kérünk le (80 helyett 100), hogy legyen miből szűrni
             matches_raw = self.db.collection.query(query_embeddings=[vec], n_results=100, where=where_clause)
             matches = self.format_chroma_results(matches_raw)
             
             results = []
             seen_items = set() 
+            
+            # V84: Biztonságos Type Casting a szűrőkhöz
+            safe_min = parse_price_to_float(min_price)
+            safe_max = parse_price_to_float(max_price)
 
             for m in matches:
                 meta = m['metadata']
                 raw_db_price = meta.get('price')
                 final_price_str = clean_price_raw(raw_db_price)
                 
-                # V83: MATEKOS SZŰRÉS
-                if min_price is not None or max_price is not None:
+                # V84: Biztonságos összehasonlítás
+                if safe_min is not None or safe_max is not None:
                     price_val = parse_price_to_float(final_price_str)
-                    if min_price is not None and price_val < min_price: continue
-                    if max_price is not None and price_val > max_price: continue
+                    if price_val is not None:
+                        if safe_min is not None and price_val < safe_min: continue
+                        if safe_max is not None and price_val > safe_max: continue
 
-                # Dedup
                 unique_key = f"{meta.get('title')}|{final_price_str}"
                 if unique_key in seen_items: continue
                 seen_items.add(unique_key)
@@ -386,119 +385,119 @@ class BooksyBrain:
             })
         return formatted
 
+    # V84: GLOBAL ERROR HANDLING
     def process(self, msg, context_url, session_id):
-        last_search = self.user_session_cache.get(session_id, "")
-        site_lang = 'ro'
-        if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
+        try:
+            last_search = self.user_session_cache.get(session_id, "")
+            site_lang = 'ro'
+            if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
 
-        # V83: ROUTER PROMPT BŐVÍTÉSE ÁRAKRA
-        router_system_prompt = f"""
-        You are the Brain of Booksy, an antique bookstore AI assistant.
-        Current Site Language: {site_lang}
-        Last User Search Topic: "{last_search}"
-        
-        YOUR TASKS:
-        1. Detect user's INTENT & LANGUAGE.
-        2. CALL 'search_database' tool for books/policy/price checks.
-        3. 'filter_lang': 'hu', 'ro', or 'all' (only if explicitly asked).
-        4. 'query': Extract core keywords.
-        5. 'min_price' / 'max_price': EXTRACT numbers if user asks for price range (e.g. "cheaper than 10" -> max_price=10). Ignore currency symbols.
-        6. 'search_type': 'book' or 'policy'.
-        
-        If user says "Hello", just reply.
-        """
+            router_system_prompt = f"""
+            You are the Brain of Booksy.
+            Current Site Language: {site_lang}
+            Last User Search Topic: "{last_search}"
+            
+            TASKS:
+            1. Detect user's INTENT & LANGUAGE.
+            2. CALL 'search_database' tool.
+            3. 'min_price'/'max_price': EXTRACT numbers ONLY (e.g. 15). Ignore currency.
+            
+            If user says "Hello", just reply.
+            """
 
-        messages = [
-            {"role": "system", "content": router_system_prompt},
-            {"role": "user", "content": msg}
-        ]
+            messages = [
+                {"role": "system", "content": router_system_prompt},
+                {"role": "user", "content": msg}
+            ]
 
-        response = self.client_ai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            tools=self.get_tools(),
-            tool_choice="auto", 
-            temperature=0.0
-        )
-        
-        response_msg = response.choices[0].message
-        tool_calls = response_msg.tool_calls
-        
-        final_products = []
-        final_reply = ""
-        used_lang_filter = site_lang
+            response = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                tools=self.get_tools(),
+                tool_choice="auto", 
+                temperature=0.0
+            )
+            
+            response_msg = response.choices[0].message
+            tool_calls = response_msg.tool_calls
+            
+            final_products = []
+            final_reply = ""
+            used_lang_filter = site_lang
 
-        if tool_calls:
-            tool_call = tool_calls[0]
-            if tool_call.function.name == "search_database":
-                args = json.loads(tool_call.function.arguments)
-                
-                if args.get('filter_lang') != 'all':
-                    self.user_session_cache[session_id] = args.get('query')
-                
-                used_lang_filter = args.get('filter_lang')
-                
-                # V83: Paraméterek átadása a keresőnek
-                search_results = self.execute_search(
-                    query=args.get('query'),
-                    filter_lang=args.get('filter_lang'),
-                    search_type=args.get('search_type'),
-                    min_price=args.get('min_price'),
-                    max_price=args.get('max_price')
-                )
-                
-                ctx_text = ""
-                is_policy = args.get('search_type') == 'policy'
-                
-                if not search_results:
-                    ctx_text = "No results found in database."
-                else:
-                    for m in search_results:
-                        meta = m['metadata']
-                        if is_policy:
-                             ctx_text += f"--- POLICY ({meta.get('lang')}) ---\n{meta.get('text')}\n"
-                        else:
-                             p_price = clean_price_raw(meta.get('price'))
-                             details = f"Title: {meta.get('title')}, Price: {p_price}, Publisher: {meta.get('publisher')}, Cat: {meta.get('category')}"
-                             ctx_text += f"--- BOOK ---\n{details}\n"
-                             p = {"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')}
-                             final_products.append(p)
-                             if len(final_products) >= 8: break
-                
-                writer_system_prompt = f"""
-                You are Booksy. Answer based ONLY on DATA.
-                RULES:
-                1. Language: Answer in the User's language ({used_lang_filter} context).
-                2. NO HALLUCINATION: If Publisher is 'Ismeretlen', say unknown. NEVER say Bookman is publisher unless data says so.
-                3. LIST FORMAT: Only Title and Price.
-                4. Be helpful.
-                """
-                
-                messages.append(response_msg)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": writer_system_prompt
-                })
-                
-                final_res = self.client_ai.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=messages,
-                    temperature=0.1
-                )
-                final_reply = final_res.choices[0].message.content
+            if tool_calls:
+                tool_call = tool_calls[0]
+                if tool_call.function.name == "search_database":
+                    args = json.loads(tool_call.function.arguments)
+                    
+                    if args.get('filter_lang') != 'all':
+                        self.user_session_cache[session_id] = args.get('query')
+                    
+                    used_lang_filter = args.get('filter_lang')
+                    
+                    search_results = self.execute_search(
+                        query=args.get('query'),
+                        filter_lang=args.get('filter_lang'),
+                        search_type=args.get('search_type'),
+                        min_price=args.get('min_price'),
+                        max_price=args.get('max_price')
+                    )
+                    
+                    ctx_text = ""
+                    is_policy = args.get('search_type') == 'policy'
+                    
+                    if not search_results:
+                        ctx_text = "No results found in database."
+                    else:
+                        for m in search_results:
+                            meta = m['metadata']
+                            if is_policy:
+                                ctx_text += f"--- POLICY ({meta.get('lang')}) ---\n{meta.get('text')}\n"
+                            else:
+                                p_price = clean_price_raw(meta.get('price'))
+                                details = f"Title: {meta.get('title')}, Price: {p_price}, Publisher: {meta.get('publisher')}, Cat: {meta.get('category')}"
+                                ctx_text += f"--- BOOK ---\n{details}\n"
+                                p = {"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')}
+                                final_products.append(p)
+                                if len(final_products) >= 8: break
+                    
+                    writer_system_prompt = f"""
+                    You are Booksy. Answer based ONLY on DATA.
+                    RULES:
+                    1. Answer in User's language ({used_lang_filter}).
+                    2. NO HALLUCINATION.
+                    3. LIST FORMAT: Title and Price only.
+                    """
+                    
+                    messages.append(response_msg)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": writer_system_prompt
+                    })
+                    
+                    final_res = self.client_ai.chat.completions.create(
+                        model="gpt-4o-mini", messages=messages, temperature=0.1
+                    )
+                    final_reply = final_res.choices[0].message.content
 
-        else:
-            final_reply = response_msg.content
-
-        if final_products and used_lang_filter != 'all':
-            is_hu = used_lang_filter == 'hu' or detect_hungarian_intent(msg) # A biztonság kedvéért megmarad a helper is
-            if is_hu:
-                final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
             else:
-                final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
+                final_reply = response_msg.content
 
-        return {"reply": final_reply, "products": final_products}
+            if final_products and used_lang_filter != 'all':
+                is_hu = used_lang_filter == 'hu' or detect_hungarian_intent(msg)
+                if is_hu:
+                    final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
+                else:
+                    final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
+
+            return {"reply": final_reply, "products": final_products}
+
+        except Exception as e:
+            print(f"CRITICAL ERROR: {e}")
+            # Fallback válasz hiba esetén
+            err_msg = "Sajnos hiba történt a keresés közben. Kérlek próbáld újra másképp."
+            return {"reply": err_msg, "products": []}
 
 # --- APP ---
 bot = BooksyBrain()
@@ -515,7 +514,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V83 (AGENTIC AI + MATH FILTER)"}
+def home(): return {"status": "Booksy V84 (SAFE MATH)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -523,7 +522,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V83 Force Update Running"}
+    return {"status": "V84 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
