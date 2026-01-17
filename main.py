@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V88 (PURE AGENTIC: NO MANUAL OVERRIDES + SAFE MATH)
+# BOOKSY BRAIN - V89 (DECOUPLED ARCHITECTURE: NO TOOL-CHAIN ERRORS)
 # --- SQLITE FIX ---
 __import__('pysqlite3')
 import sys
@@ -88,7 +88,6 @@ def clean_price_raw(raw_price):
     if not cleaned_num: return s 
     return f"{cleaned_num} RON"
 
-# SAFE MATH PARSER (Ez marad, mert ez mentette meg az összeomlástól!)
 def parse_price_to_float(price_input):
     try:
         if price_input is None: return None
@@ -163,7 +162,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V88 - FREEDOM)")
+        print(f"🔄 [AUTO] Napi Frissítés (V89 - DECOUPLED)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         if not self.download_feed(): return
@@ -266,7 +265,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V88 - PURE AGENTIC ROUTER) ---
+# --- BRAIN (V89 - DECOUPLED STABILITY) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -364,64 +363,54 @@ class BooksyBrain:
             })
         return formatted
 
-    # V88: A NAGY VISSZATÉRÉS (FULL AI CONTROL)
+    # V89: SEPARATED ROUTER & WRITER (Ez a hibaüzenet elleni védelem)
     def process(self, msg, context_url, session_id):
         try:
             last_search = self.user_session_cache.get(session_id, "")
-            
-            # DEFAULT nyelv (csak fallback-nak, ha az AI nem dönt)
             site_lang = 'ro'
             if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
 
-            # ROUTER PROMPT: Rábízzuk a nyelvfelismerést!
-            router_system_prompt = f"""
-            You are the Brain of Booksy.
-            Last User Search Topic: "{last_search}"
-            Context Language: {site_lang}
-            
-            TASKS:
-            1. DETECT INTENT & LANGUAGE from the user's message. (e.g., "Vreau egy könyvet" -> 'hu' intent).
-            2. CALL 'search_database'.
-            3. 'filter_lang': 'hu' or 'ro' (based on user's message), or 'all'.
-            4. 'search_type': 'policy' or 'book'.
-            5. 'min_price'/'max_price': numbers only.
-            
-            If user says "Hello", just reply in the detected language.
-            """
-
-            messages = [
-                {"role": "system", "content": router_system_prompt},
+            # --- LÉPÉS 1: ROUTER (Döntés) ---
+            router_messages = [
+                {"role": "system", "content": f"""
+                You are the Brain of Booksy. Last topic: "{last_search}". Context Lang: {site_lang}.
+                Tasks: Detect INTENT & LANG. Call 'search_database'.
+                'filter_lang': 'hu' or 'ro' (detect from msg) or 'all'.
+                'min_price'/'max_price': numbers.
+                If chitchat ("Hello"), just reply.
+                """},
                 {"role": "user", "content": msg}
             ]
 
-            response = self.client_ai.chat.completions.create(
+            router_response = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=messages,
+                messages=router_messages,
                 tools=self.get_tools(),
                 tool_choice="auto", 
                 temperature=0.0
             )
             
-            response_msg = response.choices[0].message
+            response_msg = router_response.choices[0].message
             tool_calls = response_msg.tool_calls
             
             final_products = []
             final_reply = ""
-            
-            # AZ AI DÖNTÉSÉT HASZNÁLJUK (Nincs manuális felülbírálás!)
-            detected_lang_intent = site_lang # Default
+            detected_lang_intent = site_lang
 
+            # --- LÉPÉS 2 & 3: TOOL + WRITER (Külön menet!) ---
             if tool_calls:
-                tool_call = tool_calls[0]
+                # Csak az első tool call-t dolgozzuk fel, hogy ne legyen kavarodás
+                tool_call = tool_calls[0] 
+                
                 if tool_call.function.name == "search_database":
                     args = json.loads(tool_call.function.arguments)
                     
                     if args.get('filter_lang') != 'all':
                         self.user_session_cache[session_id] = args.get('query')
                     
-                    # Itt vesszük ki, mit döntött az AI a nyelvről
-                    detected_lang_intent = args.get('filter_lang')
+                    detected_lang_intent = args.get('filter_lang', site_lang)
                     
+                    # Tool futtatása (Python)
                     search_results = self.execute_search(
                         query=args.get('query'),
                         filter_lang=args.get('filter_lang'),
@@ -430,6 +419,7 @@ class BooksyBrain:
                         max_price=args.get('max_price')
                     )
                     
+                    # Adatok előkészítése a Writer-nek
                     ctx_text = ""
                     product_count = 0
                     if not search_results:
@@ -448,53 +438,46 @@ class BooksyBrain:
                                 final_products.append(p)
                                 if len(final_products) >= 8: break
                     
-                    # WRITER PROMPT: Most már a detected_lang_intent alapján válaszol!
-                    writer_system_prompt = f"""
-                    You are Booksy. Answer based ONLY on DATA provided below.
+                    # --- WRITER HÍVÁS (Tiszta lappal!) ---
+                    # Nem fűzzük hozzá az előző history-hoz, így nincs tool_call_id hiba!
+                    writer_messages = [
+                        {"role": "system", "content": f"""
+                        You are Booksy. Answer based ONLY on DATA provided.
+                        User Message: "{msg}"
+                        Detected Language: {detected_lang_intent}
+                        
+                        RULES:
+                        1. Answer in the detected language.
+                        2. NO HALLUCINATION: Only list books from DATA. If 0 results, say so.
+                        3. FORMAT: Title and Price.
+                        """},
+                        {"role": "user", "content": f"DATA FOUND:\n{ctx_text}"}
+                    ]
                     
-                    RULES:
-                    1. LANGUAGE: Answer in '{detected_lang_intent}' language (or match the user's language style).
-                    2. NO HALLUCINATION: Only list books that are in the DATA list. If 'product_count' is 0, say you found no books.
-                    3. FORMAT: Title and Price only.
-                    
-                    DATA:
-                    {ctx_text}
-                    """
-                    
-                    messages.append(response_msg)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": writer_system_prompt
-                    })
-                    
-                    final_res = self.client_ai.chat.completions.create(
-                        model="gpt-4o-mini", messages=messages, temperature=0.1
+                    writer_res = self.client_ai.chat.completions.create(
+                        model="gpt-4o-mini", messages=writer_messages, temperature=0.1
                     )
-                    final_reply = final_res.choices[0].message.content
+                    final_reply = writer_res.choices[0].message.content
 
             else:
+                # Sima válasz (nem volt tool call)
                 final_reply = response_msg.content
 
-            # Tipp megjelenítése (Intelligens döntés alapján)
+            # Tipp
             if final_products:
                 if detected_lang_intent == 'hu':
                     final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
                 elif detected_lang_intent == 'ro':
                     final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
-                else: 
-                     # Ha 'all' vagy bizonytalan, akkor az oldal nyelve alapján
-                     if site_lang == 'hu':
-                         final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
-                     else:
-                         final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
+                else:
+                     if site_lang == 'hu': final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
+                     else: final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
 
             return {"reply": final_reply, "products": final_products}
 
         except Exception as e:
             print(f"CRITICAL ERROR: {e}")
-            err_msg = "Sajnos hiba történt a feldolgozás során."
-            return {"reply": err_msg, "products": []}
+            return {"reply": "Sajnos hiba történt. Kérlek próbáld újra.", "products": []}
 
 # --- APP ---
 bot = BooksyBrain()
@@ -511,7 +494,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V88 (PURE AGENTIC)"}
+def home(): return {"status": "Booksy V89 (DECOUPLED AGENT)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -519,7 +502,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V88 Force Update Running"}
+    return {"status": "V89 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
