@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V79 (PUBLISHER REGEX FIX & CLEAN CHAT PROMPT)
+# BOOKSY BRAIN - V80 (ANTI-HALLUCINATION, TIP STYLING, DUPLICATE FILTER)
 # --- SQLITE FIX (CHROMADB-HEZ KÖTELEZŐ RAILWAY-EN) ---
 __import__('pysqlite3')
 import sys
@@ -55,7 +55,7 @@ def safe_str(val):
     if val is None: return ""
     return html.unescape(str(val).strip())
 
-# OKOS TISZTÍTÓ (V77-től)
+# OKOS TISZTÍTÓ (Megmaradt)
 def clean_html_smart(raw_html):
     if not raw_html: return ""
     s = safe_str(raw_html)
@@ -109,7 +109,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- AUTO UPDATER ---
+# --- AUTO UPDATER (V79 REGEX FIX TARTALMAZVA) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -151,7 +151,6 @@ class AutoUpdater:
                     d_hash = generate_content_hash(clean_text)
                     page_id = f"policy_{generate_content_hash(url)}"
                     
-                    # ECO MODE
                     try:
                         existing = self.db.collection.get(ids=[page_id], include=['metadatas'])
                         if existing['ids'] and existing['metadatas'][0].get('content_hash') == d_hash:
@@ -172,7 +171,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V79 - PUBLISHER FIX)")
+        print(f"🔄 [AUTO] Napi Frissítés (V80 - ANTI-HALLUCINATION)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         
@@ -203,7 +202,7 @@ class AutoUpdater:
                             category = item_data.get('product_type') or item_data.get('category') or ""
                             category = clean_html_smart(category)
 
-                            # V79: JAVÍTOTT REGEX - Kezeli a | jelet is, nem csak a kettőspontot
+                            # JAVÍTOTT REGEX (V79-ből)
                             pub = "Ismeretlen"
                             match_pub = re.search(r'(?:Kiadó|Kiadás|Publisher)\s*(?:[:|])\s*([^|\n\r]+)', full_raw_text, re.IGNORECASE)
                             if match_pub: 
@@ -278,7 +277,6 @@ class AutoUpdater:
                 d_hash = generate_content_hash(hash_input)
                 book_data['content_hash'] = d_hash
                 
-                # ECO CHECK
                 try:
                     existing = self.db.collection.get(ids=[bid], include=['metadatas'])
                     if existing and existing['ids'] and len(existing['ids']) > 0:
@@ -320,7 +318,7 @@ class AutoUpdater:
 
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V79 - CLEAN OUTPUT) ---
+# --- BRAIN (V80) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -389,12 +387,10 @@ class BooksyBrain:
         return formatted
 
     def process(self, msg, context_url, session_id):
-        # 1. Nyelv detektálás
         site_lang = 'ro'
         if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
         if detect_hungarian_intent(msg): site_lang = 'hu'
         
-        # 2. Trigger Ellenőrzés
         triggers_hu = ["minden nyelven", "összes nyelven", "más nyelven"]
         triggers_ro = ["toate limbile", "alte limbi", "orice limba"]
         
@@ -414,13 +410,15 @@ class BooksyBrain:
             if session_id:
                 self.user_session_cache[session_id] = msg
 
-        # 3. Keresés futtatása
         matches = self.search(search_query, filter_mode)
         
         prods = []
         ctx_text = ""
         is_policy = matches and matches[0]['metadata'].get('type') == 'policy'
         is_book_search = False
+        
+        # V80: DUPLIKÁCIÓ SZŰRÉS (Technikai ismétlődések ellen)
+        seen_urls = set()
 
         lbl_title = "Cím" if site_lang == "hu" else "Titlu"
         lbl_price = "Ár" if site_lang == "hu" else "Pret"
@@ -433,6 +431,11 @@ class BooksyBrain:
 
         for m in matches:
             meta = m['metadata']
+            
+            # V80: Duplikáció ellenőrzés
+            if meta.get('url') in seen_urls: continue
+            seen_urls.add(meta.get('url'))
+
             raw_db_price = meta.get('price')
             final_price = clean_price_raw(raw_db_price) 
             
@@ -440,15 +443,13 @@ class BooksyBrain:
                 ctx_text += f"--- POLICY (Nyelv: {meta.get('lang')}) ---\n{meta.get('text', '')}\n"
             else:
                 is_book_search = True
-                # V79: A kategória info itt megmarad, hogy az AI tudjon róla (ha kérdezik),
-                # de a promptban tiltjuk le a megjelenítését listázáskor.
                 details = f"{lbl_title}: {meta.get('title')}, {lbl_price}: {final_price}, {lbl_pub}: {meta.get('publisher')}, {lbl_cat}: {meta.get('category')}"
                 ctx_text += f"--- BOOK/CARTE ---\n{details}\n"
                 p = {"title": meta.get('title'), "price": final_price, "url": meta.get('url'), "image": meta.get('image_url')}
                 prods.append(p)
                 if len(prods)>=8: break
         
-        # 4. Prompt Generálás (V79 - TISZTA LISTÁZÁS)
+        # V80: ANTI-HALLUCINATION PROMPT (Bookman tiltás)
         if site_lang == 'hu':
             sys_prompt = f"""Te a Booksy vagy, az Antikvarius.ro asszisztense. 
             KÉRDÉS: "{search_query}"
@@ -456,7 +457,7 @@ class BooksyBrain:
             SZIGORÚ SZABÁLYOK:
             1. KIZÁRÓLAG a fenti ADATOK alapján válaszolj. 
             2. LISTÁZÁSNÁL: Csak a Címet és az Árat írd ki! NE írd ki a Kategóriát vagy a Kiadót, kivéve, ha a felhasználó kifejezetten azt kérdezi.
-            3. Ha nincs adat, ne találgass.
+            3. HA a Kiadó 'Ismeretlen', akkor MONDD AZT, hogy ismeretlen. TILOS azt mondanod, hogy a Bookman a kiadó, hacsak nincs odaírva!
             4. Válaszolj magyarul.
             5. Árakat mindig írd ki pontosan (pl. "20 RON")."""
         else:
@@ -466,7 +467,7 @@ class BooksyBrain:
             REGULI STRICTE:
             1. Răspunde EXCLUSIV pe baza datelor de mai sus.
             2. LA LISTARE: Scrie DOAR Titlul și Prețul! NU scrie Categoria sau Editura, decât dacă utilizatorul întreabă specific.
-            3. Dacă informația lipsește, nu inventa.
+            3. Daca Editura este 'Ismeretlen', spune ca e necunoscuta. NU SPUNE ca e Bookman, decat daca scrie in date!
             4. Răspunde în română.
             5. Scrie prețurile exact (ex "20 RON")."""
 
@@ -476,12 +477,12 @@ class BooksyBrain:
             ).choices[0].message.content
         except: ans = "Hiba."
 
-        # V78/79: TIPPEK (Marad)
+        # V80: ÚJ, TISZTA TIPP DIZÁJN
         if is_book_search and filter_mode != 'all':
             if site_lang == 'hu':
-                ans += "\n\n_(Tipp: Nem ezt kerested? Írd be: **'minden nyelven'**, hogy a teljes adatbázisban keressünk.)_"
+                ans += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
             else:
-                ans += "\n\n_(Sfat: Nu ai găsit? Scrie **'toate limbile'** pentru a căuta în toată baza de date.)_"
+                ans += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
 
         return {"reply": ans, "products": prods}
 
@@ -500,7 +501,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V79 (CLEAN OUTPUT & REGEX FIX)"}
+def home(): return {"status": "Booksy V80 (ANTI-HALLUCINATION & DUPLICATE FIX)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -508,7 +509,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V79 Force Update Running"}
+    return {"status": "V80 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
