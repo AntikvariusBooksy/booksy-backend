@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V89 (DECOUPLED ARCHITECTURE: NO TOOL-CHAIN ERRORS)
+# BOOKSY BRAIN - V91 (V82 LOGIC RESTORED + SAFE MATH PATCH)
 # --- SQLITE FIX ---
 __import__('pysqlite3')
 import sys
@@ -88,14 +88,20 @@ def clean_price_raw(raw_price):
     if not cleaned_num: return s 
     return f"{cleaned_num} RON"
 
+# V91 ÚJÍTÁS (A V86-ból áthozva): Biztonságos Ár konverzió
 def parse_price_to_float(price_input):
     try:
         if price_input is None: return None
-        s = str(price_input).lower().replace("ron", "").replace("lei", "").replace(" ", "").strip()
+        # Bármi jön (int, float, string), stringgé alakítjuk, tisztítjuk, majd float
+        s = str(price_input).lower()
+        s = s.replace("ron", "").replace("lei", "").replace(" ", "").strip()
         s = s.replace(",", ".") 
         if not s: return None
         return float(s)
-    except: return None
+    except:
+        return None
+
+# V91: NINCS 'detect_hungarian_intent'. AZ AI DÖNT! (Ahogy V82-ben)
 
 # --- ADATBÁZIS ---
 class DBHandler:
@@ -103,7 +109,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- AUTO UPDATER ---
+# --- AUTO UPDATER (V82 Logic + Regex Fixes) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -162,7 +168,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V89 - DECOUPLED)")
+        print(f"🔄 [AUTO] Napi Frissítés (V91 - V82 RESTORED)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         if not self.download_feed(): return
@@ -187,6 +193,7 @@ class AutoUpdater:
                             category = item_data.get('product_type') or item_data.get('category') or ""
                             category = clean_html_smart(category)
                             
+                            # V82 LOGIKA: Regex a Kiadóhoz + Bookman Override
                             pub = "Ismeretlen"
                             match_pub = re.search(r'(?:Kiadó|Kiadás|Publisher)\s*(?:[:|])\s*([^|\n\r]+)', full_raw_text, re.IGNORECASE)
                             if match_pub: pub = match_pub.group(1).strip()
@@ -265,7 +272,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V89 - DECOUPLED STABILITY) ---
+# --- BRAIN (V91 - V82 LOGIC + SAFE MATH) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -273,21 +280,33 @@ class BooksyBrain:
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
+    # V91: Tool definíció (V82 kompatibilis + ár paraméterek)
     def get_tools(self):
         return [
             {
                 "type": "function",
                 "function": {
                     "name": "search_database",
-                    "description": "Keresés az adatbázisban.",
+                    "description": "Keresés a könyvek vagy a szabályzatok között. Használd ezt, ha a felhasználó könyvet keres, árat kérdez, szállításról érdeklődik.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": { "type": "string" },
-                            "filter_lang": { "type": "string", "enum": ["hu", "ro", "all"] },
-                            "search_type": { "type": "string", "enum": ["book", "policy"] },
-                            "min_price": { "type": "number" },
-                            "max_price": { "type": "number" }
+                            "query": {
+                                "type": "string",
+                                "description": "A keresett kulcsszavak tisztítva."
+                            },
+                            "filter_lang": {
+                                "type": "string",
+                                "enum": ["hu", "ro", "all"],
+                                "description": "Szűrés nyelvre. 'hu' ha magyar, 'ro' ha román, 'all' ha mindent kér."
+                            },
+                            "search_type": {
+                                "type": "string",
+                                "enum": ["book", "policy"],
+                                "description": "'policy' ha szállítás/fizetés/kapcsolat. 'book' ha könyv."
+                            },
+                            "min_price": { "type": "number", "description": "Minimális ár (ha van)." },
+                            "max_price": { "type": "number", "description": "Maximális ár (ha van)." }
                         },
                         "required": ["query", "filter_lang", "search_type"]
                     }
@@ -295,15 +314,18 @@ class BooksyBrain:
             }
         ]
 
+    # V91: Kereső Motor (V82 logika + SAFE MATH PATCH)
     def execute_search(self, query, filter_lang, search_type, min_price=None, max_price=None):
         try:
             q_norm = normalize_text(query)
             
+            # 1. POLICY
             if search_type == "policy":
                 vec = self.client_ai.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
                 res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"type": "policy"})
                 return self.format_chroma_results(res)
 
+            # 2. BOOK
             vec = self.client_ai.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
             where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}]}
             if filter_lang != 'all' and "bookman" not in q_norm:
@@ -313,7 +335,9 @@ class BooksyBrain:
             matches = self.format_chroma_results(matches_raw)
             
             results = []
-            seen_items = set() 
+            seen_items = set()
+
+            # V91 PATCH: Biztonságos Type Casting
             safe_min = parse_price_to_float(min_price)
             safe_max = parse_price_to_float(max_price)
 
@@ -322,11 +346,13 @@ class BooksyBrain:
                 raw_db_price = meta.get('price')
                 final_price_str = clean_price_raw(raw_db_price)
                 
+                # V91 PATCH: Matematikai szűrés (Hibatűréssel)
                 price_val = parse_price_to_float(final_price_str)
                 if price_val is not None:
                     if safe_min is not None and price_val < safe_min: continue
                     if safe_max is not None and price_val > safe_max: continue
-
+                
+                # Dedup
                 unique_key = f"{meta.get('title')}|{final_price_str}"
                 if unique_key in seen_items: continue
                 seen_items.add(unique_key)
@@ -363,25 +389,40 @@ class BooksyBrain:
             })
         return formatted
 
-    # V89: SEPARATED ROUTER & WRITER (Ez a hibaüzenet elleni védelem)
+    # V91: DECOUPLED AGENT PROCESS (Router -> Python -> Writer)
+    # Ez a V82 logikáját futtatja, de a technikai hibák (400) nélkül.
     def process(self, msg, context_url, session_id):
         try:
             last_search = self.user_session_cache.get(session_id, "")
             site_lang = 'ro'
             if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
 
-            # --- LÉPÉS 1: ROUTER (Döntés) ---
+            # --- 1. ROUTER (V82 stílusú Prompt) ---
+            # Az AI-ra bízzuk a nyelvfelismerést és a szándékot!
+            router_system_prompt = f"""
+            You are the Brain of Booksy, an antique bookstore AI assistant.
+            Current Site Language: {site_lang}
+            Last User Search Topic: "{last_search}"
+            
+            YOUR TASKS:
+            1. Detect the user's INTENT and LANGUAGE from the message.
+            2. If searching for books/policy/price -> CALL 'search_database'.
+            3. 'filter_lang': 
+               - 'hu' if user speaks Hungarian.
+               - 'ro' if user speaks Romanian.
+               - 'all' ONLY if explicit.
+            4. 'query': Extract keywords.
+            5. 'min_price'/'max_price': Extract numbers if price range is mentioned.
+            
+            If user says "Hello" or chitchat, DO NOT call the tool, just reply normally.
+            """
+
             router_messages = [
-                {"role": "system", "content": f"""
-                You are the Brain of Booksy. Last topic: "{last_search}". Context Lang: {site_lang}.
-                Tasks: Detect INTENT & LANG. Call 'search_database'.
-                'filter_lang': 'hu' or 'ro' (detect from msg) or 'all'.
-                'min_price'/'max_price': numbers.
-                If chitchat ("Hello"), just reply.
-                """},
+                {"role": "system", "content": router_system_prompt},
                 {"role": "user", "content": msg}
             ]
 
+            # Döntés
             router_response = self.client_ai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=router_messages,
@@ -395,22 +436,19 @@ class BooksyBrain:
             
             final_products = []
             final_reply = ""
-            detected_lang_intent = site_lang
+            used_lang_filter = site_lang
 
-            # --- LÉPÉS 2 & 3: TOOL + WRITER (Külön menet!) ---
+            # --- 2. VÉGREHAJTÁS ---
             if tool_calls:
-                # Csak az első tool call-t dolgozzuk fel, hogy ne legyen kavarodás
-                tool_call = tool_calls[0] 
-                
+                tool_call = tool_calls[0]
                 if tool_call.function.name == "search_database":
                     args = json.loads(tool_call.function.arguments)
                     
                     if args.get('filter_lang') != 'all':
                         self.user_session_cache[session_id] = args.get('query')
                     
-                    detected_lang_intent = args.get('filter_lang', site_lang)
+                    used_lang_filter = args.get('filter_lang', site_lang)
                     
-                    # Tool futtatása (Python)
                     search_results = self.execute_search(
                         query=args.get('query'),
                         filter_lang=args.get('filter_lang'),
@@ -419,11 +457,10 @@ class BooksyBrain:
                         max_price=args.get('max_price')
                     )
                     
-                    # Adatok előkészítése a Writer-nek
                     ctx_text = ""
                     product_count = 0
                     if not search_results:
-                        ctx_text = "Database returned 0 results."
+                        ctx_text = "No results found in database."
                     else:
                         product_count = len(search_results)
                         for m in search_results:
@@ -438,46 +475,48 @@ class BooksyBrain:
                                 final_products.append(p)
                                 if len(final_products) >= 8: break
                     
-                    # --- WRITER HÍVÁS (Tiszta lappal!) ---
-                    # Nem fűzzük hozzá az előző history-hoz, így nincs tool_call_id hiba!
+                    # --- 3. WRITER (V82 stílusú Prompt, Tiszta lappal) ---
+                    writer_system_prompt = f"""
+                    You are Booksy. Answer the user based ONLY on the DATA below.
+                    
+                    DATA:
+                    {ctx_text}
+                    
+                    RULES:
+                    1. Language: Answer in the SAME language as the User's original message ("{msg}").
+                    2. NO HALLUCINATION: Only list books found in DATA. If 0 results, say so.
+                    3. LIST FORMAT: Title and Price.
+                    4. Be helpful and professional.
+                    """
+                    
                     writer_messages = [
-                        {"role": "system", "content": f"""
-                        You are Booksy. Answer based ONLY on DATA provided.
-                        User Message: "{msg}"
-                        Detected Language: {detected_lang_intent}
-                        
-                        RULES:
-                        1. Answer in the detected language.
-                        2. NO HALLUCINATION: Only list books from DATA. If 0 results, say so.
-                        3. FORMAT: Title and Price.
-                        """},
-                        {"role": "user", "content": f"DATA FOUND:\n{ctx_text}"}
+                        {"role": "system", "content": writer_system_prompt},
+                        {"role": "user", "content": "Write the response."}
                     ]
                     
-                    writer_res = self.client_ai.chat.completions.create(
-                        model="gpt-4o-mini", messages=writer_messages, temperature=0.1
+                    final_res = self.client_ai.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=writer_messages,
+                        temperature=0.1
                     )
-                    final_reply = writer_res.choices[0].message.content
+                    final_reply = final_res.choices[0].message.content
 
             else:
-                # Sima válasz (nem volt tool call)
                 final_reply = response_msg.content
 
-            # Tipp
-            if final_products:
-                if detected_lang_intent == 'hu':
+            # Tipp (V82 Helper nélkül is működik, de a biztonság kedvéért itt hagyjuk a logikát)
+            if final_products and used_lang_filter != 'all':
+                # Egyszerű tipp generálás
+                if used_lang_filter == 'hu':
                     final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
-                elif detected_lang_intent == 'ro':
-                    final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
-                else:
-                     if site_lang == 'hu': final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
-                     else: final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
+                elif used_lang_filter == 'ro':
+                     final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
 
             return {"reply": final_reply, "products": final_products}
 
         except Exception as e:
             print(f"CRITICAL ERROR: {e}")
-            return {"reply": "Sajnos hiba történt. Kérlek próbáld újra.", "products": []}
+            return {"reply": "Hiba történt. Kérlek próbáld újra.", "products": []}
 
 # --- APP ---
 bot = BooksyBrain()
@@ -494,7 +533,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V89 (DECOUPLED AGENT)"}
+def home(): return {"status": "Booksy V91 (V82 RESTORED + SAFE MATH)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -502,7 +541,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V89 Force Update Running"}
+    return {"status": "V91 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
