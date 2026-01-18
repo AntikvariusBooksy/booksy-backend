@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V93.1 (ROBUST REGEX FIX + V93 MASTER LOGIC)
+# BOOKSY BRAIN - V94 (PROPER HTML PARSER + FORCED DB REFRESH + V93 LOGIC)
 # --- SQLITE FIX ---
 __import__('pysqlite3')
 import sys
@@ -16,6 +16,7 @@ import html
 import xml.etree.ElementTree as ET
 import gc
 import chromadb
+from html.parser import HTMLParser # V94 ÚJÍTÁS: A profi parser
 from chromadb.config import Settings
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
@@ -56,18 +57,49 @@ def safe_str(val):
     if val is None: return ""
     return html.unescape(str(val).strip())
 
-# V93: OKOS HTML TISZTÍTÓ
+# V94 ÚJÍTÁS: SAJÁT HTML STRIPPER OSZTÁLY
+# Ez garantálja, hogy a <br> és a <div> mindig új sor legyen.
+class MLStripper(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.reset()
+        self.strict = False
+        self.convert_charrefs = True
+        self.text_parts = []
+    
+    def handle_data(self, d):
+        self.text_parts.append(d)
+    
+    def handle_starttag(self, tag, attrs):
+        # Blokk elemeknél új sort kényszerítünk
+        if tag in ['br', 'p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr']:
+            self.text_parts.append('\n')
+    
+    def handle_endtag(self, tag):
+        if tag in ['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr']:
+            self.text_parts.append('\n')
+            
+    def get_data(self):
+        return ''.join(self.text_parts)
+
 def clean_html_smart(raw_html):
     if not raw_html: return ""
-    s = safe_str(raw_html)
-    s = re.sub(r'<br\s*/?>', '\n', s, flags=re.IGNORECASE)
-    s = re.sub(r'</(p|div|tr|h1|h2|h3|h4|h5|h6|li)>', '\n', s, flags=re.IGNORECASE) 
-    s = re.sub(r'</(td|th)>', ' | ', s, flags=re.IGNORECASE)
-    cleanr = re.compile('<.*?>')
-    s = re.sub(cleanr, ' ', s)
-    s = re.sub(r'\n\s*\n', '\n', s)
-    s = re.sub(r'[ \t]+', ' ', s)
-    return s.strip()
+    try:
+        s = safe_str(raw_html)
+        stripper = MLStripper()
+        stripper.feed(s)
+        text = stripper.get_data()
+        
+        # Takarítás
+        # A Non-breaking space-eket sima szóközre cseréljük (ez ölte meg a regexet eddig)
+        text = text.replace('\xa0', ' ')
+        
+        # Dupla üres sorok és felesleges szóközök eltüntetése
+        text = re.sub(r'\n\s*\n', '\n', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+        return text.strip()
+    except:
+        return safe_str(raw_html) # Fallback, ha valami nagyon rossz lenne
 
 def extract_all_data(elem) -> Dict[str, Any]:
     data = {}
@@ -102,7 +134,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- AUTO UPDATER (V93.1 - ROBUST REGEX) ---
+# --- AUTO UPDATER (V94 - ENGINE REPLACEMENT) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -137,7 +169,7 @@ class AutoUpdater:
                 r = requests.get(url, headers=headers, timeout=30)
                 if r.status_code == 200:
                     raw_html = r.text
-                    clean_text = clean_html_smart(raw_html)
+                    clean_text = clean_html_smart(raw_html) # Itt is a V94 Parsert használjuk
                     if len(clean_text) > 25000: clean_text = clean_text[:25000]
                     d_hash = generate_content_hash(clean_text)
                     page_id = f"policy_{generate_content_hash(url)}"
@@ -161,7 +193,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V93.1 - ROBUST REGEX)")
+        print(f"🔄 [AUTO] Napi Frissítés (V94 - HTML PARSER ENGINE)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         if not self.download_feed(): return
@@ -180,19 +212,19 @@ class AutoUpdater:
                         if bid:
                             title = item_data.get('title') or "Nincs cím"
                             
+                            # V94: Az új MLStripper itt végzi a varázslatot
                             raw_desc = f"{item_data.get('description', '')} {item_data.get('shortdescription', '')}"
                             clean_desc = clean_html_smart(raw_desc) 
                             
                             category = clean_html_smart(item_data.get('product_type') or item_data.get('category') or "")
                             
-                            # V93.1 JAVÍTÁS: Robusztus Regex
-                            # (.*?)(?:\n|$) -> Mindent beolvas az új sorig VAGY a szöveg végéig
+                            # Kiadó kinyerése (A tiszta szövegből a regex már könnyen dolgozik)
+                            # A \n most már garantáltan ott van a sor végén a parser miatt
                             pub = "Ismeretlen"
                             match_pub = re.search(r'(?:Kiadó|Kiadás|Publisher)\s*[:|]\s*(.*?)(?:\n|$)', clean_desc, re.IGNORECASE)
                             if match_pub: pub = match_pub.group(1).strip()
                             if "bookman" in normalize_text(category): pub = "Bookman Kiadó"
 
-                            # Szerző Regex Javítás is
                             auth = "Ismeretlen"
                             match_auth = re.search(r'(?:Szerző|Írta|Author|Szerzők)\s*[:|]\s*(.*?)(?:\n|$)', clean_desc, re.IGNORECASE)
                             if match_auth: auth = match_auth.group(1).strip()
@@ -234,7 +266,9 @@ class AutoUpdater:
             
             for bid, book_data in unique_books_buffer.items():
                 count_processed += 1
-                hash_input = f"{book_data['title']}|{book_data['price']}|{book_data['category']}|{book_data['publisher']}"
+                
+                # V94 KÉNYSZERÍTÉS: A "V94|" prefix miatt MINDEN hash megváltozik -> Minden frissül!
+                hash_input = f"V94|{book_data['title']}|{book_data['price']}|{book_data['category']}|{book_data['publisher']}"
                 d_hash = generate_content_hash(hash_input)
                 book_data['content_hash'] = d_hash
                 try:
@@ -266,7 +300,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V93 - MINDEN FUNKCIÓ MARAD) ---
+# --- BRAIN (V93 Logika megtartva) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -339,6 +373,7 @@ class BooksyBrain:
                 pub_norm = normalize_text(meta.get('publisher', ''))
                 cat_norm = normalize_text(meta.get('category', ''))
                 
+                # RELEVANCIA
                 score = base_score
                 keywords = q_norm.split()
                 matches_keyword = False
@@ -428,7 +463,6 @@ class BooksyBrain:
                 if tool_call.function.name == "search_database":
                     args = json.loads(tool_call.function.arguments)
                     
-                    # MINDEN KERESÉST MENTÜNK (V93)
                     if args.get('query'):
                         self.user_session_cache[session_id] = args.get('query')
                     
@@ -524,7 +558,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V93.1 (ROBUST REGEX FIX)"}
+def home(): return {"status": "Booksy V94 (HTML PARSER ENGINE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -532,7 +566,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V93.1 Force Update Running"}
+    return {"status": "V94 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
