@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V100 (DICTATOR MODE: FRONTEND DECIDES LANGUAGE)
+# BOOKSY BRAIN - V101 (ENHANCED POLICY INTELLIGENCE + POLICY-ONLY FORCE UPDATE)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -29,7 +29,6 @@ load_dotenv()
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 TEMP_FILE = "temp_feed.xml"
 
-# --- URL TUDÁSBÁZIS ---
 POLICY_PAGES = [
     {"url": "https://www.antikvarius.ro/termeni-si-conditii-de-utilizare/", "lang": "ro", "name": "Termeni și condiții"},
     {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Informații despre plată"},
@@ -42,7 +41,6 @@ class ChatRequest(BaseModel):
     context_url: Optional[str] = "" 
     session_id: Optional[str] = ""
 
-# ÚJ: A Frontend diktálja a nyelvet (ui_lang)
 class InitRequest(BaseModel):
     url: str
     session_id: str
@@ -85,6 +83,50 @@ def clean_html_smart(raw_html):
         return text.strip()
     except: return safe_str(raw_html)
 
+def extract_structured_prices(raw_html, clean_text):
+    """
+    Kinyeri a konkrét árakat és szállítási díjakat a HTML-ből.
+    """
+    result = {"shipping_prices": [], "payment_info": [], "contact_info": []}
+    
+    shipping_patterns = [
+        r'(?i)(livrare|transport|shipping|cost)\s*[:=]?\s*([0-9.,]+\s*(?:RON|lei|EUR)|\bGratuit\b|\bGratis\b)',
+        r'(?i)([0-9.,]+\s*(?:RON|lei))\s*(?:pentru|pentru|for)?\s*(?:livrare|transport)',
+        r'(?i)(standard|express|rapid)\s*[:–-]\s*([0-9.,]+\s*(?:RON|lei))',
+    ]
+    
+    for pattern in shipping_patterns:
+        matches = re.finditer(pattern, clean_text)
+        for match in matches:
+            result["shipping_prices"].append(match.group(0).strip())
+    
+    payment_patterns = [
+        r'(?i)(card|cash|ramburs|transfer)\s*[:=]?\s*([0-9.,]+\s*(?:RON|lei|%)|disponibil)',
+        r'(?i)(comision|taxa)\s*[:=]?\s*([0-9.,]+\s*(?:RON|lei|%))',
+    ]
+    
+    for pattern in payment_patterns:
+        matches = re.finditer(pattern, clean_text)
+        for match in matches:
+            result["payment_info"].append(match.group(0).strip())
+    
+    contact_patterns = [
+        r'(?i)(telefon|phone|tel)\s*[:=]?\s*([\+0-9\s\-()]+)',
+        r'(?i)(email|e-mail)\s*[:=]?\s*([\w\.\-]+@[\w\.\-]+)',
+        r'(?i)(adresa|address)\s*[:=]?\s*([^\n]{10,100})',
+    ]
+    
+    for pattern in contact_patterns:
+        matches = re.finditer(pattern, clean_text)
+        for match in matches:
+            result["contact_info"].append(match.group(0).strip())
+    
+    result["shipping_prices"] = list(set(result["shipping_prices"]))[:5]
+    result["payment_info"] = list(set(result["payment_info"]))[:5]
+    result["contact_info"] = list(set(result["contact_info"]))[:3]
+    
+    return result
+
 def extract_all_data(elem) -> Dict[str, Any]:
     data = {}
     for child in elem:
@@ -117,7 +159,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- UPDATER (V95 Logic) ---
+# --- UPDATER (V101 Enhanced) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -143,7 +185,7 @@ class AutoUpdater:
         return False
 
     def update_policies(self, current_ts):
-        print("ℹ️ [POLICY] Információs oldalak intelligens beolvasása...")
+        print("ℹ️ [POLICY] Információs oldalak intelligens beolvasása (V101 Enhanced)...")
         headers = {'User-Agent': 'BooksyBot/1.0'}
         for page in POLICY_PAGES:
             try:
@@ -152,26 +194,51 @@ class AutoUpdater:
                 if r.status_code == 200:
                     raw_html = r.text
                     clean_text = clean_html_smart(raw_html)
-                    if len(clean_text) > 25000: clean_text = clean_text[:25000]
-                    d_hash = generate_content_hash(clean_text)
+                    if len(clean_text) > 30000: clean_text = clean_text[:30000]
+                    
+                    structured_data = extract_structured_prices(raw_html, clean_text)
+                    
+                    enriched_text = clean_text
+                    if structured_data['shipping_prices']:
+                        enriched_text += f"\n\n=== KONKRÉT SZÁLLÍTÁSI DÍJAK ===\n" + "\n".join(structured_data['shipping_prices'])
+                    if structured_data['payment_info']:
+                        enriched_text += f"\n\n=== FIZETÉSI INFORMÁCIÓK ===\n" + "\n".join(structured_data['payment_info'])
+                    if structured_data['contact_info']:
+                        enriched_text += f"\n\n=== KAPCSOLAT ===\n" + "\n".join(structured_data['contact_info'])
+                    
+                    d_hash = generate_content_hash(enriched_text)
                     page_id = f"policy_{generate_content_hash(url)}"
+                    
                     try:
                         existing = self.db.collection.get(ids=[page_id], include=['metadatas'])
                         if existing['ids'] and existing['metadatas'][0].get('content_hash') == d_hash:
                             print(f"   ⏩ [SKIP] Policy változatlan: {page['name']}")
                             continue
                     except: pass
-                    emb_text = f"Típus: Szabályzat (ro). Cím: {page['name']}. Tartalom: {clean_text[:8000]}"
+                    
+                    emb_text = f"Típus: Szabályzat ({page['lang']}). Cím: {page['name']}. KONKRÉT ÁRAK ÉS DÍJAK: {' | '.join(structured_data['shipping_prices'][:3])}. Teljes tartalom: {enriched_text[:7000]}"
+                    
                     emb = self.client_ai.embeddings.create(input=emb_text, model="text-embedding-3-small").data[0].embedding
-                    meta = {"title": page['name'], "url": url, "text": clean_text, "lang": "ro", "type": "policy", "content_hash": d_hash, "last_seen": current_ts}
+                    
+                    meta = {
+                        "title": page['name'], 
+                        "url": url, 
+                        "text": enriched_text,
+                        "lang": page['lang'], 
+                        "type": "policy", 
+                        "content_hash": d_hash, 
+                        "last_seen": current_ts,
+                        "shipping_prices": json.dumps(structured_data['shipping_prices'], ensure_ascii=False),
+                        "payment_info": json.dumps(structured_data['payment_info'], ensure_ascii=False),
+                        "contact_info": json.dumps(structured_data['contact_info'], ensure_ascii=False),
+                    }
+                    
                     self.db.collection.upsert(ids=[page_id], embeddings=[emb], metadatas=[meta])
-                    print(f"   ✅ [POLICY] Frissítve (Strukturált): {page['name']}")
+                    print(f"   ✅ [POLICY] Frissítve (Strukturált Árral): {page['name']} - {len(structured_data['shipping_prices'])} ár találva")
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
-    def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V95 Logic)")
-        current_sync_ts = int(time.time())
-        self.update_policies(current_sync_ts)
+    def update_books(self, current_ts):
+        """Könyvek frissítése XML feed-ből"""
         if not self.download_feed(): return
         try:
             print("🚀 [MODE] Parsing Books (Strict SKU Separation)")
@@ -204,7 +271,7 @@ class AutoUpdater:
                             detected_lang = "hu"
                             if "carti in limba romana" in cat_norm: detected_lang = "ro"
                             elif "magyar nyelvu konyvek" in cat_norm: detected_lang = "hu"
-                            book_obj = {"id": bid, "title": title, "url": item_data.get('link', ''), "image_url": item_data.get('image_link', ''), "price": final_ron_price, "publisher": pub, "author": auth, "category": category, "description": clean_desc, "stock": "instock", "lang": detected_lang, "type": "book", "last_seen": current_sync_ts}
+                            book_obj = {"id": bid, "title": title, "url": item_data.get('link', ''), "image_url": item_data.get('image_link', ''), "price": final_ron_price, "publisher": pub, "author": auth, "category": category, "description": clean_desc, "stock": "instock", "lang": detected_lang, "type": "book", "last_seen": current_ts}
                             for k, v in item_data.items():
                                 if k not in book_obj: book_obj[k] = clean_html_smart(str(v))[:500] 
                             unique_books_buffer[bid] = book_obj
@@ -217,7 +284,7 @@ class AutoUpdater:
             count_processed, count_skipped, count_uploaded = 0, 0, 0
             for bid, book_data in unique_books_buffer.items():
                 count_processed += 1
-                hash_input = f"V95|{bid}|{book_data['title']}|{book_data['price']}|{book_data['condition'] if 'condition' in book_data else ''}"
+                hash_input = f"V101|{bid}|{book_data['title']}|{book_data['price']}|{book_data.get('condition', '')}"
                 d_hash = generate_content_hash(hash_input)
                 book_data['content_hash'] = d_hash
                 try:
@@ -249,7 +316,18 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN V100 (AGENTIC) ---
+    def run_daily_update(self, books_enabled=True):
+        """Teljes frissítés (policy + könyvek opcionálisan)"""
+        print(f"🔄 [AUTO] Napi Frissítés (V101 Logic)")
+        current_sync_ts = int(time.time())
+        self.update_policies(current_sync_ts)
+        
+        if books_enabled:
+            self.update_books(current_sync_ts)
+        else:
+            print("⏩ [SKIP] Könyv-indexelés kikapcsolva (Policy-Only Mode)")
+
+# --- BRAIN V101 (ENHANCED POLICY AWARENESS) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -257,12 +335,7 @@ class BooksyBrain:
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
-    # --- OBEDIENT HANDSHAKE (V100) ---
     def negotiate_handshake(self, url, session_id, ui_lang):
-        """
-        A Backend most már nem "találgat". A Frontend (ui_lang) megmondja, 
-        milyen nyelven kell generálni a szöveget.
-        """
         prompt = f"""
         Act as Booksy, the Smart Bookstore Agent.
         
@@ -293,16 +366,11 @@ class BooksyBrain:
                 temperature=0.3
             )
             data = json.loads(response.choices[0].message.content)
-            
-            # Visszaküldjük a kért nyelvet is, hogy konzisztens legyen
             data['ui_lang'] = ui_lang
-            
-            # Cache
             self.user_session_cache[session_id] = f"LANG_PREF:{ui_lang}"
             return data
         except Exception as e:
             print(f"Handshake Error: {e}")
-            # Fallback a kért nyelvre
             is_hu = ui_lang == "hu"
             return {
                 "ui_lang": ui_lang,
@@ -310,7 +378,6 @@ class BooksyBrain:
                 "placeholder": "Keresel valamit?" if is_hu else "Cauți o carte?"
             }
 
-    # --- PIPELINE (V96-ból változatlan) ---
     def _analyze_intent(self, msg, context):
         prompt = f"""
         You are the Brain of an Antiquarian Bookstore Agent.
@@ -403,14 +470,68 @@ class BooksyBrain:
             if intent == "policy_question":
                 pol_res = self.db.collection.query(
                     query_embeddings=[self.client_ai.embeddings.create(input=msg, model="text-embedding-3-small").data[0].embedding],
-                    n_results=2, where={"type": "policy"}
+                    n_results=4,
+                    where={"type": "policy"}
                 )
-                ctx_text = ""
-                if pol_res['ids']:
-                    for i in range(len(pol_res['ids'][0])): ctx_text += f"--- POLICY ---\n{pol_res['metadatas'][0][i].get('text')}\n"
                 
-                writer_messages = [{"role": "system", "content": "You are Booksy. Answer the policy question based on context."}, {"role": "user", "content": f"Context:{ctx_text}\nQ: {msg}"}]
-                final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=writer_messages).choices[0].message.content
+                ctx_text = ""
+                all_shipping_prices = []
+                all_payment_info = []
+                all_contact_info = []
+                
+                if pol_res['ids']:
+                    for i in range(len(pol_res['ids'][0])): 
+                        meta = pol_res['metadatas'][0][i]
+                        ctx_text += f"=== {meta.get('title')} ===\n{meta.get('text', '')[:3000]}\n\n"
+                        
+                        if meta.get('shipping_prices'):
+                            try:
+                                prices = json.loads(meta['shipping_prices'])
+                                all_shipping_prices.extend(prices)
+                            except: pass
+                        
+                        if meta.get('payment_info'):
+                            try:
+                                payment = json.loads(meta['payment_info'])
+                                all_payment_info.extend(payment)
+                            except: pass
+                        
+                        if meta.get('contact_info'):
+                            try:
+                                contact = json.loads(meta['contact_info'])
+                                all_contact_info.extend(contact)
+                            except: pass
+                
+                if all_shipping_prices:
+                    ctx_text += f"\n\n🔴 KRITIKUS - KONKRÉT SZÁLLÍTÁSI DÍJAK:\n" + "\n".join(set(all_shipping_prices))
+                if all_payment_info:
+                    ctx_text += f"\n\n💳 FIZETÉSI MÓDOK:\n" + "\n".join(set(all_payment_info)[:5])
+                if all_contact_info:
+                    ctx_text += f"\n\n📞 KAPCSOLAT:\n" + "\n".join(set(all_contact_info)[:3])
+                
+                writer_system_prompt = f"""
+You are Booksy, the intelligent bookstore assistant.
+
+CRITICAL INSTRUCTIONS FOR POLICY QUESTIONS:
+1. You MUST answer ONLY based on the context provided below.
+2. If the user asks about PRICES, SHIPPING COSTS, or FEES, you MUST cite the EXACT amounts from the context.
+3. NEVER say vague things like "reasonable prices" or "shipping available" - always give SPECIFIC numbers.
+4. If a price is marked as "🔴 KRITIKUS", it is MANDATORY to include it in your response.
+5. Format prices clearly: "15 RON" not "15" or "ár: 15".
+6. If information is NOT in the context, say "Nu am informații despre acest lucru în documentele noastre."
+7. Be conversational but PRECISE.
+
+Context (Policy Documents):
+{ctx_text}
+
+User Question: {msg}
+"""
+                
+                final_reply = self.client_ai.chat.completions.create(
+                    model="gpt-4o-mini", 
+                    messages=[{"role": "system", "content": writer_system_prompt}],
+                    temperature=0.1
+                ).choices[0].message.content
 
             elif intent == "search_book":
                 candidates = self.execute_search(queries, filters)
@@ -438,7 +559,7 @@ class BooksyBrain:
 
 bot = BooksyBrain()
 scheduler = BackgroundScheduler()
-scheduler.add_job(bot.updater.run_daily_update, CronTrigger(hour=3, minute=0))
+scheduler.add_job(lambda: bot.updater.run_daily_update(books_enabled=True), CronTrigger(hour=3, minute=0))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -450,7 +571,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V100 (DICTATOR MODE ACTIVE)"}
+def home(): return {"status": "Booksy V101 (ENHANCED POLICY INTELLIGENCE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -461,8 +582,9 @@ def init_chat(req: InitRequest):
 
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
-    bt.add_task(bot.updater.run_daily_update)
-    return {"status": "Force Update Started"}
+    """Force update - CSAK POLICY (30 másodperc)"""
+    bt.add_task(bot.updater.run_daily_update, books_enabled=False)
+    return {"status": "Force Update Started (Policy-Only Mode)"}
 
 if __name__ == "__main__":
     import uvicorn
