@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V98 (BROWSER AWARE HANDSHAKE - FIXED PYTHON)
+# BOOKSY BRAIN - V99 (PROMPT FIX: ANTI-GENERIC PLACEHOLDER)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -42,11 +42,10 @@ class ChatRequest(BaseModel):
     context_url: Optional[str] = "" 
     session_id: Optional[str] = ""
 
-# ÚJ: Handshake Request Model - Bővítve browser_lang-gal
 class InitRequest(BaseModel):
     url: str
     session_id: str
-    browser_lang: str = "ro" # Default fallback
+    browser_lang: str = "ro"
 
 # --- HELPEREK ---
 def normalize_text(text):
@@ -117,7 +116,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- UPDATER ---
+# --- UPDATER (V95 Logic) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -249,7 +248,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN V98 (AGENTIC) ---
+# --- BRAIN V99 (AGENTIC) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -257,10 +256,9 @@ class BooksyBrain:
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
-    # --- OKOSÍTOTT HANDSHAKE (V98) ---
+    # --- JAVÍTOTT HANDSHAKE (V99) ---
     def negotiate_handshake(self, url, session_id, browser_lang):
         """
-        Eldönti a nyelvet az URL és a Böngésző Nyelve alapján.
         HIERARCHIA:
         1. URL: Ha "/hu/" van benne -> MAGYAR.
         2. URL: Ha "/ro/" van benne -> ROMÁN.
@@ -278,22 +276,23 @@ class BooksyBrain:
         Decision Logic for 'ui_lang':
         1. IF URL contains "/hu/" -> Force 'hu'.
         2. IF URL contains "/ro/" -> Force 'ro'.
-        3. IF URL does NOT contain language path (it is the default root):
+        3. IF URL does NOT contain language path:
            - IF Browser Language starts with "hu" -> Force 'hu'.
-           - ELSE (e.g. "ro", "en", "de") -> Force 'ro' (because default site is Romanian).
+           - ELSE -> Force 'ro'.
 
         Task:
         1. Determine 'ui_lang' based on the logic above.
-        2. Create a short, proactive welcome message (max 6 words) in that language.
-           - If specific book URL, mention context (e.g. "Érdekel ez a könyv?").
-           - If generic URL, be general (e.g. "Miben segíthetek?").
-        3. Create a placeholder text in that language.
+        2. Create a short, proactive welcome message (max 6 words).
+        3. Create a NATURAL, INVITING placeholder text for the input field in the detected language.
+           - Example for HU: "Keresel valamit?" or "Írd be a könyv címét..." or "Miben segíthetek?"
+           - Example for RO: "Cauți o carte?" or "Scrie titlul aici..." or "Cu ce te pot ajuta?"
+           - DO NOT use generic terms like "Placeholder" or "Text de rezerva". Make it sound like a helpful librarian.
 
         Output JSON:
         {{
             "ui_lang": "hu" or "ro",
             "bubble_text": "Welcome text",
-            "placeholder": "Placeholder text"
+            "placeholder": "Natural question text"
         }}
         """
         try:
@@ -305,12 +304,12 @@ class BooksyBrain:
             )
             data = json.loads(response.choices[0].message.content)
             
-            # Cache-eljük a választott nyelvet
+            # Cache
             self.user_session_cache[session_id] = f"LANG_PREF:{data['ui_lang']}"
             return data
         except Exception as e:
             print(f"Handshake Error: {e}")
-            # Fallback logika Pythonban is, ha az AI hibázna
+            # Fallback logika
             is_hu_url = "/hu/" in url
             is_ro_url = "/ro/" in url
             is_hu_browser = "hu" in browser_lang.lower()
@@ -323,7 +322,7 @@ class BooksyBrain:
             return {
                 "ui_lang": final_lang,
                 "bubble_text": "Miben segíthetek?" if final_lang == "hu" else "Cu ce te pot ajuta?",
-                "placeholder": "Kérdezz bármit..." if final_lang == "hu" else "Întreabă orice..."
+                "placeholder": "Keresel valamit?" if final_lang == "hu" else "Cauți o carte?"
             }
 
     # --- PIPELINE (V96-ból változatlan) ---
@@ -466,7 +465,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V98 (BROWSER AWARE HANDSHAKE)"}
+def home(): return {"status": "Booksy V99 (PROMPT FIX ACTIVE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
