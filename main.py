@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V95 (STRICT SKU SEPARATION + AGENTIC LOGIC)
+# BOOKSY BRAIN - V96 (AGENTIC PIPELINE: INTERPRETER -> EXPANSION -> CURATOR)
 # --- SQLITE FIX ---
 __import__('pysqlite3')
 import sys
@@ -57,7 +57,7 @@ def safe_str(val):
     if val is None: return ""
     return html.unescape(str(val).strip())
 
-# V94/V95: SAJÁT HTML STRIPPER OSZTÁLY
+# V94/V95: SAJÁT HTML STRIPPER OSZTÁLY (Megtartva)
 class MLStripper(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -128,7 +128,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- AUTO UPDATER (V95 - STRICT SKU ENGINE) ---
+# --- AUTO UPDATER (V95 STRICT SKU LOGIC - Megtartva) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -187,12 +187,12 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V95 - STRICT SKU MODE)")
+        print(f"🔄 [AUTO] Napi Frissítés (V95 Logic with V96 Agentic Brain)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         if not self.download_feed(): return
         try:
-            print("🚀 [MODE] Parsing Books (No Merging - Pure SKU)")
+            print("🚀 [MODE] Parsing Books (Strict SKU Separation)")
             context = ET.iterparse(TEMP_FILE, events=("end",))
             unique_books_buffer = {} 
             count_total_xml_items = 0
@@ -203,19 +203,14 @@ class AutoUpdater:
                     count_total_xml_items += 1
                     try:
                         item_data = extract_all_data(elem)
-                        # SKU/ID az elsődleges kulcs.
                         bid = item_data.get('id') or item_data.get('post_id') or item_data.get('g:id')
                         
                         if bid:
                             title = item_data.get('title') or "Nincs cím"
-                            
-                            # Adattisztítás
                             raw_desc = f"{item_data.get('description', '')} {item_data.get('shortdescription', '')}"
                             clean_desc = clean_html_smart(raw_desc) 
-                            
                             category = clean_html_smart(item_data.get('product_type') or item_data.get('category') or "")
                             
-                            # Kiadó/Szerző felismerés
                             pub = "Ismeretlen"
                             match_pub = re.search(r'(?:Kiadó|Kiadás|Publisher)\s*[:|]\s*(.*?)(?:\n|$)', clean_desc, re.IGNORECASE)
                             if match_pub: pub = match_pub.group(1).strip()
@@ -233,12 +228,6 @@ class AutoUpdater:
                             detected_lang = "hu"
                             if "carti in limba romana" in cat_norm: detected_lang = "ro"
                             elif "magyar nyelvu konyvek" in cat_norm: detected_lang = "hu"
-
-                            # --- V95 VÁLTOZÁS: SZIGORÚ SKU ---
-                            # Itt vettük ki a "merge" logikát.
-                            # Minden egyes elem, amit az XML-ből olvasunk, önálló bejegyzés lesz.
-                            # Ha a BID már létezett a bufferben (extrém ritka duplikáció az XML-en belül),
-                            # akkor felülírjuk az utolsóval, de NEM vonunk össze kategóriákat.
                             
                             book_obj = {
                                 "id": bid, 
@@ -255,8 +244,6 @@ class AutoUpdater:
                                 "type": "book", 
                                 "last_seen": current_sync_ts
                             }
-                            
-                            # Extra mezők mentése
                             for k, v in item_data.items():
                                 if k not in book_obj:
                                     book_obj[k] = clean_html_smart(str(v))[:500] 
@@ -268,15 +255,14 @@ class AutoUpdater:
                     if count_total_xml_items % 5000 == 0: gc.collect()
             
             print(f"✅ [PARSE] Kész! Egyedi SKU-k száma: {len(unique_books_buffer)}")
-            print("🚀 [SMART UPLOAD] Hash ellenőrzés és feltöltés...")
+            print("🚀 [SMART UPLOAD] Hash ellenőrzés...")
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             count_processed, count_skipped, count_uploaded = 0, 0, 0
             
             for bid, book_data in unique_books_buffer.items():
                 count_processed += 1
                 
-                # A hash most már szigorúan az adott példányhoz kötődik.
-                # A "V95" prefix biztosítja, hogy mindenki frissüljön az új logikára.
+                # A hash V95 prefixszel marad, nem force-oljuk újra, ha már V95-ön van.
                 hash_input = f"V95|{bid}|{book_data['title']}|{book_data['price']}|{book_data['condition'] if 'condition' in book_data else ''}"
                 d_hash = generate_content_hash(hash_input)
                 book_data['content_hash'] = d_hash
@@ -291,8 +277,6 @@ class AutoUpdater:
                             continue 
                 except: pass
 
-                # Agentic Embedding előkészítés
-                # Itt adjuk át az AI-nak a kereséshez legfontosabb adatokat
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Ár: {book_data['price']}. Kategória: {book_data['category']}. Kiadó: {book_data['publisher']}. Leírás: {book_data['description'][:800]}"
                 
                 try:
@@ -317,7 +301,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V94 Logika + Agentic) ---
+# --- BRAIN V96: AGENTIC PIPELINE (Interpreter -> Expansion -> Curator) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -325,244 +309,242 @@ class BooksyBrain:
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
-    def get_tools(self):
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_database",
-                    "description": "Keresés a könyvek vagy a szabályzatok között.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": { "type": "string" },
-                            "filter_lang": { "type": "string", "enum": ["hu", "ro", "all"] },
-                            "search_type": { "type": "string", "enum": ["book", "policy"] },
-                            "min_price": { "type": "number" },
-                            "max_price": { "type": "number" }
-                        },
-                        "required": ["query", "filter_lang", "search_type"]
-                    }
-                }
-            }
-        ]
-
-    def execute_search(self, query, filter_lang, search_type, min_price=None, max_price=None):
+    def _analyze_intent(self, msg, context):
+        """
+        1. LÉPÉS: AZ ÉRTELMEZŐ (INTERPRETER)
+        A felhasználó szándékának, szűrőinek és keresési stratégiájának meghatározása.
+        """
+        prompt = f"""
+        You are the Brain of an Antiquarian Bookstore Agent.
+        User Input: "{msg}"
+        Context: "{context}"
+        
+        Task: Analyze the intent and generate optimized search parameters.
+        
+        Output JSON:
+        {{
+            "intent": "search_book" OR "policy_question" OR "chitchat",
+            "search_queries": ["primary search query", "synonym 1", "author name"],
+            "filters": {{
+                "lang": "hu" OR "ro" OR "all",
+                "max_price": number OR null,
+                "min_price": number OR null
+            }},
+            "user_preferences": "Extract nuances (e.g., 'gift', 'cheap', 'first edition')"
+        }}
+        """
         try:
-            q_norm = normalize_text(query)
-            
-            if search_type == "policy":
-                vec = self.client_ai.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
-                res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"type": "policy"})
-                return self.format_chroma_results(res)
+            response = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            return json.loads(response.choices[0].message.content)
+        except:
+            # Fallback
+            return {"intent": "search_book", "search_queries": [msg], "filters": {"lang": "all"}, "user_preferences": ""}
 
-            vec = self.client_ai.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
-            where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}]}
-            if filter_lang != 'all' and "bookman" not in q_norm:
-                where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}, {"lang": filter_lang}]}
-            
-            matches_raw = self.db.collection.query(query_embeddings=[vec], n_results=100, where=where_clause)
-            matches = self.format_chroma_results(matches_raw)
-            
-            results = []
-            seen_items = set()
-            safe_min = parse_price_to_float(min_price)
-            safe_max = parse_price_to_float(max_price)
-
-            for m in matches:
-                meta = m['metadata']
-                raw_db_price = meta.get('price')
-                final_price_str = clean_price_raw(raw_db_price)
-                
-                price_val = parse_price_to_float(final_price_str)
-                if price_val is not None:
-                    if safe_min is not None and price_val < safe_min: continue
-                    if safe_max is not None and price_val > safe_max: continue
-                
-                # V95 Módosítás: A szűrésnél megengedjük az azonos címeket, ha az ár/állapot más,
-                # de a találati listában (seen_items) még mindig érdemes lehet szűrni a tökéletes duplikátumokat a megjelenítés miatt.
-                # Itt most SKU-t (id) is belevesszük a kulcsba, hogy biztosan látszódjon minden példány.
-                unique_key = f"{m['id']}" # Szigorúan ID alapú megjelenítés
-                if unique_key in seen_items: continue
-                seen_items.add(unique_key)
-                
-                base_score = (2.0 - m['score']) * 100 
-                
-                title_norm = normalize_text(meta.get('title', ''))
-                auth_norm = normalize_text(meta.get('author', ''))
-                pub_norm = normalize_text(meta.get('publisher', ''))
-                cat_norm = normalize_text(meta.get('category', ''))
-                
-                # RELEVANCIA
-                score = base_score
-                keywords = q_norm.split()
-                matches_keyword = False
-                
-                for k in keywords:
-                    if len(k) > 2 and (k in title_norm or k in auth_norm or k in pub_norm or k in cat_norm):
-                        score += 40
-                        matches_keyword = True
-                
-                if "bookman" in q_norm: 
-                     if "bookman" in pub_norm or "bookman" in cat_norm: score += 500
-                     matches_keyword = True
-
-                has_keywords_in_query = len([k for k in keywords if len(k)>2]) > 0
-                if has_keywords_in_query and not matches_keyword and "bookman" not in q_norm:
-                     continue 
-
-                m['custom_score'] = score
-                results.append(m)
-            
-            results.sort(key=lambda x: x['custom_score'], reverse=True)
-            return results[:10]
-        except Exception as e:
-            print(f"Search Error: {e}")
-            return []
-
-    def format_chroma_results(self, res):
-        formatted = []
-        if not res['ids']: return []
-        for i in range(len(res['ids'][0])):
-            formatted.append({
-                "id": res['ids'][0][i],
-                "score": res['distances'][0][i] if 'distances' in res else 0,
-                "metadata": res['metadatas'][0][i]
+    def _curate_results(self, candidates, user_msg, user_prefs):
+        """
+        3. LÉPÉS: A KURÁTOR (CURATOR)
+        A nyers találati lista (akár 30-50 könyv) szűrése az AI segítségével.
+        """
+        if not candidates: return []
+        
+        # Minimalizáljuk az adatot a token spórolás miatt
+        short_list = []
+        for c in candidates:
+            meta = c['metadata']
+            short_list.append({
+                "id": c['id'],
+                "title": meta.get('title'),
+                "price": meta.get('price'),
+                "author": meta.get('author'),
+                "desc_preview": meta.get('text_preview', '')[:150]
             })
-        return formatted
+
+        prompt = f"""
+        You are an Expert Antiquarian Curator.
+        User Request: "{user_msg}"
+        Preferences: "{user_prefs}"
+        
+        Candidate Books:
+        {json.dumps(short_list, ensure_ascii=False)}
+        
+        Task: Select the TOP 5-8 books that BEST match the user's specific request.
+        - If the user wants "cheap", prioritize low price.
+        - If "gift", prioritize condition and relevance.
+        - If "strict title", filter out lookalikes.
+        
+        Output JSON:
+        {{
+            "selected_ids": ["id1", "id2", ...]
+        }}
+        """
+        try:
+            response = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            selected_ids = json.loads(response.choices[0].message.content).get("selected_ids", [])
+            
+            # Visszaadjuk a teljes objektumokat a kiválasztott ID-k alapján
+            final_list = [c for c in candidates if c['id'] in selected_ids]
+            return final_list if final_list else candidates[:5] # Ha az AI mindent kiszűrne véletlenül, fallback az első 5-re
+        except Exception as e:
+            print(f"Curator Error: {e}")
+            return candidates[:8] # Fallback hiba esetén
+
+    def execute_search(self, queries, filters):
+        """
+        2. LÉPÉS: A GYŰJTÖGETŐ (GATHERER)
+        Több kulcsszóra keresünk párhuzamosan (Query Expansion), majd egyesítjük.
+        """
+        all_candidates = {}
+        
+        for query in queries:
+            try:
+                vec = self.client_ai.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
+                
+                where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}]}
+                if filters.get('lang') and filters.get('lang') != 'all':
+                    where_clause["$and"].append({"lang": filters['lang']})
+                
+                # Több találatot kérünk le (pl. 15 per query), hogy a Kurátornak legyen miből válogatni
+                results = self.db.collection.query(query_embeddings=[vec], n_results=15, where=where_clause)
+                
+                if results['ids']:
+                    for i in range(len(results['ids'][0])):
+                        bid = results['ids'][0][i]
+                        # Duplikáció szűrés (ha több query is ugyanazt hozza)
+                        if bid not in all_candidates:
+                            all_candidates[bid] = {
+                                "id": bid,
+                                "score": results['distances'][0][i],
+                                "metadata": results['metadatas'][0][i]
+                            }
+            except Exception as e:
+                print(f"Search error for '{query}': {e}")
+        
+        # Listává alakítás
+        candidate_list = list(all_candidates.values())
+        
+        # Ár szűrés (Hard Filter)
+        safe_max = filters.get('max_price')
+        safe_min = filters.get('min_price')
+        
+        filtered_list = []
+        for c in candidate_list:
+            raw_price = c['metadata'].get('price', '0')
+            price_val = parse_price_to_float(clean_price_raw(raw_price))
+            
+            if price_val is not None:
+                if safe_max and price_val > safe_max: continue
+                if safe_min and price_val < safe_min: continue
+            filtered_list.append(c)
+            
+        return filtered_list
 
     def process(self, msg, context_url, session_id):
         try:
-            last_search = self.user_session_cache.get(session_id, "")
-            site_lang = 'ro'
-            if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
-
-            # 1. TRIGGER
-            msg_norm = normalize_text(msg)
-            is_all_lang_trigger = "minden nyelven" in msg_norm or "toate limbile" in msg_norm
+            last_context = self.user_session_cache.get(session_id, "")
             
-            forced_msg = msg
-            if is_all_lang_trigger and last_search:
-                forced_msg = f"{last_search} (search in all languages)"
-
-            # 2. ROUTER (Agentic)
-            router_system_prompt = f"""
-            You are Booksy Brain.
-            Last Topic: "{last_search}"
-            Site Lang: {site_lang}
+            # --- 1. INTERPRETER ---
+            analysis = self._analyze_intent(msg, last_context)
+            self.user_session_cache[session_id] = msg # Memória frissítése
             
-            TASKS:
-            1. Detect INTENT & LANGUAGE.
-            2. Call 'search_database'.
-            3. 'filter_lang': 'hu' / 'ro' / 'all'. (If user says "all languages", use 'all').
-            4. 'min_price'/'max_price': numbers.
-            """
+            intent = analysis.get('intent')
+            queries = analysis.get('search_queries', [msg])
+            filters = analysis.get('filters', {})
+            prefs = analysis.get('user_preferences', "")
 
-            messages = [
-                {"role": "system", "content": router_system_prompt},
-                {"role": "user", "content": forced_msg}
-            ]
-
-            response = self.client_ai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                tools=self.get_tools(),
-                tool_choice="auto", 
-                temperature=0.0
-            )
-            
-            response_msg = response.choices[0].message
-            tool_calls = response_msg.tool_calls
-            
-            final_products = []
             final_reply = ""
-            used_lang_filter = site_lang
+            final_products = []
 
-            if tool_calls:
-                tool_call = tool_calls[0]
-                if tool_call.function.name == "search_database":
-                    args = json.loads(tool_call.function.arguments)
-                    
-                    if args.get('query'):
-                        self.user_session_cache[session_id] = args.get('query')
-                    
-                    used_lang_filter = args.get('filter_lang', site_lang)
-                    
-                    # 3. ELSŐ KERESÉS
-                    search_results = self.execute_search(
-                        query=args.get('query'),
-                        filter_lang=args.get('filter_lang'),
-                        search_type=args.get('search_type'),
-                        min_price=args.get('min_price'),
-                        max_price=args.get('max_price')
-                    )
-                    
-                    # 4. AUTO-RETRY
-                    if not search_results and args.get('filter_lang') != 'all' and args.get('search_type') == 'book':
-                        print(f"⚠️ [AUTO-RETRY] 0 találat. Kiterjesztés 'all' nyelven...")
-                        search_results = self.execute_search(
-                            query=args.get('query'),
-                            filter_lang='all', 
-                            search_type='book',
-                            min_price=args.get('min_price'),
-                            max_price=args.get('max_price')
-                        )
-                        used_lang_filter = 'all'
+            if intent == "policy_question":
+                # Policy keresés (V95 logika)
+                pol_res = self.db.collection.query(
+                    query_embeddings=[self.client_ai.embeddings.create(input=msg, model="text-embedding-3-small").data[0].embedding],
+                    n_results=2, where={"type": "policy"}
+                )
+                ctx_text = ""
+                if pol_res['ids']:
+                    for i in range(len(pol_res['ids'][0])):
+                        meta = pol_res['metadatas'][0][i]
+                        ctx_text += f"--- POLICY ({meta.get('title')}) ---\n{meta.get('text')}\n"
+                
+                # Válasz generálás
+                writer_messages = [
+                    {"role": "system", "content": "You are Booksy. Answer the policy question based on the context provided."},
+                    {"role": "user", "content": f"Context:\n{ctx_text}\n\nQuestion: {msg}"}
+                ]
+                final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=writer_messages).choices[0].message.content
 
-                    ctx_text = ""
-                    if not search_results:
-                        ctx_text = "No results found in database."
-                    else:
-                        for m in search_results:
-                            meta = m['metadata']
-                            if args.get('search_type') == 'policy':
-                                ctx_text += f"--- POLICY ({meta.get('lang')}) ---\n{meta.get('text')}\n"
-                            else:
-                                p_price = clean_price_raw(meta.get('price'))
-                                # Itt megjelenítjük a SKU-t is a kontextusban, ha az AI-nak szüksége lenne rá
-                                details = f"SKU: {m.get('id')}, Title: {meta.get('title')}, Price: {p_price}, Publisher: {meta.get('publisher')}, Cat: {meta.get('category')}"
-                                ctx_text += f"--- BOOK ---\n{details}\n"
-                                p = {"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')}
-                                final_products.append(p)
-                                if len(final_products) >= 8: break
+            elif intent == "search_book":
+                # --- 2. GATHERER (Search) ---
+                candidates = self.execute_search(queries, filters)
+                
+                # --- 3. CURATOR (Re-ranking) ---
+                selected_books = self._curate_results(candidates, msg, prefs)
+                
+                # Kontextus építése az Értékesítőnek
+                ctx_text = ""
+                for book in selected_books:
+                    meta = book['metadata']
+                    p_price = clean_price_raw(meta.get('price'))
+                    details = f"SKU: {book['id']}, Title: {meta.get('title')}, Price: {p_price}, Author: {meta.get('author')}, Cond: {meta.get('condition', 'N/A')}"
+                    ctx_text += f"--- BOOK ---\n{details}\n"
                     
-                    # 5. WRITER (Agentic)
-                    writer_system_prompt = f"""
-                    You are Booksy. Answer based on DATA below.
-                    RULES:
-                    1. LANGUAGE PRIORITY: Use the User's language! If User mixes languages (Hunglish), answer in HUNGARIAN.
-                    2. List books if found.
-                    3. PUBLISHER CHECK: If the User asks for a specific Publisher (e.g. Kriterion) and the metadata says 'Ismeretlen', BUT the Title contains 'Kriterion', TREAT IT AS A MATCH!
-                    4. If no books, say so politely.
-                    
-                    DATA:
-                    {ctx_text}
-                    """
-                    
-                    writer_messages = [
-                        {"role": "system", "content": writer_system_prompt},
-                        {"role": "user", "content": "Write response."}
-                    ]
-                    
-                    final_res = self.client_ai.chat.completions.create(
-                        model="gpt-4o-mini", messages=writer_messages, temperature=0.1
-                    )
-                    final_reply = final_res.choices[0].message.content
+                    final_products.append({
+                        "title": meta.get('title'),
+                        "price": p_price,
+                        "url": meta.get('url'),
+                        "image": meta.get('image_url')
+                    })
+                
+                if not final_products:
+                    ctx_text = "No relevant books found."
+
+                # --- 4. SALESMAN (Response) ---
+                writer_system_prompt = f"""
+                You are Booksy, the AI Antiquarian.
+                User Request: "{msg}"
+                User Intent/Nuance: "{prefs}"
+                
+                Inventory Data (Curated):
+                {ctx_text}
+                
+                Task: Write a helpful, natural response.
+                - Recommend the books listed above.
+                - Explain WHY they fit the user's request (e.g., "This is a cheap option", "This is the requested author").
+                - If no books found, suggest a broader search politely.
+                - Use the user's language (Hu/Ro).
+                """
+                
+                final_reply = self.client_ai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "system", "content": writer_system_prompt}],
+                    temperature=0.2
+                ).choices[0].message.content
 
             else:
-                final_reply = response_msg.content
-
-            if final_products and used_lang_filter != 'all':
-                if used_lang_filter == 'hu':
-                    final_reply += "\n\n💡 Tipp: Nem ezt kerested? Írd be: 'minden nyelven', hogy a teljes adatbázisban keressünk."
-                elif used_lang_filter == 'ro':
-                     final_reply += "\n\n💡 Sfat: Nu ai găsit? Scrie 'toate limbile' pentru a căuta în toată baza de date."
+                # Chitchat
+                final_reply = self.client_ai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are Booksy, a helpful bookstore assistant. Be polite and brief."},
+                        {"role": "user", "content": msg}
+                    ]
+                ).choices[0].message.content
 
             return {"reply": final_reply, "products": final_products}
 
         except Exception as e:
-            print(f"CRITICAL ERROR: {e}")
-            return {"reply": "Hiba történt.", "products": []}
+            print(f"CRITICAL ERROR in Pipeline: {e}")
+            return {"reply": "Elnézést, egy kis technikai hiba történt a keresés közben. Kérlek, próbáld újra.", "products": []}
 
 # --- APP ---
 bot = BooksyBrain()
@@ -579,7 +561,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V95 (STRICT SKU MODE)"}
+def home(): return {"status": "Booksy V96 (AGENTIC PIPELINE ACTIVE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -587,7 +569,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V95 Force Update Running"}
+    return {"status": "Force Update Started (Background)"}
 
 if __name__ == "__main__":
     import uvicorn
