@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V94 (PROPER HTML PARSER + FORCED DB REFRESH + V93 LOGIC)
+# BOOKSY BRAIN - V95 (STRICT SKU SEPARATION + AGENTIC LOGIC)
 # --- SQLITE FIX ---
 __import__('pysqlite3')
 import sys
@@ -16,7 +16,7 @@ import html
 import xml.etree.ElementTree as ET
 import gc
 import chromadb
-from html.parser import HTMLParser # V94 ÚJÍTÁS: A profi parser
+from html.parser import HTMLParser # V94 Örökség: A profi parser
 from chromadb.config import Settings
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
@@ -57,8 +57,7 @@ def safe_str(val):
     if val is None: return ""
     return html.unescape(str(val).strip())
 
-# V94 ÚJÍTÁS: SAJÁT HTML STRIPPER OSZTÁLY
-# Ez garantálja, hogy a <br> és a <div> mindig új sor legyen.
+# V94/V95: SAJÁT HTML STRIPPER OSZTÁLY
 class MLStripper(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -66,15 +65,14 @@ class MLStripper(HTMLParser):
         self.strict = False
         self.convert_charrefs = True
         self.text_parts = []
-    
+     
     def handle_data(self, d):
         self.text_parts.append(d)
-    
+     
     def handle_starttag(self, tag, attrs):
-        # Blokk elemeknél új sort kényszerítünk
         if tag in ['br', 'p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr']:
             self.text_parts.append('\n')
-    
+     
     def handle_endtag(self, tag):
         if tag in ['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr']:
             self.text_parts.append('\n')
@@ -90,16 +88,12 @@ def clean_html_smart(raw_html):
         stripper.feed(s)
         text = stripper.get_data()
         
-        # Takarítás
-        # A Non-breaking space-eket sima szóközre cseréljük (ez ölte meg a regexet eddig)
         text = text.replace('\xa0', ' ')
-        
-        # Dupla üres sorok és felesleges szóközök eltüntetése
         text = re.sub(r'\n\s*\n', '\n', text)
         text = re.sub(r'[ \t]+', ' ', text)
         return text.strip()
     except:
-        return safe_str(raw_html) # Fallback, ha valami nagyon rossz lenne
+        return safe_str(raw_html)
 
 def extract_all_data(elem) -> Dict[str, Any]:
     data = {}
@@ -134,7 +128,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- AUTO UPDATER (V94 - ENGINE REPLACEMENT) ---
+# --- AUTO UPDATER (V95 - STRICT SKU ENGINE) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -169,7 +163,7 @@ class AutoUpdater:
                 r = requests.get(url, headers=headers, timeout=30)
                 if r.status_code == 200:
                     raw_html = r.text
-                    clean_text = clean_html_smart(raw_html) # Itt is a V94 Parsert használjuk
+                    clean_text = clean_html_smart(raw_html)
                     if len(clean_text) > 25000: clean_text = clean_text[:25000]
                     d_hash = generate_content_hash(clean_text)
                     page_id = f"policy_{generate_content_hash(url)}"
@@ -193,33 +187,35 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V94 - HTML PARSER ENGINE)")
+        print(f"🔄 [AUTO] Napi Frissítés (V95 - STRICT SKU MODE)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         if not self.download_feed(): return
         try:
-            print("🚀 [MODE] Parsing Books & Merging")
+            print("🚀 [MODE] Parsing Books (No Merging - Pure SKU)")
             context = ET.iterparse(TEMP_FILE, events=("end",))
             unique_books_buffer = {} 
             count_total_xml_items = 0
+            
             for event, elem in context:
                 tag_local = elem.tag.split('}')[-1].lower()
                 if tag_local in ['item', 'post']:
                     count_total_xml_items += 1
                     try:
                         item_data = extract_all_data(elem)
+                        # SKU/ID az elsődleges kulcs.
                         bid = item_data.get('id') or item_data.get('post_id') or item_data.get('g:id')
+                        
                         if bid:
                             title = item_data.get('title') or "Nincs cím"
                             
-                            # V94: Az új MLStripper itt végzi a varázslatot
+                            # Adattisztítás
                             raw_desc = f"{item_data.get('description', '')} {item_data.get('shortdescription', '')}"
                             clean_desc = clean_html_smart(raw_desc) 
                             
                             category = clean_html_smart(item_data.get('product_type') or item_data.get('category') or "")
                             
-                            # Kiadó kinyerése (A tiszta szövegből a regex már könnyen dolgozik)
-                            # A \n most már garantáltan ott van a sor végén a parser miatt
+                            # Kiadó/Szerző felismerés
                             pub = "Ismeretlen"
                             match_pub = re.search(r'(?:Kiadó|Kiadás|Publisher)\s*[:|]\s*(.*?)(?:\n|$)', clean_desc, re.IGNORECASE)
                             if match_pub: pub = match_pub.group(1).strip()
@@ -238,39 +234,53 @@ class AutoUpdater:
                             if "carti in limba romana" in cat_norm: detected_lang = "ro"
                             elif "magyar nyelvu konyvek" in cat_norm: detected_lang = "hu"
 
-                            if bid in unique_books_buffer:
-                                existing_entry = unique_books_buffer[bid]
-                                existing_cat = existing_entry['category']
-                                if category and category not in existing_cat:
-                                    merged_cat = f"{existing_cat} | {category}"
-                                    unique_books_buffer[bid]['category'] = merged_cat
-                                    unique_books_buffer[bid].update({"price": final_ron_price, "title": title})
-                            else:
-                                book_obj = {
-                                    "id": bid, "title": title, "url": item_data.get('link', ''), "image_url": item_data.get('image_link', ''),
-                                    "price": final_ron_price, "publisher": pub, "author": auth, "category": category,
-                                    "description": clean_desc, "stock": "instock", "lang": detected_lang, "type": "book", "last_seen": current_sync_ts
-                                }
-                                for k, v in item_data.items():
-                                    if k not in book_obj:
-                                        book_obj[k] = clean_html_smart(str(v))[:500] 
-                                unique_books_buffer[bid] = book_obj
+                            # --- V95 VÁLTOZÁS: SZIGORÚ SKU ---
+                            # Itt vettük ki a "merge" logikát.
+                            # Minden egyes elem, amit az XML-ből olvasunk, önálló bejegyzés lesz.
+                            # Ha a BID már létezett a bufferben (extrém ritka duplikáció az XML-en belül),
+                            # akkor felülírjuk az utolsóval, de NEM vonunk össze kategóriákat.
+                            
+                            book_obj = {
+                                "id": bid, 
+                                "title": title, 
+                                "url": item_data.get('link', ''), 
+                                "image_url": item_data.get('image_link', ''),
+                                "price": final_ron_price, 
+                                "publisher": pub, 
+                                "author": auth, 
+                                "category": category,
+                                "description": clean_desc, 
+                                "stock": "instock", 
+                                "lang": detected_lang, 
+                                "type": "book", 
+                                "last_seen": current_sync_ts
+                            }
+                            
+                            # Extra mezők mentése
+                            for k, v in item_data.items():
+                                if k not in book_obj:
+                                    book_obj[k] = clean_html_smart(str(v))[:500] 
+                            
+                            unique_books_buffer[bid] = book_obj
+
                     except Exception as e: pass
                     elem.clear()
                     if count_total_xml_items % 5000 == 0: gc.collect()
             
-            print(f"✅ [MERGE] Kész! Egyedi könyvek: {len(unique_books_buffer)}")
-            print("🚀 [SMART UPLOAD] Hash ellenőrzés...")
+            print(f"✅ [PARSE] Kész! Egyedi SKU-k száma: {len(unique_books_buffer)}")
+            print("🚀 [SMART UPLOAD] Hash ellenőrzés és feltöltés...")
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             count_processed, count_skipped, count_uploaded = 0, 0, 0
             
             for bid, book_data in unique_books_buffer.items():
                 count_processed += 1
                 
-                # V94 KÉNYSZERÍTÉS: A "V94|" prefix miatt MINDEN hash megváltozik -> Minden frissül!
-                hash_input = f"V94|{book_data['title']}|{book_data['price']}|{book_data['category']}|{book_data['publisher']}"
+                # A hash most már szigorúan az adott példányhoz kötődik.
+                # A "V95" prefix biztosítja, hogy mindenki frissüljön az új logikára.
+                hash_input = f"V95|{bid}|{book_data['title']}|{book_data['price']}|{book_data['condition'] if 'condition' in book_data else ''}"
                 d_hash = generate_content_hash(hash_input)
                 book_data['content_hash'] = d_hash
+                
                 try:
                     existing = self.db.collection.get(ids=[bid], include=['metadatas'])
                     if existing and existing['ids'] and len(existing['ids']) > 0:
@@ -280,27 +290,34 @@ class AutoUpdater:
                             if count_processed % 1000 == 0: print(f"⏩ [SKIP] {count_skipped} változatlan könyv...")
                             continue 
                 except: pass
-                emb_text = f"Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Kategória: {book_data['category']}. Kiadó: {book_data['publisher']}. Leírás: {book_data['description'][:800]}"
+
+                # Agentic Embedding előkészítés
+                # Itt adjuk át az AI-nak a kereséshez legfontosabb adatokat
+                emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Ár: {book_data['price']}. Kategória: {book_data['category']}. Kiadó: {book_data['publisher']}. Leírás: {book_data['description'][:800]}"
+                
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
                     clean_meta = book_data.copy()
                     del clean_meta['description'] 
                     clean_meta['text_preview'] = book_data['description'][:100]
+                    
                     ids_batch.append(bid)
                     embeddings_batch.append(emb)
                     metadatas_batch.append(clean_meta)
                     count_uploaded += 1
+                    
                     if len(ids_batch) >= 50:
                         self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
                         ids_batch, embeddings_batch, metadatas_batch = [], [], []
                         print(f"💾 [UPDATE] {count_uploaded} könyv frissítve...")
                 except Exception as e: print(f"⚠️ Hiba ({bid}): {e}")
+            
             if ids_batch: self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V93 Logika megtartva) ---
+# --- BRAIN (V94 Logika + Agentic) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -362,7 +379,10 @@ class BooksyBrain:
                     if safe_min is not None and price_val < safe_min: continue
                     if safe_max is not None and price_val > safe_max: continue
                 
-                unique_key = f"{meta.get('title')}|{final_price_str}"
+                # V95 Módosítás: A szűrésnél megengedjük az azonos címeket, ha az ár/állapot más,
+                # de a találati listában (seen_items) még mindig érdemes lehet szűrni a tökéletes duplikátumokat a megjelenítés miatt.
+                # Itt most SKU-t (id) is belevesszük a kulcsba, hogy biztosan látszódjon minden példány.
+                unique_key = f"{m['id']}" # Szigorúan ID alapú megjelenítés
                 if unique_key in seen_items: continue
                 seen_items.add(unique_key)
                 
@@ -425,7 +445,7 @@ class BooksyBrain:
             if is_all_lang_trigger and last_search:
                 forced_msg = f"{last_search} (search in all languages)"
 
-            # 2. ROUTER
+            # 2. ROUTER (Agentic)
             router_system_prompt = f"""
             You are Booksy Brain.
             Last Topic: "{last_search}"
@@ -499,13 +519,14 @@ class BooksyBrain:
                                 ctx_text += f"--- POLICY ({meta.get('lang')}) ---\n{meta.get('text')}\n"
                             else:
                                 p_price = clean_price_raw(meta.get('price'))
-                                details = f"Title: {meta.get('title')}, Price: {p_price}, Publisher: {meta.get('publisher')}, Cat: {meta.get('category')}"
+                                # Itt megjelenítjük a SKU-t is a kontextusban, ha az AI-nak szüksége lenne rá
+                                details = f"SKU: {m.get('id')}, Title: {meta.get('title')}, Price: {p_price}, Publisher: {meta.get('publisher')}, Cat: {meta.get('category')}"
                                 ctx_text += f"--- BOOK ---\n{details}\n"
                                 p = {"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')}
                                 final_products.append(p)
                                 if len(final_products) >= 8: break
                     
-                    # 5. WRITER
+                    # 5. WRITER (Agentic)
                     writer_system_prompt = f"""
                     You are Booksy. Answer based on DATA below.
                     RULES:
@@ -558,7 +579,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V94 (HTML PARSER ENGINE)"}
+def home(): return {"status": "Booksy V95 (STRICT SKU MODE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -566,7 +587,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V94 Force Update Running"}
+    return {"status": "V95 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
