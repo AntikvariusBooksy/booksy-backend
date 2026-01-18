@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V92 (TEXT-FIRST PARSING + AUTO-RETRY + RELEVANCE FILTER + V82 LOGIC)
+# BOOKSY BRAIN - V93 (TEXT-FIRST PARSING + UNCONDITIONAL MEMORY + SMART WRITER)
 # --- SQLITE FIX ---
 __import__('pysqlite3')
 import sys
@@ -56,18 +56,15 @@ def safe_str(val):
     if val is None: return ""
     return html.unescape(str(val).strip())
 
-# V92 ÚJÍTÁS: Okos HTML tisztító, ami megőrzi a sorokat a regexnek
+# V93: OKOS HTML TISZTÍTÓ (Megőrzi a sortöréseket a regexnek)
 def clean_html_smart(raw_html):
     if not raw_html: return ""
     s = safe_str(raw_html)
-    # A <br> és blokk elemek legyenek új sorok, hogy a regex meg tudjon állni
     s = re.sub(r'<br\s*/?>', '\n', s, flags=re.IGNORECASE)
     s = re.sub(r'</(p|div|tr|h1|h2|h3|h4|h5|h6|li)>', '\n', s, flags=re.IGNORECASE) 
     s = re.sub(r'</(td|th)>', ' | ', s, flags=re.IGNORECASE)
-    
     cleanr = re.compile('<.*?>')
     s = re.sub(cleanr, ' ', s)
-    
     s = re.sub(r'\n\s*\n', '\n', s)
     s = re.sub(r'[ \t]+', ' ', s)
     return s.strip()
@@ -105,7 +102,7 @@ class DBHandler:
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- AUTO UPDATER (V92 - TEXT FIRST STRATEGY) ---
+# --- AUTO UPDATER (V93 - TEXT-FIRST PARSING) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
         self.api_key_openai = os.getenv("OPENAI_API_KEY")
@@ -164,7 +161,7 @@ class AutoUpdater:
             except Exception as e: print(f"   ❌ Hiba: {e}")
 
     def run_daily_update(self):
-        print(f"🔄 [AUTO] Napi Frissítés (V92 - TEXT FIRST)")
+        print(f"🔄 [AUTO] Napi Frissítés (V93 - TEXT FIRST)")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts)
         if not self.download_feed(): return
@@ -183,13 +180,13 @@ class AutoUpdater:
                         if bid:
                             title = item_data.get('title') or "Nincs cím"
                             
-                            # V92 JAVÍTÁS: Előbb tisztítjuk a HTML-t szöveggé, aztán regexezünk!
-                            raw_full_text = f"{item_data.get('description', '')} {item_data.get('shortdescription', '')}"
-                            clean_desc = clean_html_smart(raw_full_text)
+                            # V93: Előbb tisztítjuk a szöveget (sortörésekkel), aztán regexezünk!
+                            raw_desc = f"{item_data.get('description', '')} {item_data.get('shortdescription', '')}"
+                            clean_desc = clean_html_smart(raw_desc) 
                             
                             category = clean_html_smart(item_data.get('product_type') or item_data.get('category') or "")
                             
-                            # Kiadó kinyerése a TISZTA szövegből (Newline-ig olvas)
+                            # Kiadó kinyerése a TISZTA szövegből
                             pub = "Ismeretlen"
                             match_pub = re.search(r'(?:Kiadó|Kiadás|Publisher)\s*(?:[:|])\s*([^\n\r]+)', clean_desc, re.IGNORECASE)
                             if match_pub: pub = match_pub.group(1).strip()
@@ -224,10 +221,7 @@ class AutoUpdater:
                                 }
                                 for k, v in item_data.items():
                                     if k not in book_obj:
-                                        # Itt már nem kell újra tisztítani a description-t
-                                        val_clean = clean_html_smart(str(v))
-                                        if len(val_clean) > 500: val_clean = val_clean[:500]
-                                        book_obj[k] = val_clean
+                                        book_obj[k] = clean_html_smart(str(v))[:500] 
                                 unique_books_buffer[bid] = book_obj
                     except Exception as e: pass
                     elem.clear()
@@ -272,7 +266,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN (V92 - AUTO-RETRY + RELEVANCE FILTER) ---
+# --- BRAIN (V93 - AUTO-RETRY + RELEVANCE + SMART CONTEXT) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -302,6 +296,7 @@ class BooksyBrain:
             }
         ]
 
+    # V93: RELEVANCIA KÜSZÖB (Szűri a "Victor Hugo 5 lejért" hibát)
     def execute_search(self, query, filter_lang, search_type, min_price=None, max_price=None):
         try:
             q_norm = normalize_text(query)
@@ -345,8 +340,7 @@ class BooksyBrain:
                 pub_norm = normalize_text(meta.get('publisher', ''))
                 cat_norm = normalize_text(meta.get('category', ''))
                 
-                # V92 JAVÍTÁS: KULCSSZÓ RELEVANCIA ELLENŐRZÉS
-                # Megelőzi a "Victor Hugo 5 lejért" hibát űrhajós keresésnél
+                # RELEVANCIA ELLENŐRZÉS
                 score = base_score
                 keywords = q_norm.split()
                 matches_keyword = False
@@ -360,8 +354,7 @@ class BooksyBrain:
                      if "bookman" in pub_norm or "bookman" in cat_norm: score += 500
                      matches_keyword = True
 
-                # Ha nem 'all' (széles) keresés, és nincs kulcsszó egyezés, csak ár miatt ne mutassuk
-                # Kivéve ha a user nem adott meg kulcsszót, csak árat (pl. "mutass valamit 5 lejért")
+                # Ha nincs kulcsszó egyezés, csak az ár jó, akkor eldobjuk (Kivéve ha a query üres/általános)
                 has_keywords_in_query = len([k for k in keywords if len(k)>2]) > 0
                 if has_keywords_in_query and not matches_keyword and "bookman" not in q_norm:
                      continue 
@@ -386,14 +379,13 @@ class BooksyBrain:
             })
         return formatted
 
-    # V92: CONTEXT TRIGGER & AUTO-RETRY LOGIC
     def process(self, msg, context_url, session_id):
         try:
             last_search = self.user_session_cache.get(session_id, "")
             site_lang = 'ro'
             if context_url and '/hu/' in str(context_url).lower(): site_lang = 'hu'
 
-            # 1. TRIGGER: "Minden nyelven" -> Előző keresés aktiválása
+            # 1. TRIGGER: "Minden nyelven"
             msg_norm = normalize_text(msg)
             is_all_lang_trigger = "minden nyelven" in msg_norm or "toate limbile" in msg_norm
             
@@ -439,7 +431,8 @@ class BooksyBrain:
                 if tool_call.function.name == "search_database":
                     args = json.loads(tool_call.function.arguments)
                     
-                    if args.get('filter_lang') != 'all':
+                    # V93 JAVÍTÁS: Feltétel NÉLKÜL mentjük a keresést! (Így a 0 találatos "Tallérok"-ra is emlékezni fog)
+                    if args.get('query'):
                         self.user_session_cache[session_id] = args.get('query')
                     
                     used_lang_filter = args.get('filter_lang', site_lang)
@@ -453,9 +446,9 @@ class BooksyBrain:
                         max_price=args.get('max_price')
                     )
                     
-                    # 4. AUTO-RETRY (V92: Ha nincs találat, keresünk mindenhol)
+                    # 4. AUTO-RETRY (Ha nincs találat, bővítünk 'all'-ra)
                     if not search_results and args.get('filter_lang') != 'all' and args.get('search_type') == 'book':
-                        print(f"⚠️ [AUTO-RETRY] 0 találat '{args.get('filter_lang')}' nyelven. Kiterjesztés 'all' nyelven...")
+                        print(f"⚠️ [AUTO-RETRY] 0 találat. Kiterjesztés 'all' nyelven...")
                         search_results = self.execute_search(
                             query=args.get('query'),
                             filter_lang='all', 
@@ -463,7 +456,7 @@ class BooksyBrain:
                             min_price=args.get('min_price'),
                             max_price=args.get('max_price')
                         )
-                        used_lang_filter = 'all' # Jelezzük, hogy már kiterjesztettük
+                        used_lang_filter = 'all'
 
                     ctx_text = ""
                     if not search_results:
@@ -481,13 +474,14 @@ class BooksyBrain:
                                 final_products.append(p)
                                 if len(final_products) >= 8: break
                     
-                    # 5. WRITER (V92 JAVÍTÁS: Hunglish prioritás)
+                    # 5. WRITER (V93 JAVÍTÁS: Okosabb Publisher kezelés + Hunglish támogatás)
                     writer_system_prompt = f"""
                     You are Booksy. Answer based on DATA below.
                     RULES:
                     1. LANGUAGE PRIORITY: Use the User's language! If User mixes languages (Hunglish), answer in HUNGARIAN.
                     2. List books if found.
-                    3. If no books, say so politely.
+                    3. PUBLISHER CHECK: If the User asks for a specific Publisher (e.g. Kriterion) and the metadata says 'Ismeretlen', BUT the Title contains 'Kriterion', TREAT IT AS A MATCH!
+                    4. If no books, say so politely.
                     
                     DATA:
                     {ctx_text}
@@ -534,7 +528,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V92 (CONSOLIDATED MASTER)"}
+def home(): return {"status": "Booksy V93 (MASTERPIECE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -542,7 +536,7 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
     bt.add_task(bot.updater.run_daily_update)
-    return {"status": "V92 Force Update Running"}
+    return {"status": "V93 Force Update Running"}
 
 if __name__ == "__main__":
     import uvicorn
