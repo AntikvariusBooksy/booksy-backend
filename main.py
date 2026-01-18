@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V99 (PROMPT FIX: ANTI-GENERIC PLACEHOLDER)
+# BOOKSY BRAIN - V100 (DICTATOR MODE: FRONTEND DECIDES LANGUAGE)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -42,10 +42,11 @@ class ChatRequest(BaseModel):
     context_url: Optional[str] = "" 
     session_id: Optional[str] = ""
 
+# ÚJ: A Frontend diktálja a nyelvet (ui_lang)
 class InitRequest(BaseModel):
     url: str
     session_id: str
-    browser_lang: str = "ro"
+    ui_lang: str = "ro" 
 
 # --- HELPEREK ---
 def normalize_text(text):
@@ -248,7 +249,7 @@ class AutoUpdater:
             print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
-# --- BRAIN V99 (AGENTIC) ---
+# --- BRAIN V100 (AGENTIC) ---
 class BooksyBrain:
     def __init__(self):
         self.db = DBHandler()
@@ -256,43 +257,32 @@ class BooksyBrain:
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
-    # --- JAVÍTOTT HANDSHAKE (V99) ---
-    def negotiate_handshake(self, url, session_id, browser_lang):
+    # --- OBEDIENT HANDSHAKE (V100) ---
+    def negotiate_handshake(self, url, session_id, ui_lang):
         """
-        HIERARCHIA:
-        1. URL: Ha "/hu/" van benne -> MAGYAR.
-        2. URL: Ha "/ro/" van benne -> ROMÁN.
-        3. URL Semleges: Ha nincs nyelvi jelölés (default román oldal):
-           - Ha browser_lang == "hu" -> MAGYAR (Erdélyi user).
-           - Minden más esetben -> ROMÁN (Alapértelmezett).
+        A Backend most már nem "találgat". A Frontend (ui_lang) megmondja, 
+        milyen nyelven kell generálni a szöveget.
         """
         prompt = f"""
         Act as Booksy, the Smart Bookstore Agent.
         
         Context:
         - Current URL: "{url}"
-        - Browser Language: "{browser_lang}"
+        - REQUIRED LANGUAGE: "{ui_lang}" (You MUST use this language).
         
-        Decision Logic for 'ui_lang':
-        1. IF URL contains "/hu/" -> Force 'hu'.
-        2. IF URL contains "/ro/" -> Force 'ro'.
-        3. IF URL does NOT contain language path:
-           - IF Browser Language starts with "hu" -> Force 'hu'.
-           - ELSE -> Force 'ro'.
-
         Task:
-        1. Determine 'ui_lang' based on the logic above.
-        2. Create a short, proactive welcome message (max 6 words).
-        3. Create a NATURAL, INVITING placeholder text for the input field in the detected language.
-           - Example for HU: "Keresel valamit?" or "Írd be a könyv címét..." or "Miben segíthetek?"
-           - Example for RO: "Cauți o carte?" or "Scrie titlul aici..." or "Cu ce te pot ajuta?"
-           - DO NOT use generic terms like "Placeholder" or "Text de rezerva". Make it sound like a helpful librarian.
+        1. Create a short, proactive welcome message (max 6 words) in {ui_lang}.
+           - If specific book URL, mention context.
+           - If generic URL, be helpful.
+        2. Create a NATURAL, INVITING placeholder text for the input field in {ui_lang}.
+           - Example HU: "Keresel valamit?", "Írd be a címet..."
+           - Example RO: "Cauți o carte?", "Scrie titlul..."
+           - STRICTLY FORBIDDEN: Do NOT use "Placeholder", "Text de rezerva", or generic filler words.
 
         Output JSON:
         {{
-            "ui_lang": "hu" or "ro",
-            "bubble_text": "Welcome text",
-            "placeholder": "Natural question text"
+            "bubble_text": "Welcome text in {ui_lang}",
+            "placeholder": "Natural question in {ui_lang}"
         }}
         """
         try:
@@ -304,25 +294,20 @@ class BooksyBrain:
             )
             data = json.loads(response.choices[0].message.content)
             
+            # Visszaküldjük a kért nyelvet is, hogy konzisztens legyen
+            data['ui_lang'] = ui_lang
+            
             # Cache
-            self.user_session_cache[session_id] = f"LANG_PREF:{data['ui_lang']}"
+            self.user_session_cache[session_id] = f"LANG_PREF:{ui_lang}"
             return data
         except Exception as e:
             print(f"Handshake Error: {e}")
-            # Fallback logika
-            is_hu_url = "/hu/" in url
-            is_ro_url = "/ro/" in url
-            is_hu_browser = "hu" in browser_lang.lower()
-            
-            final_lang = "ro"
-            if is_hu_url: final_lang = "hu"
-            elif is_ro_url: final_lang = "ro"
-            elif is_hu_browser: final_lang = "hu"
-            
+            # Fallback a kért nyelvre
+            is_hu = ui_lang == "hu"
             return {
-                "ui_lang": final_lang,
-                "bubble_text": "Miben segíthetek?" if final_lang == "hu" else "Cu ce te pot ajuta?",
-                "placeholder": "Keresel valamit?" if final_lang == "hu" else "Cauți o carte?"
+                "ui_lang": ui_lang,
+                "bubble_text": "Miben segíthetek?" if is_hu else "Cu ce te pot ajuta?",
+                "placeholder": "Keresel valamit?" if is_hu else "Cauți o carte?"
             }
 
     # --- PIPELINE (V96-ból változatlan) ---
@@ -465,14 +450,14 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V99 (PROMPT FIX ACTIVE)"}
+def home(): return {"status": "Booksy V100 (DICTATOR MODE ACTIVE)"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 
 @app.post("/init-chat")
 def init_chat(req: InitRequest):
-    return bot.negotiate_handshake(req.url, req.session_id, req.browser_lang)
+    return bot.negotiate_handshake(req.url, req.session_id, req.ui_lang)
 
 @app.post("/force-update")
 def force(bt: BackgroundTasks):
