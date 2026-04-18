@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V107 (STRICT ERROR LOGGING + FFmpeg VIDEO FIX)
+# BOOKSY BRAIN - V108 (FFMPEG & MOVIEPY VERSION LOCK FIX)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -35,7 +35,7 @@ try:
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
-    print("✅ MoviePy és videó modul betöltve.")
+    print("✅ MoviePy (1.0.3) és videó modul betöltve.")
 except Exception as e:
     print(f"⚠️ MoviePy nem elérhető (A videó generálás képként fog lefutni): {e}")
     MOVIEPY_AVAILABLE = False
@@ -151,7 +151,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V107|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V108|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -216,7 +216,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V107) ---
+# --- PURE AGENTIC SOCIAL AGENT (V108) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -259,7 +259,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V107)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V108)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -335,16 +335,13 @@ class BooksySocialAgent:
                 if is_video:
                     fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
                     files = {'source': open(video_path, 'rb')}
-                    # A videó végpont form-data formátumot vár, a 'published' itt sztring!
                     data = {'access_token': fb_token, 'description': post_text, 'published': 'false'}
                     res = requests.post(fb_url, data=data, files=files)
                 else:
-                    # A fotó végpont JSON-t vár, a 'published' itt igazi logikai False!
                     fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
                     payload = {"url": media_url, "message": post_text, "published": False, "access_token": fb_token}
                     res = requests.post(fb_url, json=payload)
                 
-                # MOST MÁR ELLENŐRIZZÜK, HOGY TÉNYLEG SIKERÜLT-E
                 if res.status_code == 200:
                     print("✅ FB Draft Created Successfully!")
                 else:
@@ -402,7 +399,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V107 (STRICT LOGGING + FFMPEG ENABLED)"}
+def home(): return {"status": "Booksy V108 (FFMPEG & MOVIEPY 1.0.3 FIXED)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")

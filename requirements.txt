@@ -11,6 +11,6 @@ beautifulsoup4
 lxml
 markdownify
 google-api-python-client
-moviepy
+moviepy==1.0.3
 imageio-ffmpeg
 Pillow
