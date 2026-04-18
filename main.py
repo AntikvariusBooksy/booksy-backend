@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V111 (EXTENDED BOOK AUTHOR PROMPT + OOM SAFE VIDEO)
+# BOOKSY BRAIN - V112 (FFMPEG OOM SAFE + PILLOW MONKEY PATCH FOR VIDEO FIX)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -30,12 +30,17 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+# --- KÖTELEZŐ MONKEY PATCH A PILLOW 10+ ÉS MOVIEPY KOMPATIBILITÁSHOZ ---
+import PIL.Image
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
+
 # --- VIDEÓ FELDOLGOZÓ ---
 try:
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
-    print("✅ MoviePy (1.0.3) és videó modul betöltve.")
+    print("✅ MoviePy és Pillow Patch sikeresen betöltve a videóhoz.")
 except Exception as e:
     print(f"⚠️ MoviePy nem elérhető (A videó generálás képként fog lefutni): {e}")
     MOVIEPY_AVAILABLE = False
@@ -151,7 +156,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V111|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V112|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -216,7 +221,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V111) ---
+# --- PURE AGENTIC SOCIAL AGENT (V112) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -271,7 +276,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V111)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V112)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -428,7 +433,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V111 (EXTENDED BOOK AUTHOR PROMPT)"}
+def home(): return {"status": "Booksy V112 (OOM SAFE + PILLOW MONKEY PATCH FIXED)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
