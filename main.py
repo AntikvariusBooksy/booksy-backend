@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V118 (DYNAMIC FALLBACK RANDOMIZATION)
+# BOOKSY BRAIN - V119 (ANTI-HALLUCINATION & ZERO TEMPERATURE CALENDAR)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -157,7 +157,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V118|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V119|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -222,7 +222,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V118) ---
+# --- PURE AGENTIC SOCIAL AGENT (V119) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -231,20 +231,25 @@ class BooksySocialAgent:
     def _get_agentic_calendar(self):
         today = datetime.now().strftime("%B %d")
         prompt = f"""
-        Today is {today}. Act as an expert in the book publishing industry and world literature.
+        Today is {today}. Act as a strict, fact-checking expert in the book publishing industry and world literature.
         Identify:
         1. Any official or cultural holidays today in Romania (for both Hungarians and Romanians). If none, output null.
-        2. Find between 6 to 10 famous PUBLISHED BOOK AUTHORS born on this day. Aim for exactly 10 if possible.
+        2. Find between 6 to 10 famous PUBLISHED BOOK AUTHORS born exactly on {today}. Aim for exactly 10 if possible.
         
-        CRITICAL RULE FOR "AUTHOR": "Book author" is defined in the broadest sense of printed literature: novelists, poets, playwrights, bestseller writers, crime and psychological thriller authors, non-fiction/expert writers (szakkönyv), self-help authors, and writers of political or sociological books. DO NOT include composers, purely practicing lawyers, or scientists who didn't publish popular books.
+        CRITICAL ANTI-HALLUCINATION PROTOCOL:
+        You MUST NOT hallucinate or guess birthdates! Every single author you list MUST have been born EXACTLY on {today}.
+        Verify the birth date in your internal knowledge base BEFORE adding them to the list.
+        If you cannot find exactly 10 real authors born today, list ONLY the ones you are 100% mathematically certain about. Factual accuracy is your highest priority. Do not invent names or dates to fill the quota.
+
+        CRITICAL RULE FOR "AUTHOR": "Book author" is defined in the broadest sense of printed literature: novelists, poets, playwrights, bestseller writers, crime and psychological thriller authors, non-fiction/expert writers (szakkönyv), self-help authors, and writers of political or sociological books. DO NOT include composers, actors, purely practicing lawyers, or scientists who didn't publish popular books.
 
         CRITICAL DISTRIBUTION AND SORTING RULE:
-        - You MUST try to find authors from ALL THREE of these categories: Hungarian (Magyar), Romanian (Román), and International (World). Aim for a balanced mix in your selection.
-        - However, the final list you output MUST be strictly ordered:
+        - You MUST try to find authors from ALL THREE of these categories: Hungarian (Magyar), Romanian (Román), and International (World).
+        - The final list MUST be strictly ordered:
           1. ALL Hungarian authors you found MUST be listed first (at the top).
           2. ALL Romanian authors you found MUST be listed next.
           3. ALL International authors MUST be listed at the bottom.
-        - Only start the list with International authors if absolutely zero Hungarian and zero Romanian published authors were born on this day.
+        - Only start the list with International authors if absolutely zero Hungarian and zero Romanian published authors were actually born on {today}.
 
         Output ONLY a JSON:
         {{
@@ -255,11 +260,17 @@ class BooksySocialAgent:
         }}
         """
         try:
-            res = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"}).choices[0].message.content
+            # TEMPERATURE 0.0 BEÁLLÍTÁSA A HALLUCINÁCIÓ MEGAKADÁLYOZÁSÁRA!
+            res = self.client_ai.chat.completions.create(
+                model="gpt-4o", 
+                messages=[{"role": "user", "content": prompt}], 
+                response_format={"type": "json_object"},
+                temperature=0.0
+            ).choices[0].message.content
             data = json.loads(res)
-            print(f"📚 [AI Naptár] Mai szerzők a háttérben: {json.dumps(data['authors'], ensure_ascii=False)}")
+            print(f"📚 [AI Naptár - TÉNYELLENŐRZÖTT] Mai szerzők a háttérben: {json.dumps(data['authors'], ensure_ascii=False)}")
             return data
-        except: return {"holiday": None, "authors": [{"name": "Ismeretlen könyvszerző", "bio": "A nyomtatott irodalom rejtett tehetségei."}]}
+        except: return {"holiday": None, "authors": []}
 
     def _create_infinite_loop_video(self, image_path, output_path):
         if not MOVIEPY_AVAILABLE: return False
@@ -289,7 +300,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V118)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V119)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -311,7 +322,6 @@ class BooksySocialAgent:
         fallback_adatai = []
 
         if not has_author_books:
-            # 1. Különböző témák definiálása a változatosságért
             themes = [
                 "ritka antikvár könyv és irodalmi kincs",
                 "izgalmas krimik és pszichológiai thrillerek",
@@ -324,11 +334,9 @@ class BooksySocialAgent:
             selected_theme = random.choice(themes)
             print(f"⚠️ Nincs raktáron könyv a mai íróktól. Kincskereső bekapcsolva. Téma: {selected_theme}")
             
-            # 2. Szélesebb merítés (Top 15)
             vec = self.client_ai.embeddings.create(input=selected_theme, model="text-embedding-3-small").data[0].embedding
             fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=15, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
             
-            # 3. Véletlenszerű kiválasztás a találatokból
             if fallback_res['ids'] and fallback_res['ids'][0]:
                 all_fallbacks = []
                 for i in range(len(fallback_res['ids'][0])):
@@ -462,7 +470,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V118 (DYNAMIC FALLBACK RANDOMIZATION)"}
+def home(): return {"status": "Booksy V119 (ANTI-HALLUCINATION & ZERO TEMPERATURE FIX)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
