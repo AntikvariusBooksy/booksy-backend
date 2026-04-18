@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V108 (FFMPEG & MOVIEPY VERSION LOCK FIX)
+# BOOKSY BRAIN - V109 (META API DRAFT FIX + OOM SAFE VIDEO)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -151,7 +151,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V108|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V109|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -216,7 +216,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V108) ---
+# --- PURE AGENTIC SOCIAL AGENT (V109) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -245,13 +245,24 @@ class BooksySocialAgent:
     def _create_infinite_loop_video(self, image_path, output_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            print("🎥 Videó renderelés indítása...")
-            clip = ImageClip(image_path).set_duration(5)
-            zoomed = clip.resize(lambda t: 1 + 0.02 * t)
-            zoomed = zoomed.crop(x_center=zoomed.w/2, y_center=zoomed.h/2, width=clip.w, height=clip.h)
-            reversed_clip = zoomed.fx(vfx.time_mirror)
-            final_clip = concatenate_videoclips([zoomed, reversed_clip])
-            final_clip.write_videofile(output_path, fps=24, codec="libx264", logger=None)
+            print("🎥 Videó renderelés indítása (OOM-Safe mód)...")
+            clip = ImageClip(image_path).resize(width=800)
+            def zoom(t): return 1 + 0.02 * t
+            zoomed = clip.resize(zoom)
+            cropped = zoomed.crop(x_center=clip.w/2, y_center=clip.h/2, width=clip.w, height=clip.h)
+            cropped = cropped.set_duration(4)
+            reversed_clip = cropped.fx(vfx.time_mirror)
+            final_clip = concatenate_videoclips([cropped, reversed_clip])
+            
+            final_clip.write_videofile(
+                output_path, 
+                fps=15, 
+                codec="libx264", 
+                audio=False, 
+                logger=None, 
+                threads=1, 
+                preset="ultrafast"
+            )
             print("✅ Videó renderelés sikeres!")
             return True
         except Exception as e:
@@ -259,7 +270,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V108)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V109)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -330,23 +341,40 @@ class BooksySocialAgent:
         fb_token = os.getenv("FB_PAGE_TOKEN")
         
         if fb_page_id and fb_token:
-            print("🚀 Feltöltés a Facebookra...")
+            print("🚀 Kétlépcsős feltöltés a Facebookra (Draft létrehozás)...")
             try:
+                media_id = None
                 if is_video:
-                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
-                    files = {'source': open(video_path, 'rb')}
-                    data = {'access_token': fb_token, 'description': post_text, 'published': 'false'}
-                    res = requests.post(fb_url, data=data, files=files)
+                    print("🎥 1/2: Videó feltöltése a Meta könyvtárba...")
+                    fb_vid_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
+                    res = requests.post(fb_vid_url, data={'access_token': fb_token, 'published': 'false'}, files={'source': open(video_path, 'rb')})
+                    if res.status_code == 200:
+                        media_id = res.json().get('id')
                 else:
-                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
-                    payload = {"url": media_url, "message": post_text, "published": False, "access_token": fb_token}
-                    res = requests.post(fb_url, json=payload)
+                    print("🖼️ 1/2: Kép feltöltése a Meta könyvtárba...")
+                    fb_pic_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
+                    res = requests.post(fb_pic_url, json={"url": media_url, "published": False, "access_token": fb_token})
+                    if res.status_code == 200:
+                        media_id = res.json().get('id')
                 
-                if res.status_code == 200:
-                    print("✅ FB Draft Created Successfully!")
+                if media_id:
+                    print(f"✅ Média sikeresen fogadva (ID: {media_id}).\n📝 2/2: Business Suite Vázlat (Draft) poszt létrehozása...")
+                    feed_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/feed"
+                    feed_payload = {
+                        "message": post_text,
+                        "published": False,
+                        "unpublished_content_type": "DRAFT",
+                        "attached_media": json.dumps([{"media_fbid": media_id}]),
+                        "access_token": fb_token
+                    }
+                    feed_res = requests.post(feed_url, data=feed_payload)
+                    
+                    if feed_res.status_code == 200:
+                        print(f"✅ TÖKÉLETES SIKER! A vázlat bekerült a Business Suite-ba. (ID: {feed_res.json().get('id')})")
+                    else:
+                        print(f"❌ Vázlat posztolási hiba: {feed_res.text}")
                 else:
-                    print(f"❌ FB API Hiba! Válaszkód: {res.status_code}")
-                    print(f"❌ FB API Részletek: {res.text}")
+                    print(f"❌ Média feltöltési hiba. API Válasz: {res.text}")
             except Exception as e: 
                 print(f"❌ FB Feltöltési kritikus hiba: {e}")
 
@@ -399,7 +427,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V108 (FFMPEG & MOVIEPY 1.0.3 FIXED)"}
+def home(): return {"status": "Booksy V109 (META DRAFT FIX + OOM SAFE VIDEO)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
