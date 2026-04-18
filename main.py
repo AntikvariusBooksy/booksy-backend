@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V112 (FFMPEG OOM SAFE + PILLOW MONKEY PATCH FOR VIDEO FIX)
+# BOOKSY BRAIN - V113 (OFFICIAL META API DRAFT PARAMETER FIX)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -156,7 +156,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V112|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V113|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -221,7 +221,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V112) ---
+# --- PURE AGENTIC SOCIAL AGENT (V113) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -276,7 +276,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V112)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V113)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -347,40 +347,34 @@ class BooksySocialAgent:
         fb_token = os.getenv("FB_PAGE_TOKEN")
         
         if fb_page_id and fb_token:
-            print("🚀 Kétlépcsős feltöltés a Facebookra (Draft létrehozás)...")
+            print("🚀 Egylépéses hivatalos feltöltés a Meta Business Suite Piszkozatokba...")
             try:
-                media_id = None
                 if is_video:
-                    print("🎥 1/2: Videó feltöltése a Meta könyvtárba...")
-                    fb_vid_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
-                    res = requests.post(fb_vid_url, data={'access_token': fb_token, 'published': 'false'}, files={'source': open(video_path, 'rb')})
-                    if res.status_code == 200:
-                        media_id = res.json().get('id')
+                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
+                    files = {'source': open(video_path, 'rb')}
+                    data = {
+                        'access_token': fb_token, 
+                        'description': post_text, 
+                        'published': 'false',
+                        'unpublished_content_type': 'DRAFT'
+                    }
+                    res = requests.post(fb_url, data=data, files=files)
                 else:
-                    print("🖼️ 1/2: Kép feltöltése a Meta könyvtárba...")
-                    fb_pic_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
-                    res = requests.post(fb_pic_url, json={"url": media_url, "published": False, "access_token": fb_token})
-                    if res.status_code == 200:
-                        media_id = res.json().get('id')
-                
-                if media_id:
-                    print(f"✅ Média sikeresen fogadva (ID: {media_id}).\n📝 2/2: Business Suite Vázlat (Draft) poszt létrehozása...")
-                    feed_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/feed"
-                    feed_payload = {
-                        "message": post_text,
+                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
+                    payload = {
+                        "url": media_url, 
+                        "message": post_text, 
                         "published": False,
                         "unpublished_content_type": "DRAFT",
-                        "attached_media": json.dumps([{"media_fbid": media_id}]),
                         "access_token": fb_token
                     }
-                    feed_res = requests.post(feed_url, data=feed_payload)
-                    
-                    if feed_res.status_code == 200:
-                        print(f"✅ TÖKÉLETES SIKER! A vázlat bekerült a Business Suite-ba. (ID: {feed_res.json().get('id')})")
-                    else:
-                        print(f"❌ Vázlat posztolási hiba: {feed_res.text}")
+                    res = requests.post(fb_url, json=payload)
+                
+                if res.status_code == 200:
+                    print(f"✅ TÖKÉLETES SIKER! A vázlat bekerült a Business Suite-ba. (ID: {res.json().get('id')})")
                 else:
-                    print(f"❌ Média feltöltési hiba. API Válasz: {res.text}")
+                    print(f"❌ Vázlat posztolási hiba! Válaszkód: {res.status_code}")
+                    print(f"❌ FB API Részletek: {res.text}")
             except Exception as e: 
                 print(f"❌ FB Feltöltési kritikus hiba: {e}")
 
@@ -433,7 +427,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V112 (OOM SAFE + PILLOW MONKEY PATCH FIXED)"}
+def home(): return {"status": "Booksy V113 (OFFICIAL META API DRAFT PARAMETER FIX)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
