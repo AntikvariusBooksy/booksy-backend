@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V105 (PURE AGENTIC SOCIAL AGENT - NO STATIC FILES REQUIRED)
+# BOOKSY BRAIN - V106 (FULL AGENTIC SOCIAL BOT WITH STRATEGIC FALLBACK LOGIC)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -49,7 +49,7 @@ POLICY_PAGES = [
     {"url": "https://www.antikvarius.ro/contact/", "lang": "ro", "name": "Contact"},
 ]
 
-# --- ALAP FUNKCIÓK (V102+ Parity) ---
+# --- ALAP FUNKCIÓK ---
 def normalize_text(text):
     if not text: return ""
     text = str(text).lower()
@@ -149,7 +149,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V105|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V106|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -214,32 +214,32 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V105) ---
+# --- PURE AGENTIC SOCIAL AGENT (V106 - STRATEGIC FALLBACK) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _get_agentic_calendar(self):
-        """Az Agent saját tudása alapján azonosítja a mai írókat és ünnepeket."""
+        """Kikeresi az ünnepelteket és ünnepeket a naphoz. Soha nem tér vissza üresen."""
         today = datetime.now().strftime("%B %d")
         prompt = f"""
         Today is {today}. Act as an expert in Hungarian, Romanian and world literature.
         Identify:
-        1. Any official or cultural holidays today in Romania (for both Hungarians and Romanians).
-        2. Up to 10 famous authors (HU, RO, World) born on this day.
+        1. Any official or cultural holidays today in Romania (for both Hungarians and Romanians). If none, output null.
+        2. AT LEAST 3 up to 10 famous authors (HU, RO, World) born on this day. (There is always someone born today).
         Output ONLY a JSON:
         {{
             "holiday": "Name of holiday or null",
             "authors": [
-                {{"name": "Author Name", "bio": "1-sentence bio in Hungarian"}}
+                {{"name": "Author Name", "bio": "1-sentence bio/tribute in Hungarian"}}
             ]
         }}
         """
         try:
             res = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"}).choices[0].message.content
             return json.loads(res)
-        except: return {"holiday": None, "authors": []}
+        except: return {"holiday": None, "authors": [{"name": "Ismeretlen klasszikus", "bio": "A világirodalom rejtett tehetségei."}]}
 
     def _create_infinite_loop_video(self, image_path, output_path):
         if not MOVIEPY_AVAILABLE: return False
@@ -254,26 +254,46 @@ class BooksySocialAgent:
         except: return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V106)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
         ünnepeltek = calendar.get("authors", [])
         
+        # 1. Keresünk a készleten lévő könyvek között a napi íróktól
         poszt_adatai = []
-        for író in ünnepeltek:
-            vec = self.client_ai.embeddings.create(input=író['name'], model="text-embedding-3-small").data[0].embedding
-            results = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-            if results['ids']:
-                meta = results['metadatas'][0][0]
-                # Ellenőrizzük, hogy tényleg az író-e (fuzzy match)
-                if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
-                    poszt_adatai.append({"author": író['name'], "bio": író['bio'], "title": meta.get('title'), "url": meta.get('url'), "price": meta.get('price')})
+        if ünnepeltek:
+            for író in ünnepeltek:
+                vec = self.client_ai.embeddings.create(input=író['name'], model="text-embedding-3-small").data[0].embedding
+                results = self.db.collection.query(query_embeddings=[vec], n_results=2, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+                if results['ids']:
+                    for i in range(len(results['ids'][0])):
+                        meta = results['metadatas'][0][i]
+                        # Szigorú fuzzy match az író nevére
+                        if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
+                            poszt_adatai.append({"author": író['name'], "bio": író.get('bio', ''), "title": meta.get('title'), "url": meta.get('url'), "price": clean_price_raw(meta.get('price'))})
+                            break # Írónként csak 1 könyvet teszünk be
 
-        if not poszt_adatai and not napi_ünnep: return
+        has_author_books = len(poszt_adatai) > 0
+        fallback_adatai = []
 
-        konyv_cim = poszt_adatai[0]['title'] if poszt_adatai else "Antikvár kincsek"
-        img_prompt = f"Scene from book '{konyv_cim}'. Style: Classic Dark Academia, warm vintage bookstore lighting, steaming tea, dark wood, cinematic 8k, mysterious mood."
+        # 2. STRATÉGIAI KINCSKERESŐ (Fallback) - Ha az ünnepeltektől nincs könyv raktáron
+        if not has_author_books:
+            print("⚠️ Nincs raktáron könyv a mai ünnepeltektől. Kincskereső bekapcsolva.")
+            vec = self.client_ai.embeddings.create(input="ritka antikvár irodalom és regény kincsek", model="text-embedding-3-small").data[0].embedding
+            fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+            if fallback_res['ids']:
+                for i in range(len(fallback_res['ids'][0])):
+                    f_meta = fallback_res['metadatas'][0][i]
+                    fallback_adatai.append({"author": f_meta.get('author', 'Ismeretlen'), "title": f_meta.get('title'), "url": f_meta.get('url'), "price": clean_price_raw(f_meta.get('price'))})
+
+        if not has_author_books and not fallback_adatai:
+            print("❌ Raktár teljesen üres, nincs mit ajánlani. Poszt megszakítva.")
+            return
+
+        # 3. Kép/Videó Generálás
+        konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár ritkaságok")
+        img_prompt = f"Scene from book '{konyv_cim}'. Style: Classic Dark Academia, warm vintage bookstore lighting, steaming tea, dark wood, cinematic 8k, mysterious mood. No text."
         
         video_path, image_path = "social_video.mp4", "social_img.jpg"
         media_url, is_video = "", False
@@ -285,12 +305,23 @@ class BooksySocialAgent:
             if self._create_infinite_loop_video(image_path, video_path): is_video = True
         except: pass
 
+        # 4. CopySEO Marketing Szövegezés
         marketing_prompt = f"""
-        Write a Facebook post in Hungarian. Holiday: {napi_ünnep}. Authors & Books: {poszt_adatai}.
-        Be elegant, poetic, and marketing-savvy (CopySEO style). Use the URLs provided.
+        Act as Booksy, the CopySEO marketing agent. Write a Facebook post in Hungarian.
+        Today's holiday (if any): {napi_ünnep if napi_ünnep else 'None'}.
+        Today's celebrated authors and their biographies: {json.dumps(ünnepeltek, ensure_ascii=False)}.
         """
+        
+        if has_author_books:
+            marketing_prompt += f"\nWe HAVE books from these authors in stock. Recommend these books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
+        else:
+            marketing_prompt += f"\nUnfortunately, we do NOT have books from today's authors in stock right now. You MUST acknowledge this naturally (e.g., 'Sajnos a mai ünnepeltektől jelenleg minden példányunk gazdára talált...'), but highly recommend these other literary treasures instead: {json.dumps(fallback_adatai, ensure_ascii=False)}."
+
+        marketing_prompt += "\nRule: ALWAYS start the post by commemorating the authors' birthdays and holidays (if any). Use an elegant, poetic, and marketing-savvy style. Use the exact URLs provided."
+        
         post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
 
+        # 5. Facebook Feltöltés
         fb_page_id = os.getenv("FB_PAGE_ID")
         fb_token = os.getenv("FB_PAGE_TOKEN")
         
@@ -307,6 +338,7 @@ class BooksySocialAgent:
                 print("✅ FB Draft Created.")
             except: pass
 
+        # Állapot mentése az e-mailhez
         with open("social_state.json", "w") as f:
             json.dump({"text": post_text, "type": "video" if is_video else "image"}, f)
         
@@ -356,7 +388,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V105 (AGENTIC ACTIVE)"}
+def home(): return {"status": "Booksy V106 (AGENTIC ACTIVE WITH STRATEGIC FALLBACK)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
