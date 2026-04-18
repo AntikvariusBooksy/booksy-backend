@@ -12,4 +12,5 @@ lxml
 markdownify
 google-api-python-client
 moviepy
+imageio-ffmpeg
 Pillow

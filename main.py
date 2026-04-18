@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V106 (FULL AGENTIC SOCIAL BOT WITH STRATEGIC FALLBACK LOGIC)
+# BOOKSY BRAIN - V107 (STRICT ERROR LOGGING + FFmpeg VIDEO FIX)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -35,7 +35,9 @@ try:
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
+    print("✅ MoviePy és videó modul betöltve.")
 except Exception as e:
+    print(f"⚠️ MoviePy nem elérhető (A videó generálás képként fog lefutni): {e}")
     MOVIEPY_AVAILABLE = False
 
 load_dotenv()
@@ -149,7 +151,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V106|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V107|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -214,14 +216,13 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V106 - STRATEGIC FALLBACK) ---
+# --- PURE AGENTIC SOCIAL AGENT (V107) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _get_agentic_calendar(self):
-        """Kikeresi az ünnepelteket és ünnepeket a naphoz. Soha nem tér vissza üresen."""
         today = datetime.now().strftime("%B %d")
         prompt = f"""
         Today is {today}. Act as an expert in Hungarian, Romanian and world literature.
@@ -244,23 +245,26 @@ class BooksySocialAgent:
     def _create_infinite_loop_video(self, image_path, output_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
+            print("🎥 Videó renderelés indítása...")
             clip = ImageClip(image_path).set_duration(5)
             zoomed = clip.resize(lambda t: 1 + 0.02 * t)
             zoomed = zoomed.crop(x_center=zoomed.w/2, y_center=zoomed.h/2, width=clip.w, height=clip.h)
             reversed_clip = zoomed.fx(vfx.time_mirror)
             final_clip = concatenate_videoclips([zoomed, reversed_clip])
             final_clip.write_videofile(output_path, fps=24, codec="libx264", logger=None)
+            print("✅ Videó renderelés sikeres!")
             return True
-        except: return False
+        except Exception as e:
+            print(f"❌ Videó hiba: {e}")
+            return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V106)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V107)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
         ünnepeltek = calendar.get("authors", [])
         
-        # 1. Keresünk a készleten lévő könyvek között a napi íróktól
         poszt_adatai = []
         if ünnepeltek:
             for író in ünnepeltek:
@@ -269,15 +273,13 @@ class BooksySocialAgent:
                 if results['ids']:
                     for i in range(len(results['ids'][0])):
                         meta = results['metadatas'][0][i]
-                        # Szigorú fuzzy match az író nevére
                         if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
                             poszt_adatai.append({"author": író['name'], "bio": író.get('bio', ''), "title": meta.get('title'), "url": meta.get('url'), "price": clean_price_raw(meta.get('price'))})
-                            break # Írónként csak 1 könyvet teszünk be
+                            break
 
         has_author_books = len(poszt_adatai) > 0
         fallback_adatai = []
 
-        # 2. STRATÉGIAI KINCSKERESŐ (Fallback) - Ha az ünnepeltektől nincs könyv raktáron
         if not has_author_books:
             print("⚠️ Nincs raktáron könyv a mai ünnepeltektől. Kincskereső bekapcsolva.")
             vec = self.client_ai.embeddings.create(input="ritka antikvár irodalom és regény kincsek", model="text-embedding-3-small").data[0].embedding
@@ -291,7 +293,6 @@ class BooksySocialAgent:
             print("❌ Raktár teljesen üres, nincs mit ajánlani. Poszt megszakítva.")
             return
 
-        # 3. Kép/Videó Generálás
         konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár ritkaságok")
         img_prompt = f"Scene from book '{konyv_cim}'. Style: Classic Dark Academia, warm vintage bookstore lighting, steaming tea, dark wood, cinematic 8k, mysterious mood. No text."
         
@@ -299,19 +300,23 @@ class BooksySocialAgent:
         media_url, is_video = "", False
 
         try:
+            print("🎨 DALL-E Kép generálása...")
             img_res = self.client_ai.images.generate(model="dall-e-3", prompt=img_prompt, size="1024x1024", quality="hd", n=1)
             media_url = img_res.data[0].url
             with open(image_path, 'wb') as f: f.write(requests.get(media_url).content)
-            if self._create_infinite_loop_video(image_path, video_path): is_video = True
-        except: pass
+            
+            if self._create_infinite_loop_video(image_path, video_path): 
+                is_video = True
+            else:
+                print("⚠️ Videó készítése sikertelen, statikus képet töltünk fel.")
+        except Exception as e: 
+            print(f"❌ Képgenerálási hiba: {e}")
 
-        # 4. CopySEO Marketing Szövegezés
         marketing_prompt = f"""
         Act as Booksy, the CopySEO marketing agent. Write a Facebook post in Hungarian.
         Today's holiday (if any): {napi_ünnep if napi_ünnep else 'None'}.
         Today's celebrated authors and their biographies: {json.dumps(ünnepeltek, ensure_ascii=False)}.
         """
-        
         if has_author_books:
             marketing_prompt += f"\nWe HAVE books from these authors in stock. Recommend these books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
         else:
@@ -321,24 +326,33 @@ class BooksySocialAgent:
         
         post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
 
-        # 5. Facebook Feltöltés
         fb_page_id = os.getenv("FB_PAGE_ID")
         fb_token = os.getenv("FB_PAGE_TOKEN")
         
         if fb_page_id and fb_token:
+            print("🚀 Feltöltés a Facebookra...")
             try:
                 if is_video:
                     fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
                     files = {'source': open(video_path, 'rb')}
+                    # A videó végpont form-data formátumot vár, a 'published' itt sztring!
                     data = {'access_token': fb_token, 'description': post_text, 'published': 'false'}
-                    requests.post(fb_url, data=data, files=files)
+                    res = requests.post(fb_url, data=data, files=files)
                 else:
+                    # A fotó végpont JSON-t vár, a 'published' itt igazi logikai False!
                     fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
-                    requests.post(fb_url, json={"url": media_url, "message": post_text, "published": "false", "access_token": fb_token})
-                print("✅ FB Draft Created.")
-            except: pass
+                    payload = {"url": media_url, "message": post_text, "published": False, "access_token": fb_token}
+                    res = requests.post(fb_url, json=payload)
+                
+                # MOST MÁR ELLENŐRIZZÜK, HOGY TÉNYLEG SIKERÜLT-E
+                if res.status_code == 200:
+                    print("✅ FB Draft Created Successfully!")
+                else:
+                    print(f"❌ FB API Hiba! Válaszkód: {res.status_code}")
+                    print(f"❌ FB API Részletek: {res.text}")
+            except Exception as e: 
+                print(f"❌ FB Feltöltési kritikus hiba: {e}")
 
-        # Állapot mentése az e-mailhez
         with open("social_state.json", "w") as f:
             json.dump({"text": post_text, "type": "video" if is_video else "image"}, f)
         
@@ -388,7 +402,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V106 (AGENTIC ACTIVE WITH STRATEGIC FALLBACK)"}
+def home(): return {"status": "Booksy V107 (STRICT LOGGING + FFMPEG ENABLED)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
