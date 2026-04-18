@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V119 (ANTI-HALLUCINATION & ZERO TEMPERATURE CALENDAR)
+# BOOKSY BRAIN - V120 (STRICT FACT-CHECKING, ZERO HALLUCINATION, NO QUOTAS)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -157,7 +157,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V119|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V120|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -222,7 +222,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V119) ---
+# --- PURE AGENTIC SOCIAL AGENT (V120) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -231,46 +231,54 @@ class BooksySocialAgent:
     def _get_agentic_calendar(self):
         today = datetime.now().strftime("%B %d")
         prompt = f"""
-        Today is {today}. Act as a strict, fact-checking expert in the book publishing industry and world literature.
-        Identify:
-        1. Any official or cultural holidays today in Romania (for both Hungarians and Romanians). If none, output null.
-        2. Find between 6 to 10 famous PUBLISHED BOOK AUTHORS born exactly on {today}. Aim for exactly 10 if possible.
+        Today's exact date is {today}.
+        Act as a STRICT, fact-checking literary historian. Your absolute highest priority is FACTUAL ACCURACY.
         
-        CRITICAL ANTI-HALLUCINATION PROTOCOL:
-        You MUST NOT hallucinate or guess birthdates! Every single author you list MUST have been born EXACTLY on {today}.
-        Verify the birth date in your internal knowledge base BEFORE adding them to the list.
-        If you cannot find exactly 10 real authors born today, list ONLY the ones you are 100% mathematically certain about. Factual accuracy is your highest priority. Do not invent names or dates to fill the quota.
+        Task 1: Identify any official or cultural holidays today in Romania (if none, output null).
+        Task 2: List people whose PRIMARY PROFESSION is writing books (novelists, poets, non-fiction authors, etc.) who were born EXACTLY on {today}.
 
-        CRITICAL RULE FOR "AUTHOR": "Book author" is defined in the broadest sense of printed literature: novelists, poets, playwrights, bestseller writers, crime and psychological thriller authors, non-fiction/expert writers (szakkönyv), self-help authors, and writers of political or sociological books. DO NOT include composers, actors, purely practicing lawyers, or scientists who didn't publish popular books.
+        CRITICAL ANTI-HALLUCINATION RULES:
+        1. DO NOT try to reach a specific quota! If you are only 100% mathematically certain about 1 or 2 authors born exactly on {today}, ONLY list those 1 or 2. If you know ZERO, output an empty list []. Quantity does not matter; only truth matters.
+        2. EVERY single author you list MUST have been born exactly on {today}. Do not list people born on the day before or the day after.
+        3. PRIMARY PROFESSION MUST BE BOOK WRITER: Only include people whose main life work is writing published, printed books. Strictly EXCLUDE actors, musicians, lawyers, or politicians who just happen to have a memoir or an album.
+        4. DISTRIBUTION: Check for Hungarian authors first. If found, list them first. Check for Romanian authors second. List them next. Then add World authors. DO NOT invent Hungarian authors just to fill the requirement.
 
-        CRITICAL DISTRIBUTION AND SORTING RULE:
-        - You MUST try to find authors from ALL THREE of these categories: Hungarian (Magyar), Romanian (Román), and International (World).
-        - The final list MUST be strictly ordered:
-          1. ALL Hungarian authors you found MUST be listed first (at the top).
-          2. ALL Romanian authors you found MUST be listed next.
-          3. ALL International authors MUST be listed at the bottom.
-        - Only start the list with International authors if absolutely zero Hungarian and zero Romanian published authors were actually born on {today}.
-
-        Output ONLY a JSON:
+        Output ONLY a valid JSON with this EXACT structure (the 'verified_birthdate' field is mandatory for your own self-checking):
         {{
             "holiday": "Name of holiday or null",
             "authors": [
-                {{"name": "Author Name", "bio": "1-sentence bio/tribute in Hungarian focusing on the books they wrote."}}
+                {{
+                    "name": "Author Name", 
+                    "verified_birthdate": "Month Day, Year (This MUST exactly match {today}!)",
+                    "bio": "1-sentence bio in Hungarian focusing ONLY on their printed books."
+                }}
             ]
         }}
         """
         try:
-            # TEMPERATURE 0.0 BEÁLLÍTÁSA A HALLUCINÁCIÓ MEGAKADÁLYOZÁSÁRA!
             res = self.client_ai.chat.completions.create(
                 model="gpt-4o", 
                 messages=[{"role": "user", "content": prompt}], 
                 response_format={"type": "json_object"},
-                temperature=0.0
+                temperature=0.0 # ZÉRÓ kreativitás a tényeknél
             ).choices[0].message.content
             data = json.loads(res)
-            print(f"📚 [AI Naptár - TÉNYELLENŐRZÖTT] Mai szerzők a háttérben: {json.dumps(data['authors'], ensure_ascii=False)}")
+            
+            # Szerver oldali biztonsági szűrés: csak azt engedjük át, ami tényleg a mai napot tartalmazza a verified_birthdate-ben
+            valid_authors = []
+            today_month_day = datetime.now().strftime("%B %d").lower()
+            for author in data.get('authors', []):
+                if today_month_day in str(author.get('verified_birthdate', '')).lower():
+                    valid_authors.append(author)
+                else:
+                    print(f"⚠️ [ANTI-HALLUCINATION] Kiszűrve (Rossz dátum): {author['name']} - {author.get('verified_birthdate')}")
+            
+            data['authors'] = valid_authors
+            print(f"📚 [AI Naptár - TÉNYELLENŐRZÖTT] Mai hiteles szerzők: {json.dumps(data['authors'], ensure_ascii=False)}")
             return data
-        except: return {"holiday": None, "authors": []}
+        except Exception as e: 
+            print(f"❌ Naptár API hiba: {e}")
+            return {"holiday": None, "authors": []}
 
     def _create_infinite_loop_video(self, image_path, output_path):
         if not MOVIEPY_AVAILABLE: return False
@@ -300,7 +308,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V119)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V120)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -332,7 +340,7 @@ class BooksySocialAgent:
                 "művészeti albumok és könyvritkaságok"
             ]
             selected_theme = random.choice(themes)
-            print(f"⚠️ Nincs raktáron könyv a mai íróktól. Kincskereső bekapcsolva. Téma: {selected_theme}")
+            print(f"⚠️ Nincs raktáron könyv a mai íróktól (vagy nem volt mai író). Kincskereső bekapcsolva. Téma: {selected_theme}")
             
             vec = self.client_ai.embeddings.create(input=selected_theme, model="text-embedding-3-small").data[0].embedding
             fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=15, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
@@ -374,15 +382,16 @@ class BooksySocialAgent:
         Today's holiday (if any): {napi_ünnep if napi_ünnep else 'Nincs ünnep'}.
         Today's celebrated printed book authors and their biographies: {json.dumps(ünnepeltek, ensure_ascii=False)}.
 
-        CRITICAL RULE 1 (THE COMMEMORATION): You MUST explicitly WRITE OUT the names and the short biographies of ALL the celebrated authors provided in the JSON list at the beginning of the post. Do NOT just say "today's authors", you must explicitly NAME them to honor them.
+        CRITICAL RULE 1: If the 'celebrated authors' list above is empty, DO NOT say "ünnepeljük a mai szerzőket" or anything similar. Just focus on the holiday (if any) and transition beautifully into recommending the books.
+        CRITICAL RULE 2: If the 'celebrated authors' list is NOT empty, you MUST explicitly write out their names and bios to honor them.
         """
         
         if has_author_books:
-            marketing_prompt += f"\nCRITICAL RULE 2 (RECOMMENDATIONS): We HAVE books from these authors in stock. After listing the authors, recommend these specific books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
+            marketing_prompt += f"\nCRITICAL RULE 3 (RECOMMENDATIONS): We HAVE books from these authors in stock. Recommend these specific books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
         else:
-            marketing_prompt += f"\nCRITICAL RULE 2 (FALLBACK RECOMMENDATIONS): Unfortunately, we do NOT have books from these celebrated authors in stock. AFTER listing and honoring the authors by name as instructed in Rule 1, you MUST gracefully transition (e.g., 'Sajnos a mai ünnepelt szerzőinktől jelenleg minden példányunk gazdára talált, de...'), and highly recommend these other printed literary and non-fiction treasures instead: {json.dumps(fallback_adatai, ensure_ascii=False)}."
+            marketing_prompt += f"\nCRITICAL RULE 3 (FALLBACK RECOMMENDATIONS): Unfortunately, we do NOT have books from these celebrated authors in stock. Transition gracefully (e.g., 'Sajnos a mai ünnepelt szerzőinktől jelenleg minden példányunk gazdára talált, de...'), and highly recommend these other printed literary and non-fiction treasures instead: {json.dumps(fallback_adatai, ensure_ascii=False)}."
 
-        marketing_prompt += "\nCRITICAL RULE 3: Use an elegant, engaging, and marketing-savvy style. Use the exact URLs provided for the recommended books."
+        marketing_prompt += "\nCRITICAL RULE 4: Use an elegant, engaging, and marketing-savvy style. Use the exact URLs provided for the recommended books."
         
         post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
 
@@ -470,7 +479,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V119 (ANTI-HALLUCINATION & ZERO TEMPERATURE FIX)"}
+def home(): return {"status": "Booksy V120 (STRICT FACT-CHECKING, ZERO HALLUCINATION, NO QUOTAS)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
