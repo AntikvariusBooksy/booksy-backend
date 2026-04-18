@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V116 (AUTHOR HIERARCHY + OFFICIAL META API DRAFT FIX RESTORED)
+# BOOKSY BRAIN - V117 (STRICT COPYSEO PROMPT & AUTHOR LOGGING)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -156,7 +156,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V116|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V117|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -221,7 +221,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V116) ---
+# --- PURE AGENTIC SOCIAL AGENT (V117) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -255,7 +255,9 @@ class BooksySocialAgent:
         """
         try:
             res = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"}).choices[0].message.content
-            return json.loads(res)
+            data = json.loads(res)
+            print(f"📚 [AI Naptár] Mai szerzők a háttérben: {json.dumps(data['authors'], ensure_ascii=False)}")
+            return data
         except: return {"holiday": None, "authors": [{"name": "Ismeretlen könyvszerző", "bio": "A nyomtatott irodalom rejtett tehetségei."}]}
 
     def _create_infinite_loop_video(self, image_path, output_path):
@@ -286,7 +288,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V116)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V117)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -341,15 +343,18 @@ class BooksySocialAgent:
 
         marketing_prompt = f"""
         Act as Booksy, the CopySEO marketing agent. Write a Facebook post in Hungarian.
-        Today's holiday (if any): {napi_ünnep if napi_ünnep else 'None'}.
+        Today's holiday (if any): {napi_ünnep if napi_ünnep else 'Nincs ünnep'}.
         Today's celebrated printed book authors and their biographies: {json.dumps(ünnepeltek, ensure_ascii=False)}.
-        """
-        if has_author_books:
-            marketing_prompt += f"\nWe HAVE books from these authors in stock. Recommend these books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
-        else:
-            marketing_prompt += f"\nUnfortunately, we do NOT have books from today's celebrated authors in stock right now. You MUST acknowledge this naturally (e.g., 'Sajnos a mai ünnepelt szerzőinktől jelenleg minden példányunk gazdára talált...'), but highly recommend these other printed literary and non-fiction treasures instead: {json.dumps(fallback_adatai, ensure_ascii=False)}."
 
-        marketing_prompt += "\nRule: ALWAYS start the post by commemorating the authors' birthdays and holidays (if any). Use an elegant, engaging, and marketing-savvy style. Use the exact URLs provided."
+        CRITICAL RULE 1 (THE COMMEMORATION): You MUST explicitly WRITE OUT the names and the short biographies of ALL the celebrated authors provided in the JSON list at the beginning of the post. Do NOT just say "today's authors", you must explicitly NAME them to honor them.
+        """
+        
+        if has_author_books:
+            marketing_prompt += f"\nCRITICAL RULE 2 (RECOMMENDATIONS): We HAVE books from these authors in stock. After listing the authors, recommend these specific books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
+        else:
+            marketing_prompt += f"\nCRITICAL RULE 2 (FALLBACK RECOMMENDATIONS): Unfortunately, we do NOT have books from these celebrated authors in stock. AFTER listing and honoring the authors by name as instructed in Rule 1, you MUST gracefully transition (e.g., 'Sajnos a mai ünnepelt szerzőinktől jelenleg minden példányunk gazdára talált, de...'), and highly recommend these other printed literary and non-fiction treasures instead: {json.dumps(fallback_adatai, ensure_ascii=False)}."
+
+        marketing_prompt += "\nCRITICAL RULE 3: Use an elegant, engaging, and marketing-savvy style. Use the exact URLs provided for the recommended books."
         
         post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
 
@@ -437,7 +442,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V116 (AUTHOR HIERARCHY + OFFICIAL META API DRAFT FIX)"}
+def home(): return {"status": "Booksy V117 (STRICT COPYSEO PROMPT + AUTHOR LOGGING)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
