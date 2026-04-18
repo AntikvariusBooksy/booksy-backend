@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V117 (STRICT COPYSEO PROMPT & AUTHOR LOGGING)
+# BOOKSY BRAIN - V118 (DYNAMIC FALLBACK RANDOMIZATION)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -9,6 +9,7 @@ import requests
 import hashlib
 import re
 import json
+import random
 import unicodedata
 import html
 import xml.etree.ElementTree as ET
@@ -156,7 +157,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V117|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V118|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -221,7 +222,7 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V117) ---
+# --- PURE AGENTIC SOCIAL AGENT (V118) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -288,7 +289,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V117)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V118)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -310,13 +311,32 @@ class BooksySocialAgent:
         fallback_adatai = []
 
         if not has_author_books:
-            print("⚠️ Nincs raktáron könyv a mai ünnepelt íróktól. Kincskereső bekapcsolva.")
-            vec = self.client_ai.embeddings.create(input="ritka antikvár könyv, regény, szakkönyv és sikerkönyv kincsek", model="text-embedding-3-small").data[0].embedding
-            fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-            if fallback_res['ids']:
+            # 1. Különböző témák definiálása a változatosságért
+            themes = [
+                "ritka antikvár könyv és irodalmi kincs",
+                "izgalmas krimik és pszichológiai thrillerek",
+                "klasszikus magyar szépirodalom és versek",
+                "történelmi szakkönyvek és életrajzok",
+                "önfejlesztés, pszichológia és sikerkönyvek",
+                "világirodalmi bestsellerek",
+                "művészeti albumok és könyvritkaságok"
+            ]
+            selected_theme = random.choice(themes)
+            print(f"⚠️ Nincs raktáron könyv a mai íróktól. Kincskereső bekapcsolva. Téma: {selected_theme}")
+            
+            # 2. Szélesebb merítés (Top 15)
+            vec = self.client_ai.embeddings.create(input=selected_theme, model="text-embedding-3-small").data[0].embedding
+            fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=15, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+            
+            # 3. Véletlenszerű kiválasztás a találatokból
+            if fallback_res['ids'] and fallback_res['ids'][0]:
+                all_fallbacks = []
                 for i in range(len(fallback_res['ids'][0])):
                     f_meta = fallback_res['metadatas'][0][i]
-                    fallback_adatai.append({"author": f_meta.get('author', 'Ismeretlen'), "title": f_meta.get('title'), "url": f_meta.get('url'), "price": clean_price_raw(f_meta.get('price'))})
+                    all_fallbacks.append({"author": f_meta.get('author', 'Ismeretlen'), "title": f_meta.get('title'), "url": f_meta.get('url'), "price": clean_price_raw(f_meta.get('price'))})
+                
+                selected_fallbacks = random.sample(all_fallbacks, min(3, len(all_fallbacks)))
+                fallback_adatai.extend(selected_fallbacks)
 
         if not has_author_books and not fallback_adatai:
             print("❌ Raktár teljesen üres, nincs mit ajánlani. Poszt megszakítva.")
@@ -442,7 +462,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V117 (STRICT COPYSEO PROMPT + AUTHOR LOGGING)"}
+def home(): return {"status": "Booksy V118 (DYNAMIC FALLBACK RANDOMIZATION)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
