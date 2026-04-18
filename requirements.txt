@@ -1,12 +1,15 @@
 fastapi
 uvicorn
-requests
 pydantic
+requests
 python-dotenv
 openai
 chromadb
-apscheduler
 pysqlite3-binary
+apscheduler
 beautifulsoup4
 lxml
 markdownify
+google-api-python-client
+moviepy
+Pillow

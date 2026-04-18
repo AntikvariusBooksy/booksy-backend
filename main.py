@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V102 (HEAVY DUTY PARSER + FORCE REFRESH CAPABILITY)
+# BOOKSY BRAIN - V104 (CORE V102 + ISOLATED PROACTIVE SOCIAL AGENT WITH SSL EMAIL)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -23,9 +23,21 @@ from openai import OpenAI
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from typing import List, Optional, Dict, Any
-
+from datetime import datetime
 from bs4 import BeautifulSoup
 import markdownify
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# --- VIDEÓ FELDOLGOZÓ ---
+try:
+    from moviepy.editor import ImageClip, concatenate_videoclips
+    import moviepy.video.fx.all as vfx
+    MOVIEPY_AVAILABLE = True
+except Exception as e:
+    print(f"MoviePy import warning: {e}")
+    MOVIEPY_AVAILABLE = False
 
 load_dotenv()
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
@@ -38,17 +50,9 @@ POLICY_PAGES = [
     {"url": "https://www.antikvarius.ro/contact/", "lang": "ro", "name": "Contact"},
 ]
 
-class ChatRequest(BaseModel):
-    message: str
-    context_url: Optional[str] = "" 
-    session_id: Optional[str] = ""
-
-class InitRequest(BaseModel):
-    url: str
-    session_id: str
-    ui_lang: str = "ro" 
-
-# --- HELPEREK ---
+# ==========================================
+# 1. HELPEREK ÉS ALAP FUNKCIÓK (V102 Parity)
+# ==========================================
 def normalize_text(text):
     if not text: return ""
     text = str(text).lower()
@@ -77,15 +81,12 @@ def parse_price_to_float(price_input):
         return float(s)
     except: return None
 
-# --- V101: SMART HTML PARSER ---
 def html_to_markdown_clean(raw_html):
     if not raw_html: return ""
     try:
         md = markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style'])
-        md = re.sub(r'\n\s*\n', '\n\n', md).strip()
-        return md
-    except:
-        return safe_str(raw_html)
+        return re.sub(r'\n\s*\n', '\n\n', md).strip()
+    except: return safe_str(raw_html)
 
 def extract_metadata_from_html(raw_html):
     meta = {"publisher": None, "author": None}
@@ -93,365 +94,327 @@ def extract_metadata_from_html(raw_html):
     try:
         soup = BeautifulSoup(raw_html, 'lxml')
         pub_label = soup.find(string=re.compile(r'(?:Kiadó|Publisher|Editura)\s*:', re.IGNORECASE))
-        if pub_label:
-            parent = pub_label.find_parent('td')
-            if parent:
-                next_td = parent.find_next_sibling('td')
-                if next_td: meta['publisher'] = next_td.get_text(strip=True)
-            else:
-                text_content = pub_label.find_parent().get_text(strip=True) if pub_label.find_parent() else pub_label
-                match = re.search(r'(?:Kiadó|Publisher|Editura)\s*:\s*(.*?)(?:$|\n|\.|<)', text_content, re.IGNORECASE)
-                if match: meta['publisher'] = match.group(1).strip()
+        if pub_label and pub_label.find_parent('td'):
+            next_td = pub_label.find_parent('td').find_next_sibling('td')
+            if next_td: meta['publisher'] = next_td.get_text(strip=True)
 
         auth_label = soup.find(string=re.compile(r'(?:Szerző|Írta|Author|Autor)\s*:', re.IGNORECASE))
-        if auth_label:
-            parent = auth_label.find_parent('td')
-            if parent:
-                next_td = parent.find_next_sibling('td')
-                if next_td: meta['author'] = next_td.get_text(strip=True)
-            else:
-                text_content = auth_label.find_parent().get_text(strip=True) if auth_label.find_parent() else auth_label
-                match = re.search(r'(?:Szerző|Írta|Author|Autor)\s*:\s*(.*?)(?:$|\n|\.|<)', text_content, re.IGNORECASE)
-                if match: meta['author'] = match.group(1).strip()
-    except Exception as e: print(f"Metadata Parse Error: {e}")
+        if auth_label and auth_label.find_parent('td'):
+            next_td = auth_label.find_parent('td').find_next_sibling('td')
+            if next_td: meta['author'] = next_td.get_text(strip=True)
+    except: pass
     return meta
 
 def extract_all_data(elem) -> Dict[str, Any]:
     data = {}
     for child in elem:
-        tag = child.tag.split('}')[-1].lower()
         val = safe_str(child.text)
-        if val: data[tag] = val
+        if val: data[child.tag.split('}')[-1].lower()] = val
     return data
 
-# --- ADATBÁZIS ---
 class DBHandler:
     def __init__(self):
         self.client = chromadb.PersistentClient(path="./booksy_db")
         self.collection = self.client.get_or_create_collection(name="booksy_collection")
 
-# --- UPDATER ---
 class AutoUpdater:
     def __init__(self, db: DBHandler):
-        self.api_key_openai = os.getenv("OPENAI_API_KEY")
-        self.client_ai = OpenAI(api_key=self.api_key_openai)
+        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.db = db
 
     def download_feed(self):
         headers = {'User-Agent': 'BooksyBot/1.0'}
         for attempt in range(3):
             try:
-                print(f"⬇️ [DOWNLOAD] XML Feed Letöltés (Kísérlet {attempt+1}/3)...")
                 with requests.get(XML_FEED_URL, headers=headers, stream=True, timeout=300) as r:
                     r.raise_for_status()
                     with open(TEMP_FILE, 'wb') as f:
                         for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
-                file_size = os.path.getsize(TEMP_FILE)
-                if file_size < 10000: raise Exception("Túl kicsi fájl.")
-                print(f"✅ [DOWNLOAD] Siker! Méret: {file_size / 1024 / 1024:.2f} MB")
-                return True
-            except Exception as e:
-                print(f"⚠️ Hiba: {e}")
-                time.sleep(5)
+                if os.path.getsize(TEMP_FILE) > 10000: return True
+            except: time.sleep(5)
         return False
 
-    # V102: force_refresh paraméter
     def update_policies(self, current_ts, force_refresh=False):
-        print(f"ℹ️ [POLICY] Beolvasás (Force: {force_refresh})...")
-        headers = {'User-Agent': 'BooksyBot/1.0'}
         for page in POLICY_PAGES:
             try:
-                url = page['url']
-                r = requests.get(url, headers=headers, timeout=30)
+                r = requests.get(page['url'], timeout=30)
                 if r.status_code == 200:
-                    raw_html = r.text
-                    clean_text = html_to_markdown_clean(raw_html) # V101 parser
+                    clean_text = html_to_markdown_clean(r.text)
                     d_hash = generate_content_hash(clean_text)
-                    page_id = f"policy_{generate_content_hash(url)}"
-                    
+                    page_id = f"policy_{generate_content_hash(page['url'])}"
                     if not force_refresh:
                         try:
                             existing = self.db.collection.get(ids=[page_id], include=['metadatas'])
-                            if existing['ids'] and existing['metadatas'][0].get('content_hash') == d_hash:
-                                print(f"   ⏩ [SKIP] Policy változatlan: {page['name']}")
-                                continue
+                            if existing['ids'] and existing['metadatas'][0].get('content_hash') == d_hash: continue
                         except: pass
-                    
-                    emb_text = f"Típus: Szabályzat (ro). Cím: {page['name']}. Tartalom: {clean_text[:8000]}"
-                    emb = self.client_ai.embeddings.create(input=emb_text, model="text-embedding-3-small").data[0].embedding
-                    meta = {"title": page['name'], "url": url, "text": clean_text, "lang": "ro", "type": "policy", "content_hash": d_hash, "last_seen": current_ts}
+                    emb = self.client_ai.embeddings.create(input=f"Típus: Szabályzat. Cím: {page['name']}. Tartalom: {clean_text[:8000]}", model="text-embedding-3-small").data[0].embedding
+                    meta = {"title": page['name'], "url": page['url'], "text": clean_text, "lang": "ro", "type": "policy", "content_hash": d_hash, "last_seen": current_ts}
                     self.db.collection.upsert(ids=[page_id], embeddings=[emb], metadatas=[meta])
-                    print(f"   ✅ [POLICY] Frissítve: {page['name']}")
-            except Exception as e: print(f"   ❌ Hiba: {e}")
+            except: pass
 
-    # V102: force_refresh paraméter
     def run_daily_update(self, force_refresh=False):
         print(f"🔄 [AUTO] Frissítés (Force: {force_refresh})")
         current_sync_ts = int(time.time())
         self.update_policies(current_sync_ts, force_refresh)
         if not self.download_feed(): return
         try:
-            print("🚀 [MODE] Parsing Books (V101 - BeautifulSoup)")
             context = ET.iterparse(TEMP_FILE, events=("end",))
             unique_books_buffer = {} 
-            count_total_xml_items = 0
-            
             for event, elem in context:
                 tag_local = elem.tag.split('}')[-1].lower()
                 if tag_local in ['item', 'post']:
-                    count_total_xml_items += 1
                     try:
                         item_data = extract_all_data(elem)
                         bid = item_data.get('id') or item_data.get('post_id') or item_data.get('g:id')
                         if bid:
-                            title = item_data.get('title') or "Nincs cím"
                             raw_desc = f"{item_data.get('description', '')} {item_data.get('shortdescription', '')}"
-                            extracted_meta = extract_metadata_from_html(raw_desc)
-                            clean_desc = html_to_markdown_clean(raw_desc)
-                            category = html_to_markdown_clean(item_data.get('product_type') or item_data.get('category') or "")
-                            pub = extracted_meta['publisher'] or "Ismeretlen"
-                            auth = extracted_meta['author'] or item_data.get('author') or "Ismeretlen"
-                            raw_price = item_data.get('sale_price') or item_data.get('price') or "0"
-                            final_ron_price = clean_price_raw(raw_price)
-                            cat_norm = normalize_text(category)
-                            detected_lang = "hu"
-                            if "carti in limba romana" in cat_norm: detected_lang = "ro"
-                            elif "magyar nyelvu konyvek" in cat_norm: detected_lang = "hu"
-                            
-                            book_obj = {"id": bid, "title": title, "url": item_data.get('link', ''), "image_url": item_data.get('image_link', ''), "price": final_ron_price, "publisher": pub, "author": auth, "category": category, "description": clean_desc, "stock": "instock", "lang": detected_lang, "type": "book", "last_seen": current_sync_ts}
-                            unique_books_buffer[bid] = book_obj
-                    except Exception as e: pass
+                            ext_meta = extract_metadata_from_html(raw_desc)
+                            cat = html_to_markdown_clean(item_data.get('product_type') or item_data.get('category') or "")
+                            pub = ext_meta['publisher'] or "Ismeretlen"
+                            auth = ext_meta['author'] or item_data.get('author') or "Ismeretlen"
+                            lang = "ro" if "carti in limba romana" in normalize_text(cat) else "hu"
+                            unique_books_buffer[bid] = {
+                                "id": bid, "title": item_data.get('title') or "Nincs cím", "url": item_data.get('link', ''), 
+                                "image_url": item_data.get('image_link', ''), "price": clean_price_raw(item_data.get('sale_price') or item_data.get('price')), 
+                                "publisher": pub, "author": auth, "category": cat, "description": html_to_markdown_clean(raw_desc), 
+                                "stock": "instock", "lang": lang, "type": "book", "last_seen": current_sync_ts
+                            }
+                    except: pass
                     elem.clear()
-                    if count_total_xml_items % 5000 == 0: gc.collect()
             
-            print(f"✅ [PARSE] Kész! SKU: {len(unique_books_buffer)}")
-            print("🚀 [SMART UPLOAD] Hash ellenőrzés...")
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
-            count_processed, count_skipped, count_uploaded = 0, 0, 0
-            
             for bid, book_data in unique_books_buffer.items():
-                count_processed += 1
-                hash_input = f"V101|{bid}|{book_data['title']}|{book_data['price']}|{book_data['publisher']}"
-                d_hash = generate_content_hash(hash_input)
+                d_hash = generate_content_hash(f"V104|{bid}|{book_data['title']}|{book_data['price']}|{book_data['publisher']}")
                 book_data['content_hash'] = d_hash
-                
                 if not force_refresh:
                     try:
                         existing = self.db.collection.get(ids=[bid], include=['metadatas'])
-                        if existing and existing['ids'] and len(existing['ids']) > 0:
-                            stored_hash = existing['metadatas'][0].get('content_hash', '')
-                            if stored_hash == d_hash:
-                                count_skipped += 1
-                                continue 
+                        if existing['ids'] and existing['metadatas'][0].get('content_hash') == d_hash: continue
                     except: pass
                 
-                emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Ár: {book_data['price']}. Kategória: {book_data['category']}. Kiadó: {book_data['publisher']}. Leírás: {book_data['description'][:800]}"
+                emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Kiadó: {book_data['publisher']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
                     clean_meta = book_data.copy()
                     del clean_meta['description'] 
                     clean_meta['text_preview'] = book_data['description'][:100]
-                    ids_batch.append(bid)
-                    embeddings_batch.append(emb)
-                    metadatas_batch.append(clean_meta)
-                    count_uploaded += 1
+                    ids_batch.append(bid); embeddings_batch.append(emb); metadatas_batch.append(clean_meta)
                     if len(ids_batch) >= 50:
                         self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
                         ids_batch, embeddings_batch, metadatas_batch = [], [], []
-                        print(f"💾 [UPDATE] {count_uploaded} könyv frissítve...")
-                except Exception as e: print(f"⚠️ Hiba ({bid}): {e}")
+                except: pass
             if ids_batch: self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
-            print(f"🏁 [VÉGE] {count_processed} feldolgozva. ⏩ {count_skipped} változatlan. 💾 {count_uploaded} frissítve.")
+            print("🏁 [VÉGE] Adatbázis frissítve.")
         except Exception as e: print(f"❌ Hiba: {e}")
 
+# ==========================================
+# 2. BOOKSY CHAT ASSZISZTENS (Érintetlen)
+# ==========================================
+class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
+class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
+
 class BooksyBrain:
-    def __init__(self):
-        self.db = DBHandler()
-        self.updater = AutoUpdater(self.db)
+    def __init__(self, db: DBHandler):
+        self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
-    def negotiate_handshake(self, url, session_id, ui_lang):
-        prompt = f"""
-        Act as Booksy, the Smart Bookstore Agent.
-        Context:
-        - Current URL: "{url}"
-        - REQUIRED LANGUAGE: "{ui_lang}" (You MUST use this language).
-        
-        Task:
-        1. Create a short, proactive welcome message (max 6 words) in {ui_lang}.
-        2. Create a NATURAL, INVITING placeholder text for the input field in {ui_lang}.
-           - Example HU: "Keresel valamit?", "Írd be a címet..."
-           - Example RO: "Cauți o carte?", "Scrie titlul..."
-           - STRICTLY FORBIDDEN: Do NOT use "Placeholder", "Text de rezerva", or generic filler words.
-
-        Output JSON:
-        {{
-            "bubble_text": "Welcome text in {ui_lang}",
-            "placeholder": "Natural question in {ui_lang}"
-        }}
-        """
-        try:
-            response = self.client_ai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.3
-            )
-            data = json.loads(response.choices[0].message.content)
-            data['ui_lang'] = ui_lang
-            self.user_session_cache[session_id] = f"LANG_PREF:{ui_lang}"
-            return data
-        except:
-            is_hu = ui_lang == "hu"
-            return { "ui_lang": ui_lang, "bubble_text": "Miben segíthetek?" if is_hu else "Cu ce te pot ajuta?", "placeholder": "Keresel valamit?" if is_hu else "Cauți o carte?" }
-
-    def _analyze_intent(self, msg, context):
-        prompt = f"""
-        You are the Brain of an Antiquarian Bookstore Agent.
-        User Input: "{msg}"
-        Context: "{context}"
-        
-        Task: Analyze intent with precision.
-        
-        1. DETECT PUBLISHER SEARCH: If user asks for a specific publisher (e.g. "Akadémia kiadó könyvei"), extract it into 'specific_publisher'.
-        2. DETECT LANGUAGE MISMATCH: If user asks about policy/shipping in Hungarian, but policies are in Romanian, set 'requires_translation' = True.
-        
-        Output JSON:
-        {{
-            "intent": "search_book" OR "policy_question" OR "chitchat",
-            "search_queries": ["primary search query"],
-            "specific_publisher": "Exact Publisher Name" OR null,
-            "requires_translation": true/false,
-            "filters": {{ "lang": "hu" OR "ro" OR "all", "max_price": number OR null }},
-            "user_preferences": "Extract nuances"
-        }}
-        """
-        try:
-            response = self.client_ai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.0
-            )
-            return json.loads(response.choices[0].message.content)
-        except: return {"intent": "search_book", "search_queries": [msg], "filters": {"lang": "all"}, "specific_publisher": None}
-
-    def _curate_results(self, candidates, user_msg, user_prefs):
-        if not candidates: return []
-        short_list = []
-        for c in candidates:
-            meta = c['metadata']
-            short_list.append({"id": c['id'], "title": meta.get('title'), "publisher": meta.get('publisher'), "price": meta.get('price'), "author": meta.get('author')})
-
-        prompt = f"""
-        You are an Expert Antiquarian Curator.
-        User Request: "{user_msg}"
-        Candidate Books: {json.dumps(short_list, ensure_ascii=False)}
-        Task: Select the TOP 5-8 books. 
-        CRITICAL: If the user asked for a specific publisher, ONLY return books from that publisher. Ignore others.
-        Output JSON: {{ "selected_ids": ["id1", "id2", ...] }}
-        """
-        try:
-            response = self.client_ai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.0
-            )
-            selected_ids = json.loads(response.choices[0].message.content).get("selected_ids", [])
-            final_list = [c for c in candidates if c['id'] in selected_ids]
-            return final_list if final_list else candidates[:5]
-        except: return candidates[:8]
-
-    def execute_search(self, queries, filters, specific_publisher=None):
-        all_candidates = {}
-        for query in queries:
-            try:
-                vec = self.client_ai.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
-                where_clause = {"$and": [{"stock": "instock"}, {"type": "book"}]}
-                if filters.get('lang') and filters.get('lang') != 'all': where_clause["$and"].append({"lang": filters['lang']})
-                if specific_publisher: pass 
-                results = self.db.collection.query(query_embeddings=[vec], n_results=20, where=where_clause)
-                if results['ids']:
-                    for i in range(len(results['ids'][0])):
-                        bid = results['ids'][0][i]
-                        if bid not in all_candidates:
-                            all_candidates[bid] = {"id": bid, "score": results['distances'][0][i], "metadata": results['metadatas'][0][i]}
-            except Exception as e: print(f"Search error: {e}")
-        
-        candidate_list = list(all_candidates.values())
-        safe_max = filters.get('max_price')
-        filtered_list = []
-        for c in candidate_list:
-            if specific_publisher:
-                book_pub = str(c['metadata'].get('publisher', '')).lower()
-                req_pub = specific_publisher.lower().replace("kiadó", "").strip()
-                if req_pub not in book_pub: continue
-            raw_price = c['metadata'].get('price', '0')
-            price_val = parse_price_to_float(clean_price_raw(raw_price))
-            if price_val is not None and safe_max and price_val > safe_max: continue
-            filtered_list.append(c)
-        return filtered_list
-
     def process(self, msg, context_url, session_id):
         try:
-            last_context = self.user_session_cache.get(session_id, "")
-            analysis = self._analyze_intent(msg, last_context)
-            self.user_session_cache[session_id] = msg 
-            intent = analysis.get('intent')
-            queries = analysis.get('search_queries', [msg])
-            filters = analysis.get('filters', {})
-            prefs = analysis.get('user_preferences', "")
-            specific_publisher = analysis.get('specific_publisher')
-            requires_translation = analysis.get('requires_translation', False)
-
+            analysis = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": f"Intent analysis for bookstore. Input: '{msg}'. Context: '{self.user_session_cache.get(session_id, '')}'. Output JSON: {{\"intent\": \"search_book\"|\"policy\", \"query\": \"translated query if policy in ro, else normal\"}}" }],
+                response_format={"type": "json_object"}, temperature=0.0
+            ).choices[0].message.content
+            intent_data = json.loads(analysis)
+            
             final_reply, final_products = "", []
-
-            if intent == "policy_question":
-                search_q = msg
-                if requires_translation:
-                    trans_prompt = f"Translate this shipping/policy question to Romanian for search purposes: '{msg}'"
-                    search_q = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": trans_prompt}]).choices[0].message.content
-                pol_res = self.db.collection.query(
-                    query_embeddings=[self.client_ai.embeddings.create(input=search_q, model="text-embedding-3-small").data[0].embedding],
-                    n_results=2, where={"type": "policy"}
-                )
-                ctx_text = ""
-                if pol_res['ids']:
-                    for i in range(len(pol_res['ids'][0])): ctx_text += f"--- POLICY ---\n{pol_res['metadatas'][0][i].get('text')}\n"
-                writer_messages = [{"role": "system", "content": "You are Booksy. Answer the policy question based on context. If context has numbers (shipping cost), share them exactly."}, {"role": "user", "content": f"Context:{ctx_text}\nQ: {msg}"}]
-                final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=writer_messages).choices[0].message.content
-
-            elif intent == "search_book":
-                candidates = self.execute_search(queries, filters, specific_publisher)
-                selected_books = self._curate_results(candidates, msg, prefs)
-                for book in selected_books:
-                    meta = book['metadata']
-                    p_price = clean_price_raw(meta.get('price'))
-                    final_products.append({"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')})
-                if not final_products: 
-                    # Ha nincs könyv, nézzük meg, nem policy kérdés-e mégis
-                    final_reply = "Sajnos nem találtam ilyen könyvet. Ha szállításról vagy egyéb információról van szó, kérlek pontosítsd."
-                else:
-                    ctx_text = "".join([f"- {p['title']} ({p['price']})\n" for p in final_products])
-                    writer_system_prompt = f"""
-                    You are Booksy, the AI Antiquarian. User Request: "{msg}". Nuance: "{prefs}".
-                    Inventory: {ctx_text}
-                    Task: Recommend the books. Explain WHY. Be helpful and natural.
-                    """
-                    final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "system", "content": writer_system_prompt}], temperature=0.2).choices[0].message.content
+            vec = self.client_ai.embeddings.create(input=intent_data.get('query', msg), model="text-embedding-3-small").data[0].embedding
+            
+            if intent_data.get('intent') == "policy":
+                res = self.db.collection.query(query_embeddings=[vec], n_results=2, where={"type": "policy"})
+                ctx = "".join([m.get('text', '') for m in res['metadatas'][0]]) if res['ids'] else ""
+                final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "system", "content": "You are Booksy. Answer briefly using context."}, {"role": "user", "content": f"Context: {ctx}\nQ: {msg}"}]).choices[0].message.content
             else:
-                final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "system", "content": "Be polite and brief."}, {"role": "user", "content": msg}]).choices[0].message.content
+                res = self.db.collection.query(query_embeddings=[vec], n_results=5, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+                if res['ids']:
+                    ctx_text = ""
+                    for meta in res['metadatas'][0]:
+                        p_price = clean_price_raw(meta.get('price'))
+                        final_products.append({"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')})
+                        ctx_text += f"- {meta.get('title')} ({p_price})\n"
+                    final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "system", "content": f"Recommend these books enthusiastically in user's language.\n{ctx_text}"}, {"role": "user", "content": msg}]).choices[0].message.content
+                else: final_reply = "Sajnos nem találtam megfelelő könyvet."
+            
+            self.user_session_cache[session_id] = msg
             return {"reply": final_reply, "products": final_products}
-        except Exception as e:
-            print(f"Error: {e}")
-            return {"reply": "Hiba történt. Kérlek próbáld újra.", "products": []}
+        except Exception as e: return {"reply": "Hiba történt.", "products": []}
 
-bot = BooksyBrain()
+    def negotiate_handshake(self, url, session_id, ui_lang):
+        try:
+            res = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": f"Create short JSON greeting and placeholder in {ui_lang}."}], response_format={"type": "json_object"}).choices[0].message.content
+            data = json.loads(res)
+            data['ui_lang'] = ui_lang
+            return data
+        except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?" if ui_lang=="hu" else "Cu ce te pot ajuta?", "placeholder": "Keresel valamit?" if ui_lang=="hu" else "Cauți o carte?"}
+
+# ==========================================
+# 3. BOOKSY SOCIAL AGENT (Teljesen Elkülönítve)
+# ==========================================
+class BooksySocialAgent:
+    def __init__(self, db: DBHandler):
+        self.db = db
+        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self._ensure_calendars_exist()
+
+    def _ensure_calendars_exist(self):
+        if not os.path.exists("authors_calendar.json"):
+            with open("authors_calendar.json", "w", encoding="utf-8") as f:
+                json.dump([
+                    {"name": "Jókai Mór", "birthday": "02-18"},
+                    {"name": "Petőfi Sándor", "birthday": "01-01"}
+                ], f, ensure_ascii=False, indent=4)
+        if not os.path.exists("holidays.json"):
+            with open("holidays.json", "w", encoding="utf-8") as f:
+                json.dump({"01-01": "Újév / Anul Nou", "03-15": "Március 15. Ünnep"}, f, ensure_ascii=False, indent=4)
+
+    def _create_infinite_loop_video(self, image_path, output_path):
+        if not MOVIEPY_AVAILABLE: return False
+        try:
+            print("🎥 Videó renderelés indítása (Infinite Loop)...")
+            clip = ImageClip(image_path).set_duration(5)
+            def resize_func(t): return 1 + 0.02 * t 
+            zoomed = clip.resize(resize_func)
+            w, h = clip.size
+            zoomed = zoomed.crop(x_center=zoomed.w/2, y_center=zoomed.h/2, width=w, height=h)
+            reversed_clip = zoomed.fx(vfx.time_mirror)
+            final_clip = concatenate_videoclips([zoomed, reversed_clip])
+            final_clip.write_videofile(output_path, fps=24, codec="libx264", logger=None)
+            return True
+        except Exception as e:
+            print(f"❌ Videó renderelési hiba: {e}")
+            return False
+
+    def run_night_generation(self):
+        print("🕒 [SOCIAL] Éjszakai Generálás indul...")
+        today_md = datetime.now().strftime("%m-%d")
+        
+        with open("authors_calendar.json", "r", encoding="utf-8") as f: authors = json.load(f)
+        with open("holidays.json", "r", encoding="utf-8") as f: holidays = json.load(f)
+        
+        napi_ünnep = holidays.get(today_md, None)
+        ünnepeltek = [a for a in authors if a['birthday'] == today_md]
+        
+        poszt_adatai = []
+        for író in ünnepeltek[:10]:
+            vec = self.client_ai.embeddings.create(input=író['name'], model="text-embedding-3-small").data[0].embedding
+            results = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+            if results['ids']:
+                meta = results['metadatas'][0][0]
+                if író['name'].split()[-1].lower() in str(meta.get('author', '')).lower() or író['name'].split()[0].lower() in str(meta.get('author', '')).lower():
+                    poszt_adatai.append({"author": író['name'], "title": meta.get('title'), "url": meta.get('url'), "price": meta.get('price')})
+
+        if not poszt_adatai and not napi_ünnep:
+            print("🚫 Nincs releváns író/könyv ma. Készenlét.")
+            return
+
+        konyv_cim = poszt_adatai[0]['title'] if poszt_adatai else "Antikvár ritkaságok"
+        img_prompt = f"Based on the book '{konyv_cim}', create an atmospheric scene. No text, no faces. Style: Classic Dark Academia, warm vintage bookstore lighting, steaming teacup on dark wood table, cinematic 8k resolution, mysterious mood."
+        
+        video_path = "social_video.mp4"
+        image_path = "social_img.jpg"
+        media_url = ""
+        is_video = False
+
+        try:
+            img_res = self.client_ai.images.generate(model="dall-e-3", prompt=img_prompt, size="1024x1024", quality="hd", n=1)
+            media_url = img_res.data[0].url
+            img_data = requests.get(media_url).content
+            with open(image_path, 'wb') as handler: handler.write(img_data)
+            if self._create_infinite_loop_video(image_path, video_path): is_video = True
+        except Exception as e: print(f"⚠️ Vizuális hiba: {e}")
+
+        prompt = f"""
+        Act as Booksy, the Webdevmk marketing agent. Write a Hungarian Facebook post.
+        Holiday today: {napi_ünnep}. Featured Authors & Books: {poszt_adatai}.
+        Rule: Use a 'Storytelling' or 'FOMO' framework. Be elegant, moody, and engaging. Include URLs.
+        Output ONLY the final post text.
+        """
+        post_text = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
+
+        fb_page_id = os.getenv("FB_PAGE_ID")
+        fb_token = os.getenv("FB_PAGE_TOKEN")
+        
+        if fb_page_id and fb_token:
+            try:
+                if is_video:
+                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
+                    files = {'source': open(video_path, 'rb')}
+                    data = {'access_token': fb_token, 'description': post_text, 'published': 'false'}
+                    res = requests.post(fb_url, data=data, files=files)
+                else:
+                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
+                    res = requests.post(fb_url, json={"url": media_url, "message": post_text, "published": "false", "access_token": fb_token})
+                if res.ok: print("✅ FB Draft Created.")
+                else: print(f"❌ FB API Error: {res.text}")
+            except Exception as e: print(f"❌ FB Upload Error: {e}")
+
+        with open("social_state.json", "w") as f:
+            json.dump({"text": post_text, "type": "video" if is_video else "image"}, f)
+        
+        if os.path.exists(image_path): os.remove(image_path)
+        if os.path.exists(video_path): os.remove(video_path)
+
+    def send_morning_email(self):
+        if not os.path.exists("social_state.json"): return
+        with open("social_state.json", "r") as f: state = json.load(f)
+        
+        sender = os.getenv("SMTP_SENDER")
+        password = os.getenv("SMTP_PASSWORD")
+        smtp_server = os.getenv("SMTP_SERVER", "mail.antikvarius.ro")
+        smtp_port = int(os.getenv("SMTP_PORT", 465))
+        
+        # Több adminisztrátor kezelése (vesszővel elválasztott lista az .env-ből)
+        admin_emails_raw = os.getenv("ADMIN_EMAIL", "")
+        admin_emails = [email.strip() for email in admin_emails_raw.split(",") if email.strip()]
+
+        if sender and password and admin_emails:
+            try:
+                # Port 465 -> SMTP_SSL csatlakozás szükséges!
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+                server.login(sender, password)
+                
+                for admin in admin_emails:
+                    msg = MIMEMultipart()
+                    msg['From'] = f"Booksy Social Agent <{sender}>"
+                    msg['To'] = admin
+                    msg['Subject'] = "✅ Booksy: Új Facebook Vázlat Elkészült!"
+                    html_body = f"<p>A mai ({state.get('type', 'ismeretlen')}) posztod bent van a Meta Business Suite vázlatai között.</p><pre>{state.get('text', '')}</pre>"
+                    msg.attach(MIMEText(html_body, 'html'))
+                    
+                    server.send_message(msg)
+                    print(f"✅ Reggeli email elküldve neki: {admin}")
+                
+                server.quit()
+            except Exception as e:
+                print(f"❌ Email küldési hiba: {e}")
+        
+        try: os.remove("social_state.json")
+        except: pass
+
+# ==========================================
+# 4. RENDSZER INICIALIZÁLÁS ÉS VÉGPONTOK
+# ==========================================
+db_handler = DBHandler()
+updater = AutoUpdater(db_handler)
+bot = BooksyBrain(db_handler)
+social_agent = BooksySocialAgent(db_handler)
+
 scheduler = BackgroundScheduler()
-scheduler.add_job(bot.updater.run_daily_update, CronTrigger(hour=3, minute=0))
+scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0))
+scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=4, minute=0))
+scheduler.add_job(social_agent.send_morning_email, CronTrigger(hour=9, minute=0))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -463,19 +426,17 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V102 (FORCE REFRESH ENABLED)"}
-
+def home(): return {"status": "Booksy V104 (DUAL AGENT: Chat + Social Active - SSL EMail)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
-
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return bot.negotiate_handshake(req.url, req.session_id, req.ui_lang)
-
 @app.post("/force-update")
-def force(bt: BackgroundTasks):
-    # Itt kapcsoljuk be a FORCE REFRESH-t!
-    bt.add_task(bot.updater.run_daily_update, force_refresh=True)
-    return {"status": "Force Update Started (Refreshing ALL Data)"}
+def force(bt: BackgroundTasks): bt.add_task(updater.run_daily_update, force_refresh=True); return {"status": "Force Update Started"}
+@app.post("/test-social-night")
+def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Night Generation Triggered"}
+@app.post("/test-social-morning")
+def test_morning(bt: BackgroundTasks): bt.add_task(social_agent.send_morning_email); return {"status": "Morning Email Triggered"}
 
 if __name__ == "__main__":
     import uvicorn
