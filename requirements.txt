@@ -13,5 +13,5 @@ markdownify
 google-api-python-client
 moviepy==1.0.3
 imageio-ffmpeg
-Pillow==9.5.0
+Pillow
 pytz
