@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V124 (WIKIPEDIA RAG + STRICT ROMANIAN TIMEZONE FIX)
+# BOOKSY BRAIN - V125 (DYNAMIC DALL-E CONTEXT & EXPLICIT BIRTHDAY PROMPT)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -56,7 +56,7 @@ LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 
 POLICY_PAGES = [
     {"url": "https://www.antikvarius.ro/termeni-si-conditii-de-utilizare/", "lang": "ro", "name": "Termeni și condiții"},
-    {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Infolmații despre plată"},
+    {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Informații despre plată"},
     {"url": "https://www.antikvarius.ro/informatii-despre-livrare/", "lang": "ro", "name": "Informații despre livrare"},
     {"url": "https://www.antikvarius.ro/contact/", "lang": "ro", "name": "Contact"},
 ]
@@ -161,14 +161,14 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V124|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V125|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
                     clean_meta = book_data.copy()
                     del clean_meta['description'] 
-                    clean_meta['text_preview'] = book_data['description'][:100]
+                    clean_meta['text_preview'] = book_data['description'][:150] # Növeltük a DALL-E miatt
                     ids_batch.append(bid); embeddings_batch.append(emb); metadatas_batch.append(clean_meta)
                     if len(ids_batch) >= 50:
                         self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
@@ -226,15 +226,14 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V124 - WIKIPEDIA RAG + ROMANIAN TZ) ---
+# --- PURE AGENTIC SOCIAL AGENT (V125 - DYNAMIC DALL-E & BIRTHDAY FIX) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _fetch_wikipedia_births(self):
-        """Kimegy a Wikipédiára, és letölti a ROMÁN IDŐ (Bucharest) szerinti MAI valós születéseket."""
-        # Bukaresti idő lekérése
+        """Kimegy a Wikipédiára, és letölti a ROMÁN IDŐ szerinti MAI valós születéseket."""
         today = datetime.now(LOCAL_TZ)
         mm = today.strftime("%m")
         dd = today.strftime("%d")
@@ -267,7 +266,6 @@ class BooksySocialAgent:
             return []
 
     def _get_agentic_calendar(self):
-        # Bukaresti dátum szövegként
         today_local = datetime.now(LOCAL_TZ)
         today_str = today_local.strftime("%B %d")
         
@@ -346,7 +344,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V124)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V125)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -361,7 +359,12 @@ class BooksySocialAgent:
                     for i in range(len(results['ids'][0])):
                         meta = results['metadatas'][0][i]
                         if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
-                            poszt_adatai.append({"author": író['name'], "bio": író.get('bio', ''), "title": meta.get('title'), "url": meta.get('url'), "price": clean_price_raw(meta.get('price'))})
+                            # Kimentjük a text_preview-t a DALL-E-nek
+                            poszt_adatai.append({
+                                "author": író['name'], "bio": író.get('bio', ''), 
+                                "title": meta.get('title'), "url": meta.get('url'), 
+                                "price": clean_price_raw(meta.get('price')), "preview": meta.get('text_preview', '')
+                            })
                             break
 
         has_author_books = len(poszt_adatai) > 0
@@ -387,7 +390,10 @@ class BooksySocialAgent:
                 all_fallbacks = []
                 for i in range(len(fallback_res['ids'][0])):
                     f_meta = fallback_res['metadatas'][0][i]
-                    all_fallbacks.append({"author": f_meta.get('author', 'Ismeretlen'), "title": f_meta.get('title'), "url": f_meta.get('url'), "price": clean_price_raw(f_meta.get('price'))})
+                    all_fallbacks.append({
+                        "author": f_meta.get('author', 'Ismeretlen'), "title": f_meta.get('title'), 
+                        "url": f_meta.get('url'), "price": clean_price_raw(f_meta.get('price')), "preview": f_meta.get('text_preview', '')
+                    })
                 
                 selected_fallbacks = random.sample(all_fallbacks, min(3, len(all_fallbacks)))
                 fallback_adatai.extend(selected_fallbacks)
@@ -396,14 +402,17 @@ class BooksySocialAgent:
             print("❌ Raktár üres. Poszt megszakítva.")
             return
 
+        # DALL-E 3 DINAMIKUS TARTALOMVEZÉRELT PROMPT
         konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár ritkaságok")
-        img_prompt = f"Photorealistic and cinematic scene inspired by the book '{konyv_cim}'. Style: highly detailed realistic photography, lifelike, classic Dark Academia, warm vintage bookstore lighting, steaming tea on a dark wooden table. Shot on 35mm lens, 8k resolution, cinematic lighting, ultra-realistic. No text, no faces."
+        konyv_tartalom = poszt_adatai[0].get('preview', '') if has_author_books else (fallback_adatai[0].get('preview', '') if fallback_adatai else "Gyönyörű könyv")
+        
+        img_prompt = f"Create a photorealistic, cinematic conceptual scene inspired by the book '{konyv_cim}'. The specific content/mood of the book is: '{konyv_tartalom[:150]}'. Style: highly detailed realistic photography, atmospheric, lifelike, 8k resolution, cinematic lighting. Do NOT include any text, letters, or words in the image. Do NOT include visible human faces."
         
         video_path, image_path = "social_video.mp4", "social_img.jpg"
         media_url, is_video = "", False
 
         try:
-            print("🎨 DALL-E Kép generálása...")
+            print(f"🎨 DALL-E Kép generálása a '{konyv_cim}' tartalmából...")
             img_res = self.client_ai.images.generate(model="dall-e-3", prompt=img_prompt, size="1024x1024", quality="hd", n=1)
             media_url = img_res.data[0].url
             with open(image_path, 'wb') as f: f.write(requests.get(media_url).content)
@@ -419,9 +428,10 @@ class BooksySocialAgent:
         Act as Booksy, the CopySEO marketing agent. Write a Facebook post in Hungarian.
         Today is {datetime.now(LOCAL_TZ).strftime('%Y. %B %d.')} in Romania.
         Today's holiday (if any): {napi_ünnep if napi_ünnep else 'Nincs ünnep'}.
-        Celebrated book authors: {json.dumps(ünnepeltek, ensure_ascii=False)}.
+        Celebrated book authors born exactly on this day: {json.dumps(ünnepeltek, ensure_ascii=False)}.
 
-        CRITICAL RULE: If the list is empty, greeting only. If not empty, explicitly honor authors by name and bio.
+        CRITICAL RULE 1: If the 'celebrated authors' list is empty, greeting only.
+        CRITICAL RULE 2: If the list is NOT empty, you MUST explicitly state in the VERY FIRST SENTENCE that we are celebrating them because TODAY IS THEIR BIRTHDAY (ma ünneplik születésnapjukat / a mai napon születtek). Then honor them by name and bio. Do not just say "we celebrate them" without mentioning the birthday context.
         """
         
         if has_author_books:
@@ -506,7 +516,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V124 (STRICT BUCHAREST TIMEZONE)"}
+def home(): return {"status": "Booksy V125 (DYNAMIC DALL-E CONTEXT + EXPLICIT BIRTHDAY)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
