@@ -3,8 +3,8 @@ uvicorn
 pydantic
 requests
 python-dotenv
-openai
 anthropic
+google-generativeai
 chromadb
 pysqlite3-binary
 apscheduler
