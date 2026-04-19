@@ -264,4 +264,108 @@ class BooksySocialAgent:
         try:
             res = self.client_claude.messages.create(model="claude-sonnet-4-6", max_tokens=1000, temperature=0.0, messages=[{"role": "user", "content": prompt}])
             raw_json = res.content[0].text
-            if "
+            json_marker = "```json"
+            if json_marker in raw_json:
+                raw_json = raw_json.split(json_marker)[1].split("```")[0].strip()
+            return json.loads(raw_json)
+        except: return {"authors": []}
+
+    def _create_infinite_loop_video(self, image_path, output_path):
+        if not MOVIEPY_AVAILABLE: return False
+        try:
+            clip = ImageClip(image_path).resize(width=800)
+            def zoom(t): return 1 + 0.02 * t
+            zoomed = clip.resize(zoom)
+            cropped = zoomed.crop(x_center=clip.w/2, y_center=clip.h/2, width=clip.w, height=clip.h).set_duration(4)
+            final_clip = concatenate_videoclips([cropped, cropped.fx(vfx.time_mirror)])
+            final_clip.write_videofile(output_path, fps=15, codec="libx264", audio=False, logger=None, threads=1, preset="ultrafast")
+            return True
+        except: return False
+
+    def send_morning_email(self):
+        if not os.path.exists("social_state.json"): return
+        with open("social_state.json", "r") as f: state = json.load(f)
+        try:
+            sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
+            admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
+            server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=15)
+            server.starttls(); server.login(sender, password)
+            for admin in admin_emails:
+                msg = MIMEMultipart()
+                msg['Subject'] = f"✅ Booksy Poszt Elkészült ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                msg.attach(MIMEText(f"<html><body><h3>Vázlat:</h3><pre>{state['text']}</pre></body></html>", 'html'))
+                server.send_message(msg)
+            server.quit()
+            os.remove("social_state.json")
+        except: pass
+
+    def run_night_generation(self):
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V153 - Paid Optimization)...")
+        calendar = self._get_agentic_calendar()
+        poszt_adatai = []
+        for író in calendar.get("authors", []):
+            vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=író['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+            res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+            if res['ids'] and res['ids'][0]:
+                meta = res['metadatas'][0][0]
+                if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
+                    poszt_adatai.append({"author": író['name'], "title": meta.get('title'), "url": meta.get('url'), "price": clean_price_raw(meta.get('price')), "preview": meta.get('text_preview', ''), "category": meta.get('category', '')})
+
+        target = poszt_adatai[0] if poszt_adatai else None
+        if not target: return
+        
+        # Kutató (Gemini) + Rendező (Claude) + Grafikus (Pollinations)
+        research = gemini_client.models.generate_content(model='gemini-1.5-flash', contents=f"Summary of {target['title']} by {target['author']}. Concise, visual. Respond in English.").text
+        prompt_img = self.client_claude.messages.create(model="claude-sonnet-4-6", max_tokens=300, temperature=0.7, messages=[{"role": "user", "content": f"Write Image Prompt based on: {research}. NO TEXT, NO FACES."}]).content[0].text
+        
+        image_path = "social_img.jpg"
+        with open(image_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_img)}?width=1024&height=1024&nologo=true").content)
+        video_path = "social_video.mp4"
+        is_video = self._create_infinite_loop_video(image_path, video_path)
+
+        post_text = self.client_claude.messages.create(model="claude-sonnet-4-6", max_tokens=1500, temperature=0.7, system="You are Booksy CopySEO.", messages=[{"role": "user", "content": f"Write FB post in HU about: {json.dumps(poszt_adatai)}"}]).content[0].text
+        with open("social_state.json", "w") as f: json.dump({"text": post_text}, f)
+
+        fb_page_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
+        if fb_page_id and fb_token:
+            if is_video:
+                requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
+            else:
+                requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/photos", data={"message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token}, files={'source': open(image_path, 'rb')})
+        
+        for p in [image_path, video_path]:
+            if os.path.exists(p): os.remove(p)
+        self.send_morning_email()
+
+db_handler = DBHandler()
+updater = AutoUpdater(db_handler)
+bot = BooksyBrain(db_handler)
+social_agent = BooksySocialAgent(db_handler)
+scheduler = BackgroundScheduler()
+scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
+scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=4, minute=0, timezone=LOCAL_TZ))
+scheduler.add_job(social_agent.send_morning_email, CronTrigger(hour=9, minute=0, timezone=LOCAL_TZ))
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.start(); yield; scheduler.shutdown()
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+@app.get("/")
+def home(): return {"status": "Booksy V153 (PAID TIER SPEED OPTIMIZED)"}
+@app.post("/chat")
+def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
+@app.post("/init-chat")
+def init_chat(req: InitRequest): return bot.negotiate_handshake(req.url, req.session_id, req.ui_lang)
+@app.post("/test-social-night")
+def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Triggered"}
+@app.post("/test-social-morning")
+def test_morning(bt: BackgroundTasks): bt.add_task(social_agent.send_morning_email); return {"status": "Triggered"}
+@app.post("/force-update")
+def force_update(bt: BackgroundTasks): bt.add_task(updater.run_daily_update); return {"status": "Full Throttle Sync Started"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
