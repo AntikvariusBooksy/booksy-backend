@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V129 (RESTORED CHAT ENDPOINTS & MULTI-PORT SMTP FIREWALL BYPASS)
+# BOOKSY BRAIN - V130 (CPANEL PORT 26 NON-SSL FIREWALL BYPASS)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -161,7 +161,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V129|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V130|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -176,7 +176,7 @@ class AutoUpdater:
                 except: pass
             if ids_batch: self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
-        except Exception as e: pass
+        except: pass
 
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
@@ -256,7 +256,6 @@ class BooksySocialAgent:
     def _get_agentic_calendar(self):
         today_local = datetime.now(LOCAL_TZ)
         today_str = today_local.strftime("%B %d")
-        print(f"🌍 [RAG] Csatlakozás a Wikipédiához a mai romániai ({today_str}) születésnapokért...")
         wiki_writers = self._fetch_wikipedia_births()
         wiki_text = json.dumps(wiki_writers[:25], ensure_ascii=False) if wiki_writers else "No valid Wikipedia data available for today."
         
@@ -290,7 +289,8 @@ class BooksySocialAgent:
         except: return False
 
     def send_morning_email(self):
-        print("📧 [EMAIL] Értesítő folyamat indul (V129 - Multi-Port Test)...")
+        """E-mail küldő modul - 26-os port fókusszal (Non-SSL)"""
+        print("📧 [EMAIL] Értesítő folyamat indul (V130 - Port 26 Non-SSL Bypass)...")
         if not os.path.exists("social_state.json"):
             print("⚠️ [EMAIL] Nincs elmentett poszt (social_state.json hiányzik).")
             return
@@ -304,26 +304,28 @@ class BooksySocialAgent:
             print("❌ [EMAIL] SMTP adatok hiányoznak!")
             return
 
-        # Végigpróbáljuk az összes lehetséges portot, hogy áttörjük a tűzfalat
+        # Sorrend: 1. Port 26 Non-SSL, 2. Port 26 STARTTLS, 3. Port 587, 4. Port 465
         ports_to_try = [
-            (465, True),   # SSL
-            (587, False),  # STARTTLS
-            (2525, False), # STARTTLS Bypass (Gyakori cPanel/Hosting kiskapu)
-            (25, False)    # STARTTLS (Alap port)
+            (26, "non-ssl"),
+            (26, "starttls"),
+            (587, "starttls"),
+            (465, "ssl")
         ]
         
         email_sent_successfully = False
 
-        for port, use_ssl in ports_to_try:
+        for port, encryption in ports_to_try:
             try:
-                print(f"🔗 [EMAIL] Próbálkozás a(z) {port} porton...")
-                if use_ssl:
+                print(f"🔗 [EMAIL] Próbálkozás a(z) {port} porton ({encryption})...")
+                
+                if encryption == "ssl":
                     server = smtplib.SMTP_SSL(server_addr, port, timeout=10)
                 else:
                     server = smtplib.SMTP(server_addr, port, timeout=10)
-                    server.ehlo()
-                    server.starttls()
-                    server.ehlo()
+                    if encryption == "starttls":
+                        server.ehlo()
+                        server.starttls()
+                        server.ehlo()
                 
                 server.login(sender, password)
                 
@@ -338,19 +340,19 @@ class BooksySocialAgent:
                 
                 server.quit()
                 email_sent_successfully = True
-                break # Ha sikerült, kilépünk a ciklusból
+                break
                 
             except Exception as e:
-                print(f"⚠️ [EMAIL] Port {port} sikertelen: {e}")
+                print(f"⚠️ [EMAIL] Port {port} ({encryption}) sikertelen: {e}")
 
         if email_sent_successfully:
             os.remove("social_state.json")
             print("🗑️ [EMAIL] social_state.json törölve.")
         else:
-            print("❌ [EMAIL] KRITIKUS HIBA: Minden port időtúllépésre vagy visszautasításra futott. A szervered (vagy a Railway) blokkolja a kimenő SMTP forgalmat.")
+            print("❌ [EMAIL] KRITIKUS HIBA: Minden port blokkolva. SMTP hívás sikertelen.")
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V129)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V130)...")
         calendar = self._get_agentic_calendar()
         napi_ünnep, ünnepeltek = calendar.get("holiday"), calendar.get("authors", [])
         
@@ -423,9 +425,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# VISSZAÁLLÍTOTT CHAT API VÉGPONTOK
 @app.get("/")
-def home(): return {"status": "Booksy V129 (ENDPOINTS RESTORED & SMTP MULTIPORT BYPASS)"}
+def home(): return {"status": "Booksy V130 (CPANEL NON-SSL 26 PORT BYPASS)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
