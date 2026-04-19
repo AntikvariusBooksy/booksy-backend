@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V158 (FINAL STABLE RESTORE - PART 1)
+# BOOKSY BRAIN - V159 (FIXED CLAUDE ID & STABLE SYNC - PART 1)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -50,8 +50,7 @@ def clean_price_raw(raw_price):
 
 def html_to_markdown_clean(raw_html):
     if not raw_html: return ""
-    try:
-        return markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style']).strip()
+    try: return markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style']).strip()
     except: return str(raw_html)
 
 class DBHandler:
@@ -68,6 +67,7 @@ class AutoUpdater:
     def download_feed(self):
         try:
             r = requests.get(XML_FEED_URL, stream=True, timeout=300)
+            r.raise_for_status()
             with open(TEMP_FILE, 'wb') as f:
                 for chunk in r.iter_content(8192): f.write(chunk)
             return True
@@ -90,7 +90,6 @@ class AutoUpdater:
                             "stock": "instock", "lang": "hu", "type": "book"
                         }
                     elem.clear()
-            
             ids, texts, metas = [], [], []
             for bid, b in unique_books.items():
                 ids.append(bid)
@@ -99,10 +98,13 @@ class AutoUpdater:
                 metas.append(m)
                 if len(ids) >= 100:
                     res = gemini_client.models.embed_content(model="gemini-embedding-001", contents=texts, config=types.EmbedContentConfig(output_dimensionality=768))
-                    self.db.collection.upsert(ids=ids, embeddings=[e.values for e in result.embeddings if hasattr(e, 'values')] if hasattr(res, 'embeddings') else [e for e in res.embeddings], metadatas=metas)
+                    self.db.collection.upsert(ids=ids, embeddings=[e.values for e in res.embeddings], metadatas=metas)
                     ids, texts, metas = [], [], []
                     time.sleep(2.5)
-            print("✅ Kész.")
+            if ids:
+                res = gemini_client.models.embed_content(model="gemini-embedding-001", contents=texts, config=types.EmbedContentConfig(output_dimensionality=768))
+                self.db.collection.upsert(ids=ids, embeddings=[e.values for e in res.embeddings], metadatas=metas)
+            print("✅ Szinkronizálás kész.")
         except Exception as e: print(f"Update hiba: {e}")
 class BooksyBrain:
     def __init__(self, db: DBHandler):
@@ -113,7 +115,6 @@ class BooksyBrain:
         try:
             vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=msg, config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
             res = self.db.collection.query(query_embeddings=[vec], n_results=5, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-            
             ctx_text = ""
             products = []
             if res['ids'] and res['ids'][0]:
@@ -122,19 +123,18 @@ class BooksyBrain:
                     ctx_text += f"- {m['title']} ({m['price']})\n"
             
             r = self.claude.messages.create(
-                model="claude-3-5-sonnet-latest",
+                model="claude-3-5-sonnet-20241022",
                 max_tokens=1000,
                 system="You are Booksy, the helpful Hungarian bookstore assistant. Recommend books warmly.",
-                messages=[{"role": "user", "content": f"Books found:\n{ctx_text}\nUser: {msg}"}]
+                messages=[{"role": "user", "content": f"Books found:\n{ctx_text}\nUser asks: {msg}"}]
             )
             return {"reply": r.content[0].text, "products": products}
         except Exception as e:
-            print(f"Chat hiba: {e}")
+            print(f"❌ Chat hiba: {e}")
             return {"reply": "Sajnos hiba történt a keresésnél.", "products": []}
 
     def negotiate_handshake(self, url, session_id, ui_lang):
         return {"ui_lang": ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
-
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -146,18 +146,17 @@ class BooksySocialAgent:
             vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="érdekes antikvár könyv", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
             res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"type": "book"})
             if not res['ids'] or not res['ids'][0]: return
-            
             target = res['metadatas'][0][0]
             post_text = self.claude.messages.create(
-                model="claude-3-5-sonnet-latest",
+                model="claude-3-5-sonnet-20241022",
                 max_tokens=1000,
-                system="You are Booksy CopySEO expert. Write a compelling HU Facebook post.",
-                messages=[{"role": "user", "content": f"Book: {target['title']} by {target.get('author')}. URL: {target['url']}"}]
+                system="You are Booksy CopySEO expert. Write a compelling Hungarian Facebook post.",
+                messages=[{"role": "user", "content": f"Recommend this book: {target['title']} by {target.get('author')}. URL: {target['url']}"}]
             ).content[0].text
-            
             with open("social_state.json", "w") as f: json.dump({"text": post_text}, f)
             print("✅ Social post vázlat kész.")
-        except Exception as e: print(f"Social hiba: {e}")
+        except Exception as e: print(f"❌ Social hiba: {e}")
+
 updater = AutoUpdater(db_handler)
 bot = BooksyBrain(db_handler)
 social_agent = BooksySocialAgent(db_handler)
@@ -174,13 +173,13 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
 
 @app.get("/")
-def home(): return {"status": "Booksy V158 Full Online"}
+def home(): return {"status": "Booksy V159 Online"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return bot.negotiate_handshake(req.url, req.session_id, req.ui_lang)
 @app.post("/force-update")
-def force_update(bt: BackgroundTasks): bt.add_task(updater.run_daily_update); return {"status": "Update Started"}
+def force_update(bt: BackgroundTasks): bt.add_task(updater.run_daily_update); return {"status": "Started"}
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Social Triggered"}
 
