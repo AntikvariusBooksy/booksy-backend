@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V122 (WIKIPEDIA GROUNDED RAG AGENT - 100% FACTUAL)
+# BOOKSY BRAIN - V124 (WIKIPEDIA RAG + STRICT ROMANIAN TIMEZONE FIX)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -15,6 +15,7 @@ import html
 import xml.etree.ElementTree as ET
 import gc
 import chromadb
+import pytz
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -50,9 +51,12 @@ load_dotenv()
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 TEMP_FILE = "temp_feed.xml"
 
+# --- HIVATALOS ROMÁNIAI IDŐZÓNA BEÁLLÍTÁSA ---
+LOCAL_TZ = pytz.timezone('Europe/Bucharest')
+
 POLICY_PAGES = [
     {"url": "https://www.antikvarius.ro/termeni-si-conditii-de-utilizare/", "lang": "ro", "name": "Termeni și condiții"},
-    {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Informații despre plată"},
+    {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Infolmații despre plată"},
     {"url": "https://www.antikvarius.ro/informatii-despre-livrare/", "lang": "ro", "name": "Informații despre livrare"},
     {"url": "https://www.antikvarius.ro/contact/", "lang": "ro", "name": "Contact"},
 ]
@@ -157,7 +161,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V122|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V124|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -222,15 +226,16 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V122 - WIKIPEDIA RAG) ---
+# --- PURE AGENTIC SOCIAL AGENT (V124 - WIKIPEDIA RAG + ROMANIAN TZ) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _fetch_wikipedia_births(self):
-        """Kimegy a Wikipédiára, és letölti a MAI valós születéseket."""
-        today = datetime.now()
+        """Kimegy a Wikipédiára, és letölti a ROMÁN IDŐ (Bucharest) szerinti MAI valós születéseket."""
+        # Bukaresti idő lekérése
+        today = datetime.now(LOCAL_TZ)
         mm = today.strftime("%m")
         dd = today.strftime("%d")
         url = f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{mm}/{dd}"
@@ -243,14 +248,12 @@ class BooksySocialAgent:
                 verified_writers = []
                 writer_keywords = ['writer', 'author', 'novelist', 'poet', 'playwright', 'essayist', 'literature']
                 
-                # Szűrjük ki az írókat a Wikipedia adatokból
                 for person in births:
                     text = person.get('text', '').lower()
                     pages = person.get('pages', [])
                     desc = (pages[0].get('extract', '').lower() + " " + pages[0].get('description', '').lower()) if pages else ""
                     combined = text + " " + desc
                     
-                    # Ha író, de NEM színész és NEM zeneszerző
                     if any(kw in combined for kw in writer_keywords) and 'actor' not in combined and 'composer' not in combined:
                         verified_writers.append({
                             "name": person.get('text', '').split(',')[0],
@@ -264,23 +267,22 @@ class BooksySocialAgent:
             return []
 
     def _get_agentic_calendar(self):
-        today_str = datetime.now().strftime("%B %d")
+        # Bukaresti dátum szövegként
+        today_local = datetime.now(LOCAL_TZ)
+        today_str = today_local.strftime("%B %d")
         
-        # 1. LÉPÉS: Tények letöltése a Wikipédiáról
-        print("🌍 [RAG] Csatlakozás a Wikipédiához a mai születésnapokért...")
+        print(f"🌍 [RAG] Csatlakozás a Wikipédiához a mai romániai ({today_str}) születésnapokért...")
         wiki_writers = self._fetch_wikipedia_births()
         
         if not wiki_writers:
-            print("⚠️ A Wikipedia nem adott vissza adatot, az AI saját tudására támaszkodunk.")
-            wiki_text = "No Wikipedia data available. Rely strictly on your internal knowledge for today."
+            print("⚠️ A Wikipedia nem adott vissza adatot.")
+            wiki_text = "No Wikipedia data available for today."
         else:
-            print(f"✅ A Wikipedia {len(wiki_writers)} valódi írót talált a mai napra.")
-            # Csak az első 30-at küldjük át, hogy ne terheljük túl az AI-t
+            print(f"✅ A Wikipedia {len(wiki_writers)} valódi írót talált a mai napra ({today_str}).")
             wiki_text = json.dumps(wiki_writers[:30], ensure_ascii=False)
 
-        # 2. LÉPÉS: Az AI csak a Wikipédia adatait fordíthatja
         prompt = f"""
-        Today's exact date is {today_str}.
+        Today's exact local date in Bucharest, Romania is {today_str}.
         You are a factual literary editor. You MUST NOT invent any birthdates.
         
         Here is the FACTUAL, verified list of writers born exactly on {today_str}, downloaded directly from Wikipedia:
@@ -288,11 +290,11 @@ class BooksySocialAgent:
 
         YOUR TASK:
         1. Select between 4 to 10 prominent authors ONLY FROM THE PROVIDED WIKIPEDIA LIST.
-        2. Format Hungarian and Romanian names correctly (Lastname Firstname for Hungarians).
-        3. Translate and summarize their Wikipedia bio into a 1-sentence Hungarian tribute focusing on their books.
-        4. Identify if there is any major holiday in Romania or Hungary today.
+        2. Format Hungarian names correctly (Lastname Firstname, e.g., Németh László).
+        3. Translate and summarize their Wikipedia bio into a 1-sentence Hungarian tribute.
+        4. Identify major holidays in Romania or Hungary today.
 
-        CRITICAL: DO NOT add anyone who is not in the Wikipedia list above. If the list is empty or you can't find good writers in it, output an empty authors array []. Factual truth is absolute.
+        CRITICAL: DO NOT add anyone not in the list. Output [] if list is empty.
 
         Output ONLY a JSON:
         {{
@@ -307,10 +309,10 @@ class BooksySocialAgent:
                 model="gpt-4o", 
                 messages=[{"role": "user", "content": prompt}], 
                 response_format={"type": "json_object"},
-                temperature=0.0 # ZÉRÓ hallucináció
+                temperature=0.0
             ).choices[0].message.content
             data = json.loads(res)
-            print(f"📚 [AI Naptár - WIKIPEDIA ALAPÚ] Generált lista: {json.dumps(data.get('authors', []), ensure_ascii=False)}")
+            print(f"📚 [AI Naptár] Generált lista Románia ({today_str}) szerint: {json.dumps(data.get('authors', []), ensure_ascii=False)}")
             return data
         except Exception as e: 
             print(f"❌ Naptár API hiba: {e}")
@@ -344,7 +346,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V122)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V124)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -376,7 +378,7 @@ class BooksySocialAgent:
                 "művészeti albumok és könyvritkaságok"
             ]
             selected_theme = random.choice(themes)
-            print(f"⚠️ Nincs raktáron könyv a mai íróktól (vagy nem volt mai író). Kincskereső bekapcsolva. Téma: {selected_theme}")
+            print(f"⚠️ Nincs raktáron könyv. Kincskereső bekapcsolva. Téma: {selected_theme}")
             
             vec = self.client_ai.embeddings.create(input=selected_theme, model="text-embedding-3-small").data[0].embedding
             fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=15, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
@@ -391,11 +393,11 @@ class BooksySocialAgent:
                 fallback_adatai.extend(selected_fallbacks)
 
         if not has_author_books and not fallback_adatai:
-            print("❌ Raktár teljesen üres, nincs mit ajánlani. Poszt megszakítva.")
+            print("❌ Raktár üres. Poszt megszakítva.")
             return
 
         konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár ritkaságok")
-        img_prompt = f"Photorealistic and cinematic scene inspired by the book '{konyv_cim}'. Style: highly detailed realistic photography, lifelike, classic Dark Academia, warm vintage bookstore lighting, steaming tea on a dark wooden table. Shot on 35mm lens, 8k resolution, cinematic lighting, ultra-realistic. Do NOT make it dreamy or surreal. No text, no faces."
+        img_prompt = f"Photorealistic and cinematic scene inspired by the book '{konyv_cim}'. Style: highly detailed realistic photography, lifelike, classic Dark Academia, warm vintage bookstore lighting, steaming tea on a dark wooden table. Shot on 35mm lens, 8k resolution, cinematic lighting, ultra-realistic. No text, no faces."
         
         video_path, image_path = "social_video.mp4", "social_img.jpg"
         media_url, is_video = "", False
@@ -409,25 +411,25 @@ class BooksySocialAgent:
             if self._create_infinite_loop_video(image_path, video_path): 
                 is_video = True
             else:
-                print("⚠️ Videó készítése sikertelen, statikus képet töltünk fel.")
+                print("⚠️ Videó hiba, statikus képet használunk.")
         except Exception as e: 
             print(f"❌ Képgenerálási hiba: {e}")
 
         marketing_prompt = f"""
         Act as Booksy, the CopySEO marketing agent. Write a Facebook post in Hungarian.
+        Today is {datetime.now(LOCAL_TZ).strftime('%Y. %B %d.')} in Romania.
         Today's holiday (if any): {napi_ünnep if napi_ünnep else 'Nincs ünnep'}.
-        Today's celebrated, Wikipedia-verified printed book authors and their bios: {json.dumps(ünnepeltek, ensure_ascii=False)}.
+        Celebrated book authors: {json.dumps(ünnepeltek, ensure_ascii=False)}.
 
-        CRITICAL RULE 1: If the 'celebrated authors' list is empty, DO NOT say "ünnepeljük a mai szerzőket". Just greet the readers and directly recommend the books below.
-        CRITICAL RULE 2: If the list is NOT empty, you MUST explicitly write out their names and bios exactly as provided to honor them.
+        CRITICAL RULE: If the list is empty, greeting only. If not empty, explicitly honor authors by name and bio.
         """
         
         if has_author_books:
-            marketing_prompt += f"\nCRITICAL RULE 3 (RECOMMENDATIONS): We HAVE books from these authors in stock. Recommend these specific books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
+            marketing_prompt += f"\nRecommend specific books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
         else:
-            marketing_prompt += f"\nCRITICAL RULE 3 (FALLBACK RECOMMENDATIONS): Unfortunately, we do NOT have books from these celebrated authors in stock. Transition gracefully (e.g., 'Sajnos a mai ünnepelt szerzőinktől jelenleg minden példányunk gazdára talált, de...'), and highly recommend these other printed literary and non-fiction treasures instead: {json.dumps(fallback_adatai, ensure_ascii=False)}."
+            marketing_prompt += f"\nFallback recommendation: {json.dumps(fallback_adatai, ensure_ascii=False)}."
 
-        marketing_prompt += "\nCRITICAL RULE 4: Use an elegant, engaging, and marketing-savvy style. Use the exact URLs provided for the recommended books."
+        marketing_prompt += "\nRule: Elegant style, use the exact URLs provided."
         
         post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
 
@@ -440,31 +442,19 @@ class BooksySocialAgent:
                 if is_video:
                     fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
                     files = {'source': open(video_path, 'rb')}
-                    data = {
-                        'access_token': fb_token, 
-                        'description': post_text, 
-                        'published': 'false',
-                        'unpublished_content_type': 'DRAFT'
-                    }
+                    data = {'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
                     res = requests.post(fb_url, data=data, files=files)
                 else:
                     fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
-                    payload = {
-                        "url": media_url, 
-                        "message": post_text, 
-                        "published": False,
-                        "unpublished_content_type": "DRAFT",
-                        "access_token": fb_token
-                    }
+                    payload = {"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token}
                     res = requests.post(fb_url, json=payload)
                 
                 if res.status_code == 200:
-                    print(f"✅ TÖKÉLETES SIKER! A vázlat bekerült a Business Suite-ba. (ID: {res.json().get('id')})")
+                    print(f"✅ TÖKÉLETES SIKER! (ID: {res.json().get('id')})")
                 else:
-                    print(f"❌ Vázlat posztolási hiba! Válaszkód: {res.status_code}")
-                    print(f"❌ FB API Részletek: {res.text}")
+                    print(f"❌ FB API Hiba: {res.text}")
             except Exception as e: 
-                print(f"❌ FB Feltöltési kritikus hiba: {e}")
+                print(f"❌ Kritikus hiba: {e}")
 
         with open("social_state.json", "w") as f:
             json.dump({"text": post_text, "type": "video" if is_video else "image"}, f)
@@ -486,8 +476,8 @@ class BooksySocialAgent:
                 for admin in admin_emails:
                     msg = MIMEMultipart()
                     msg['From'] = f"Booksy Social Agent <{sender}>"; msg['To'] = admin
-                    msg['Subject'] = "✅ Booksy: Új Facebook Vázlat Elkészült!"
-                    msg.attach(MIMEText(f"<html><body><p>A mai poszt elkészült:</p><pre>{state['text']}</pre></body></html>", 'html'))
+                    msg['Subject'] = f"✅ Booksy: Facebook Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                    msg.attach(MIMEText(f"<html><body><p>A mai romániai idő szerinti poszt elkészült:</p><pre>{state['text']}</pre></body></html>", 'html'))
                     server.send_message(msg)
                 server.quit()
             except Exception as e: print(f"❌ Email hiba: {e}")
@@ -501,9 +491,10 @@ bot = BooksyBrain(db_handler)
 social_agent = BooksySocialAgent(db_handler)
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0))
-scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=4, minute=0))
-scheduler.add_job(social_agent.send_morning_email, CronTrigger(hour=9, minute=0))
+# A scheduler is a romániai időt használja a munkák indításához!
+scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
+scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=4, minute=0, timezone=LOCAL_TZ))
+scheduler.add_job(social_agent.send_morning_email, CronTrigger(hour=9, minute=0, timezone=LOCAL_TZ))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -515,7 +506,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V122 (WIKIPEDIA GROUNDED RAG AGENT)"}
+def home(): return {"status": "Booksy V124 (STRICT BUCHAREST TIMEZONE)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
