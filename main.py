@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V151 (GEMINI-EMBEDDING-001 UPDATE + CLAUDE 4.6)
+# BOOKSY BRAIN - V152 (GEMINI RATE LIMIT FIX & PROGRESS TRACKING)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# Új hivatalos Google SDK import
+# Hivatalos Google SDK import
 from google import genai
 from google.genai import types
 import anthropic 
@@ -108,7 +108,6 @@ def extract_all_data(elem) -> Dict[str, Any]:
 class DBHandler:
     def __init__(self):
         self.client = chromadb.PersistentClient(path="./booksy_db")
-        # Új V2 kollekció a tiszta induláshoz
         self.collection = self.client.get_or_create_collection(name="booksy_collection_gemini_v2")
 
 class AutoUpdater:
@@ -153,7 +152,12 @@ class AutoUpdater:
                     except: pass
                     elem.clear()
             
+            total_books = len(unique_books_buffer)
+            processed_books = 0
             ids_batch, emb_texts_batch, metadatas_batch = [], [], []
+            
+            print(f"📚 Összesen {total_books} könyv előkészítve vektorizálásra.")
+            
             for bid, book_data in unique_books_buffer.items():
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 clean_meta = book_data.copy()
@@ -164,7 +168,8 @@ class AutoUpdater:
                 emb_texts_batch.append(emb_text[:8000])
                 metadatas_batch.append(clean_meta)
                 
-                if len(ids_batch) >= 50:
+                # 100-as csomagok a sebesség és az RPM optimalizálás miatt
+                if len(ids_batch) >= 100:
                     try:
                         result = gemini_client.models.embed_content(
                             model="gemini-embedding-001", 
@@ -173,9 +178,14 @@ class AutoUpdater:
                         )
                         emb_values = [e.values for e in result.embeddings]
                         self.db.collection.upsert(ids=ids_batch, embeddings=emb_values, metadatas=metadatas_batch)
-                    except Exception as e: print(f"Hiba a Gemini embeddingnél: {e}")
+                        
+                        processed_books += len(ids_batch)
+                        print(f"⏳ [FOLYAMAT] {processed_books} / {total_books} könyv vektorizálva...")
+                    except Exception as e: 
+                        print(f"Hiba a Gemini embeddingnél: {e}")
+                    
                     ids_batch, emb_texts_batch, metadatas_batch = [], [], []
-                    time.sleep(1) 
+                    time.sleep(3) # Kőkemény 3 másodperces fék a Google 100 RPM limitje ellen
             
             if ids_batch: 
                 try:
@@ -186,11 +196,14 @@ class AutoUpdater:
                     )
                     emb_values = [e.values for e in result.embeddings]
                     self.db.collection.upsert(ids=ids_batch, embeddings=emb_values, metadatas=metadatas_batch)
+                    processed_books += len(ids_batch)
+                    print(f"⏳ [FOLYAMAT] {processed_books} / {total_books} könyv vektorizálva...")
                 except: pass
             
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
             print("✅ [FRISSÍTÉS] Kész. Gemini adatbázis naprakész.")
-        except Exception as e: pass
+        except Exception as e: 
+            print(f"❌ [FRISSÍTÉS HIBA]: {e}")
 
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
@@ -374,7 +387,7 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V151 - GEMINI-EMBEDDING-001)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V152 - GEMINI-EMBEDDING-001)...")
         calendar = self._get_agentic_calendar()
         ünnepeltek = calendar.get("authors", [])
         
@@ -515,7 +528,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V151 (GEMINI-EMBEDDING-001 MIGRATION)"}
+def home(): return {"status": "Booksy V152 (GEMINI EMBEDDING FIX & PROGRESS BARS)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
