@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V139 (ANTI-MARKDOWN URL FIX & STABLE CLAUDE ENGINE)
+# BOOKSY BRAIN - V142 (CLAUDE SONNET 4.6 ONLY & CLEAN ORIGINAL URLS)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -47,8 +47,9 @@ except Exception as e:
     MOVIEPY_AVAILABLE = False
 
 load_dotenv()
-# URL darabolás a Markdown auto-link elkerülésére
-XML_FEED_URL = os.getenv("XML_FEED_URL", "https://" + "www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
+
+# --- TISZTA, EREDETI URL-EK ---
+XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 TEMP_FILE = "temp_feed.xml"
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 
@@ -146,7 +147,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V139|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V142|{bid}|{book_data['title']}|{book_data['price']}")
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
@@ -217,7 +218,7 @@ class BooksySocialAgent:
     def _fetch_wikipedia_births(self):
         today = datetime.now(LOCAL_TZ)
         mm, dd = today.strftime("%m"), today.strftime("%d")
-        url = f"https://" + f"en.wikipedia.org/api/rest_v1/feed/onthisday/births/{mm}/{dd}"
+        url = f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{mm}/{dd}"
         headers = {'User-Agent': 'BooksyBot/1.0 (antikvarius.ro)'}
         try:
             response = requests.get(url, headers=headers, timeout=15)
@@ -263,7 +264,7 @@ class BooksySocialAgent:
         try:
             print("🧠 [CLAUDE] Naptár elemzése folyamatban...")
             res = self.client_claude.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-sonnet-4-6",
                 max_tokens=1000,
                 temperature=0.0,
                 messages=[{"role": "user", "content": prompt}]
@@ -312,7 +313,7 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V139 - URL FORMAT FIX)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V142 - CLAUDE 4.6 & CLEAN URLS)...")
         calendar = self._get_agentic_calendar()
         ünnepeltek = calendar.get("authors", [])
         
@@ -356,7 +357,7 @@ class BooksySocialAgent:
         try:
             print("🖋️ [CLAUDE] Szövegírás folyamatban...")
             post_res = self.client_claude.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-sonnet-4-6",
                 max_tokens=1500,
                 temperature=0.7,
                 messages=[{"role": "user", "content": marketing_prompt}]
@@ -374,21 +375,10 @@ class BooksySocialAgent:
         else:
             try:
                 print("🚀 [FB] Poszt küldése a Meta Business Suite-ba...")
-                
-                # Biztonságos URL összerakás, amit a chat nem alakít át hibás linkké
-                api_base = "https://" + "[graph.facebook.com/v19.0](https://graph.facebook.com/v19.0)"
-                
                 if is_video:
-                    res = requests.post(
-                        f"{api_base}/{fb_page_id}/videos", 
-                        data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, 
-                        files={'source': open(video_path, 'rb')}
-                    )
+                    res = requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
                 else:
-                    res = requests.post(
-                        f"{api_base}/{fb_page_id}/photos", 
-                        json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token}
-                    )
+                    res = requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
                 
                 if res.status_code == 200:
                     print(f"✅ [FB] TÖKÉLETES SIKER! FB ID: {res.json().get('id')}")
@@ -418,7 +408,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V139 (ANTI-MARKDOWN URL FIX)"}
+def home(): return {"status": "Booksy V142 (CLAUDE 4.6 + ORIGINAL URLS)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
