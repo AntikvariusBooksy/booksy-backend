@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V131 (ANTI-SPAM HEADERS & CPANEL PORT 26 OPTIMIZATION)
+# BOOKSY BRAIN - V133 (HYBRID ORCHESTRATION: CLAUDE 3.5 SONNET + OPENAI)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from openai import OpenAI
+import anthropic # ÚJ: Claude SDK
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from typing import List, Optional, Dict, Any
@@ -31,48 +32,39 @@ import markdownify
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import formatdate, make_msgid # ÚJ: Spam-ellenes fejlécekhez
+from email.utils import formatdate, make_msgid
 
 # --- KÖTELEZŐ MONKEY PATCH A PILLOW 10+ ÉS MOVIEPY KOMPATIBILITÁSHOZ ---
 import PIL.Image
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
 
-# --- VIDEÓ FELDOLGOZÓ ---
 try:
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
-    print("✅ MoviePy és Pillow Patch sikeresen betöltve a videóhoz.")
 except Exception as e:
-    print(f"⚠️ MoviePy nem elérhető: {e}")
     MOVIEPY_AVAILABLE = False
 
 load_dotenv()
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 TEMP_FILE = "temp_feed.xml"
-
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 
-# --- ALAP FUNKCIÓK ---
 def normalize_text(text):
     if not text: return ""
-    text = str(text).lower()
-    return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+    return ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
 
 def safe_str(val):
-    if val is None: return ""
-    return html.unescape(str(val).strip())
+    return html.unescape(str(val).strip()) if val else ""
 
 def generate_content_hash(data_string): 
     return hashlib.md5(data_string.encode('utf-8')).hexdigest()
 
 def clean_price_raw(raw_price):
     if not raw_price: return "0 RON"
-    s = str(raw_price).strip()
-    cleaned_num = re.sub(r"[^\d.,]", "", s)
-    if not cleaned_num: return s 
-    return f"{cleaned_num} RON"
+    cleaned_num = re.sub(r"[^\d.,]", "", str(raw_price).strip())
+    return f"{cleaned_num} RON" if cleaned_num else str(raw_price).strip()
 
 def html_to_markdown_clean(raw_html):
     if not raw_html: return ""
@@ -111,13 +103,12 @@ class DBHandler:
 
 class AutoUpdater:
     def __init__(self, db: DBHandler):
-        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) # Embeddings miatt marad OpenAI
         self.db = db
 
     def download_feed(self):
-        headers = {'User-Agent': 'BooksyBot/1.0'}
         try:
-            with requests.get(XML_FEED_URL, headers=headers, stream=True, timeout=300) as r:
+            with requests.get(XML_FEED_URL, headers={'User-Agent': 'BooksyBot/1.0'}, stream=True, timeout=300) as r:
                 r.raise_for_status()
                 with open(TEMP_FILE, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
@@ -154,8 +145,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V131|{bid}|{book_data['title']}|{book_data['price']}")
-                book_data['content_hash'] = d_hash
+                d_hash = generate_content_hash(f"V133|{bid}|{book_data['title']}|{book_data['price']}")
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
@@ -177,6 +167,7 @@ class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
 class BooksyBrain:
     def __init__(self, db: DBHandler):
         self.db = db
+        # A Chat egyelőre marad GPT a Gemini beépítéséig
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
@@ -189,8 +180,8 @@ class BooksyBrain:
             ).choices[0].message.content
             intent_data = json.loads(analysis)
             
-            final_reply, final_products = "", []
             vec = self.client_ai.embeddings.create(input=intent_data.get('query', msg), model="text-embedding-3-small").data[0].embedding
+            final_reply, final_products = "", []
             
             if intent_data.get('intent') == "policy":
                 res = self.db.collection.query(query_embeddings=[vec], n_results=2, where={"type": "policy"})
@@ -220,7 +211,8 @@ class BooksyBrain:
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
-        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) # Képgenerálás és Embedding
+        self.client_claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) # Szövegírás és Logika
 
     def _fetch_wikipedia_births(self):
         today = datetime.now(LOCAL_TZ)
@@ -251,6 +243,7 @@ class BooksySocialAgent:
         wiki_writers = self._fetch_wikipedia_births()
         wiki_text = json.dumps(wiki_writers[:25], ensure_ascii=False) if wiki_writers else "No valid Wikipedia data available for today."
         
+        # CLAUDE 3.5 SONNET PROMPT
         prompt = f"""
         Today's exact local date in Bucharest, Romania is {today_str}. Act as factual editor.
         Select ONLY prominent literary writers from this list: {wiki_text}
@@ -260,12 +253,30 @@ class BooksySocialAgent:
         2. Format ONLY Hungarian names as Lastname Firstname.
         3. You MUST translate and summarize the bio into exactly 1 SENTENCE IN HUNGARIAN.
         
-        Output ONLY JSON: {{"holiday": "...", "authors": [{{"name": "...", "bio": "Hungarian translation of bio..."}}]}}
+        Output ONLY valid JSON in this exact structure, with no markdown formatting around it:
+        {{
+            "holiday": "Name of holiday or null",
+            "authors": [
+                {{"name": "...", "bio": "Hungarian translation of bio..."}}
+            ]
+        }}
         """
         try:
-            res = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"}, temperature=0.0).choices[0].message.content
-            return json.loads(res)
-        except: return {"holiday": None, "authors": []}
+            print("🧠 [CLAUDE] Naptár elemzése folyamatban...")
+            res = self.client_claude.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                temperature=0.0,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            raw_json = res.content[0].text
+            # Tisztítás hátha markdownba teszi
+            if "```json" in raw_json:
+                raw_json = raw_json.split("```json")[1].split("```")[0].strip()
+            return json.loads(raw_json)
+        except Exception as e:
+            print(f"❌ Claude API hiba (Naptár): {e}") 
+            return {"holiday": None, "authors": []}
 
     def _create_infinite_loop_video(self, image_path, output_path):
         if not MOVIEPY_AVAILABLE: return False
@@ -280,58 +291,32 @@ class BooksySocialAgent:
         except: return False
 
     def send_morning_email(self):
-        print("📧 [EMAIL] Értesítő folyamat indul (V131 - Anti-Spam Headers + Port 26 STARTTLS)...")
-        if not os.path.exists("social_state.json"):
-            return
-        
+        if not os.path.exists("social_state.json"): return
         with open("social_state.json", "r") as f: state = json.load(f)
         sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
         server_addr = os.getenv("SMTP_SERVER", "mail.antikvarius.ro")
         admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
-
-        if not sender or not password or not admin_emails:
-            return
-
-        email_sent_successfully = False
-
+        if not sender or not password or not admin_emails: return
         try:
-            print(f"🔗 [EMAIL] Csatlakozás a szerverhez: {server_addr}:26 (STARTTLS)...")
             server = smtplib.SMTP(server_addr, 26, timeout=15)
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
+            server.ehlo(); server.starttls(); server.ehlo()
             server.login(sender, password)
-            
             for admin in admin_emails:
                 msg = MIMEMultipart()
-                msg['From'] = f"Booksy Social Agent <{sender}>"
-                msg['To'] = admin
+                msg['From'] = f"Booksy Social Agent <{sender}>"; msg['To'] = admin
                 msg['Subject'] = f"✅ Booksy Poszt Elkészült ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                
-                # --- ANTI-SPAM FEJLÉCEK ---
-                msg['Date'] = formatdate(localtime=False)
-                msg['Message-ID'] = make_msgid(domain=server_addr.replace('mail.', ''))
-                
-                body = f"<html><body><h3>A mai poszt elkészült és vázlatba került:</h3><pre style='background:#f4f4f4;padding:10px;border:1px solid #ddd;font-family:sans-serif;'>{state['text']}</pre></body></html>"
+                msg['Date'] = formatdate(localtime=False); msg['Message-ID'] = make_msgid(domain=server_addr.replace('mail.', ''))
+                body = f"<html><body><h3>Vázlat elkészült:</h3><pre style='background:#f4f4f4;padding:10px;'>{state['text']}</pre></body></html>"
                 msg.attach(MIMEText(body, 'html'))
-                
                 server.send_message(msg)
-                print(f"📧 [EMAIL] Sikeresen elküldve ide: {admin}")
-            
             server.quit()
-            email_sent_successfully = True
-            
-        except Exception as e:
-            print(f"⚠️ [EMAIL] Küldés sikertelen a 26-os porton: {e}")
-
-        if email_sent_successfully:
             os.remove("social_state.json")
-            print("🗑️ [EMAIL] social_state.json törölve.")
+        except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V131)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V133 - Claude 3.5 Sonnet)...")
         calendar = self._get_agentic_calendar()
-        napi_ünnep, ünnepeltek = calendar.get("holiday"), calendar.get("authors", [])
+        ünnepeltek = calendar.get("authors", [])
         
         poszt_adatai = []
         if ünnepeltek:
@@ -346,9 +331,8 @@ class BooksySocialAgent:
         has_author_books = len(poszt_adatai) > 0
         fallback_adatai = []
         if not has_author_books:
-            themes = ["ritka antikvár könyv", "izgalmas krimik", "klasszikus magyar szépirodalom", "történelmi szakkönyvek", "önfejlesztés és pszichológia"]
-            selected_theme = random.choice(themes)
-            vec = self.client_ai.embeddings.create(input=selected_theme, model="text-embedding-3-small").data[0].embedding
+            themes = ["ritka antikvár könyv", "izgalmas krimik", "klasszikus magyar szépirodalom", "történelmi szakkönyvek"]
+            vec = self.client_ai.embeddings.create(input=random.choice(themes), model="text-embedding-3-small").data[0].embedding
             fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
             if fallback_res['ids'] and fallback_res['ids'][0]:
                 for i in random.sample(range(len(fallback_res['ids'][0])), min(3, len(fallback_res['ids'][0]))):
@@ -357,19 +341,34 @@ class BooksySocialAgent:
 
         konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár kincsek")
         konyv_tartalom = poszt_adatai[0].get('preview', '') if has_author_books else (fallback_adatai[0].get('preview', '') if fallback_adatai else "")
-        img_prompt = f"Cinematic conceptual scene inspired by '{konyv_cim}'. Mood: '{konyv_tartalom[:150]}'. Realistic photography, 8k, atmospheric. No text, no faces."
         
+        # OPENAI DALL-E 3 GENERÁLÁS (Claude nem tud képet rajzolni)
+        img_prompt = f"A photorealistic, cinematic atmospheric scene inspired by the mood of the book '{konyv_cim}'. Context: '{konyv_tartalom[:150]}'. Style: high-end photography, 8k resolution, lifelike textures. CRITICAL: DO NOT include any text, letters, typography, words, or signs in the image. Ensure any visible book covers are completely blank without any writing. No human faces."
         video_path, image_path = "social_video.mp4", "social_img.jpg"
         media_url, is_video = "", False
         try:
+            print("🎨 [OPENAI] DALL-E kép generálása...")
             img_res = self.client_ai.images.generate(model="dall-e-3", prompt=img_prompt, size="1024x1024", quality="hd", n=1)
             media_url = img_res.data[0].url
             with open(image_path, 'wb') as f: f.write(requests.get(media_url).content)
             is_video = self._create_infinite_loop_video(image_path, video_path)
-        except: pass
+        except Exception as e: print(f"❌ Kép hiba: {e}")
 
-        marketing_prompt = f"Act as Booksy CopySEO. Write FB post in HU. Today is birthday of: {json.dumps(ünnepeltek)}. Holiday: {napi_ünnep}. Books: {json.dumps(poszt_adatai if has_author_books else fallback_adatai)}. Use provided URLs."
-        post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
+        # CLAUDE 3.5 SONNET SZÖVEGÍRÁS (CopySEO)
+        marketing_prompt = f"Act as Booksy CopySEO, the ultimate marketing expert. Write an engaging Facebook post in Hungarian. State clearly that TODAY is the birthday of: {json.dumps(ünnepeltek)}. Holiday: {calendar.get('holiday')}. Books to recommend: {json.dumps(poszt_adatai if has_author_books else fallback_adatai)}. Use the exact provided URLs. Keep the tone elegant and persuasive. Do not hallucinate."
+        
+        try:
+            print("🖋️ [CLAUDE] Szövegírás folyamatban...")
+            post_res = self.client_claude.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1500,
+                temperature=0.7,
+                messages=[{"role": "user", "content": marketing_prompt}]
+            )
+            post_text = post_res.content[0].text
+        except Exception as e:
+            print(f"❌ Claude API hiba (Szövegírás): {e}")
+            post_text = "Hiba történt a szöveg generálása során."
 
         with open("social_state.json", "w") as f: json.dump({"text": post_text}, f)
 
@@ -377,9 +376,9 @@ class BooksySocialAgent:
         if fb_page_id and fb_token:
             try:
                 if is_video:
-                    res = requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
+                    requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
                 else:
-                    res = requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
+                    requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
             except: pass
 
         if os.path.exists(image_path): os.remove(image_path)
@@ -403,12 +402,11 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V131 (ANTI-SPAM FIX & PORT 26)"}
+def home(): return {"status": "Booksy V133 (CLAUDE 3.5 SONNET HYBRID)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return bot.negotiate_handshake(req.url, req.session_id, req.ui_lang)
-
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Triggered"}
 @app.post("/test-social-morning")

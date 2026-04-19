@@ -4,6 +4,7 @@ pydantic
 requests
 python-dotenv
 openai
+anthropic
 chromadb
 pysqlite3-binary
 apscheduler
