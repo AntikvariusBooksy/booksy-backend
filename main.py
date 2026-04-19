@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V153 (PAID TIER OPTIMIZED - FULL THROTTLE SYNC)
+# BOOKSY BRAIN - V154 (PAID TIER MATHEMATICAL QUOTA & RETRY LOGIC)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -104,7 +104,6 @@ def extract_all_data(elem) -> Dict[str, Any]:
 class DBHandler:
     def __init__(self):
         self.client = chromadb.PersistentClient(path="./booksy_db")
-        # Maradunk a V2-nél, de most már stabilan feltöltjük
         self.collection = self.client.get_or_create_collection(name="booksy_collection_gemini_v2")
 
 class AutoUpdater:
@@ -121,7 +120,7 @@ class AutoUpdater:
         except: return False
 
     def run_daily_update(self, force_refresh=False):
-        print("🚀 [START] Gemini Paid Tier szinkronizálás indul...")
+        print("🚀 [START] Gemini Paid Tier szinkronizálás indul (V154 - Kvótavédelemmel)...")
         current_sync_ts = int(time.time())
         if not self.download_feed(): return
         try:
@@ -165,25 +164,42 @@ class AutoUpdater:
                 metadatas_batch.append(clean_meta)
                 
                 if len(ids_batch) >= 100:
-                    try:
-                        # PAID TIER: Nincs sleep, nyomjuk teljes sebességgel!
-                        result = gemini_client.models.embed_content(
-                            model="gemini-embedding-001", 
-                            contents=emb_texts_batch,
-                            config=types.EmbedContentConfig(output_dimensionality=768)
-                        )
-                        self.db.collection.upsert(ids=ids_batch, embeddings=[e.values for e in result.embeddings], metadatas=metadatas_batch)
-                        processed_books += len(ids_batch)
-                        if processed_books % 500 == 0:
-                            print(f"⏳ [FOLYAMAT] {processed_books} / {total_books} könyv kész...")
-                    except Exception as e:
-                        print(f"⚠️ Batch hiba: {e}")
-                        time.sleep(2) # Csak hiba esetén pihenünk
+                    success = False
+                    retries = 0
+                    while not success and retries < 5:
+                        try:
+                            result = gemini_client.models.embed_content(
+                                model="gemini-embedding-001", 
+                                contents=emb_texts_batch,
+                                config=types.EmbedContentConfig(output_dimensionality=768)
+                            )
+                            self.db.collection.upsert(ids=ids_batch, embeddings=[e.values for e in result.embeddings], metadatas=metadatas_batch)
+                            processed_books += len(ids_batch)
+                            if processed_books % 500 == 0:
+                                print(f"⏳ [FOLYAMAT] {processed_books} / {total_books} könyv kész...")
+                            success = True
+                            
+                            # Matematikai fék a 3000/min (50/sec) PAID RPM limit alá (2400/min-re állítva)
+                            time.sleep(2.5) 
+                        except Exception as e:
+                            error_msg = str(e)
+                            print(f"⚠️ Batch hiba (újrapróbálkozás {retries+1}/5): {error_msg[:100]}...")
+                            retries += 1
+                            # Ha a Google büntet, kivárjuk a kért időt (kb 40 mp)
+                            time.sleep(40)
+                            
                     ids_batch, emb_texts_batch, metadatas_batch = [], [], []
             
             if ids_batch: 
-                result = gemini_client.models.embed_content(model="gemini-embedding-001", contents=emb_texts_batch, config=types.EmbedContentConfig(output_dimensionality=768))
-                self.db.collection.upsert(ids=ids_batch, embeddings=[e.values for e in result.embeddings], metadatas=metadatas_batch)
+                retries = 0
+                while retries < 3:
+                    try:
+                        result = gemini_client.models.embed_content(model="gemini-embedding-001", contents=emb_texts_batch, config=types.EmbedContentConfig(output_dimensionality=768))
+                        self.db.collection.upsert(ids=ids_batch, embeddings=[e.values for e in result.embeddings], metadatas=metadatas_batch)
+                        break
+                    except:
+                        retries += 1
+                        time.sleep(10)
             
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
             print(f"✅ [SIKER] Mind a {total_books} könyv vektorizálva. A Booksy agya felfrissült.")
@@ -222,7 +238,7 @@ class BooksyBrain:
                     for meta in res['metadatas'][0]:
                         p_price = clean_price_raw(meta.get('price'))
                         final_products.append({"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')})
-                        ctx_text += f"- {meta.get('title')} ({p_price})\n"
+                        ctx_text += f"- {meta.get('title')} by {meta.get('author', 'Unknown')} ({p_price}). Kategória: {meta.get('category', '')}\n"
                     reply_res = self.client_claude.messages.create(model="claude-sonnet-4-6", max_tokens=800, temperature=0.7, system="You are the Booksy CopySEO Assistant. Write a warm recommendation in Hungarian.", messages=[{"role": "user", "content": f"Books: {ctx_text}\nQ: {msg}"}])
                     final_reply = reply_res.content[0].text
                 else: final_reply = "Sajnos nem találtam megfelelőt."
@@ -300,7 +316,7 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V153 - Paid Optimization)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V154 - Paid Optimization)...")
         calendar = self._get_agentic_calendar()
         poszt_adatai = []
         for író in calendar.get("authors", []):
@@ -354,7 +370,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V153 (PAID TIER SPEED OPTIMIZED)"}
+def home(): return {"status": "Booksy V154 (PAID TIER SAFE SYNC)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
@@ -364,7 +380,7 @@ def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generati
 @app.post("/test-social-morning")
 def test_morning(bt: BackgroundTasks): bt.add_task(social_agent.send_morning_email); return {"status": "Triggered"}
 @app.post("/force-update")
-def force_update(bt: BackgroundTasks): bt.add_task(updater.run_daily_update); return {"status": "Full Throttle Sync Started"}
+def force_update(bt: BackgroundTasks): bt.add_task(updater.run_daily_update); return {"status": "Safe Sync Started"}
 
 if __name__ == "__main__":
     import uvicorn
