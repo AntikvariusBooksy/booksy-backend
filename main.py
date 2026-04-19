@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V128 (SMTP 587 STARTTLS FIX + STRICT AI PROMPT FIX)
+# BOOKSY BRAIN - V129 (RESTORED CHAT ENDPOINTS & MULTI-PORT SMTP FIREWALL BYPASS)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -37,11 +37,14 @@ import PIL.Image
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
 
+# --- VIDEÓ FELDOLGOZÓ ---
 try:
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
+    print("✅ MoviePy és Pillow Patch sikeresen betöltve a videóhoz.")
 except Exception as e:
+    print(f"⚠️ MoviePy nem elérhető (A videó generálás képként fog lefutni): {e}")
     MOVIEPY_AVAILABLE = False
 
 load_dotenv()
@@ -50,6 +53,13 @@ TEMP_FILE = "temp_feed.xml"
 
 # --- HIVATALOS ROMÁNIAI IDŐZÓNA BEÁLLÍTÁSA ---
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
+
+POLICY_PAGES = [
+    {"url": "https://www.antikvarius.ro/termeni-si-conditii-de-utilizare/", "lang": "ro", "name": "Termeni și condiții"},
+    {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Informații despre plată"},
+    {"url": "https://www.antikvarius.ro/informatii-despre-livrare/", "lang": "ro", "name": "Informații despre livrare"},
+    {"url": "https://www.antikvarius.ro/contact/", "lang": "ro", "name": "Contact"},
+]
 
 # --- ALAP FUNKCIÓK ---
 def normalize_text(text):
@@ -151,7 +161,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V128|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V129|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -168,10 +178,51 @@ class AutoUpdater:
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
         except Exception as e: pass
 
+class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
+class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
+
 class BooksyBrain:
     def __init__(self, db: DBHandler):
         self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.user_session_cache = {}
+
+    def process(self, msg, context_url, session_id):
+        try:
+            analysis = self.client_ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": f"Intent analysis for bookstore. Input: '{msg}'. JSON output: {{\"intent\": \"search\"|\"policy\", \"query\": \"query\"}}" }],
+                response_format={"type": "json_object"}, temperature=0.0
+            ).choices[0].message.content
+            intent_data = json.loads(analysis)
+            
+            final_reply, final_products = "", []
+            vec = self.client_ai.embeddings.create(input=intent_data.get('query', msg), model="text-embedding-3-small").data[0].embedding
+            
+            if intent_data.get('intent') == "policy":
+                res = self.db.collection.query(query_embeddings=[vec], n_results=2, where={"type": "policy"})
+                ctx = "".join([m.get('text', '') for m in res['metadatas'][0]]) if res['ids'] else ""
+                final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": f"Context: {ctx}\nQ: {msg}"}]).choices[0].message.content
+            else:
+                res = self.db.collection.query(query_embeddings=[vec], n_results=5, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+                if res['ids']:
+                    ctx_text = ""
+                    for meta in res['metadatas'][0]:
+                        p_price = clean_price_raw(meta.get('price'))
+                        final_products.append({"title": meta.get('title'), "price": p_price, "url": meta.get('url'), "image": meta.get('image_url')})
+                        ctx_text += f"- {meta.get('title')} ({p_price})\n"
+                    final_reply = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "system", "content": f"Recommend books: {ctx_text}"}, {"role": "user", "content": msg}]).choices[0].message.content
+                else: final_reply = "Sajnos nem találtam megfelelő könyvet."
+            
+            self.user_session_cache[session_id] = msg
+            return {"reply": final_reply, "products": final_products}
+        except: return {"reply": "Hiba történt.", "products": []}
+
+    def negotiate_handshake(self, url, session_id, ui_lang):
+        try:
+            res = self.client_ai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": f"JSON greeting in {ui_lang}."}], response_format={"type": "json_object"}).choices[0].message.content
+            return json.loads(res)
+        except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
@@ -199,22 +250,23 @@ class BooksySocialAgent:
                         verified_writers.append({"name": person.get('text', '').split(',')[0], "year": person.get('year'), "bio_en": pages[0].get('extract', '') if pages else person.get('text', '')})
                 return verified_writers
             return []
-        except: return []
+        except Exception as e:
+            print(f"❌ Wikipedia API hiba: {e}"); return []
 
     def _get_agentic_calendar(self):
         today_local = datetime.now(LOCAL_TZ)
         today_str = today_local.strftime("%B %d")
+        print(f"🌍 [RAG] Csatlakozás a Wikipédiához a mai romániai ({today_str}) születésnapokért...")
         wiki_writers = self._fetch_wikipedia_births()
         wiki_text = json.dumps(wiki_writers[:25], ensure_ascii=False) if wiki_writers else "No valid Wikipedia data available for today."
         
-        # PROMPT JAVÍTÁS (Magyar fordítás és névsorrend kötelezővé tétele)
         prompt = f"""
         Today's exact local date in Bucharest, Romania is {today_str}. Act as factual editor.
         Select ONLY prominent literary writers from this list: {wiki_text}
         
         CRITICAL RULES: 
         1. Max 3-5 people. 
-        2. Format ONLY Hungarian names as Lastname Firstname (e.g. Németh László). Keep English/American names in their original order (e.g. Stanley Fish, DO NOT write Fish Stanley).
+        2. Format ONLY Hungarian names as Lastname Firstname (e.g. Németh László). Keep English/American/Spanish names in their original order (e.g. Stanley Fish, José Echegaray y Eizaguirre).
         3. You MUST translate and summarize the bio into exactly 1 SENTENCE IN HUNGARIAN. Do not leave the bio in English!
         
         Output ONLY JSON: {{"holiday": "...", "authors": [{{"name": "...", "bio": "Hungarian translation of bio..."}}]}}
@@ -238,8 +290,7 @@ class BooksySocialAgent:
         except: return False
 
     def send_morning_email(self):
-        """E-mail küldő modul (STARTTLS / Port 587 Fix)"""
-        print("📧 [EMAIL] Értesítő folyamat indul (V128)...")
+        print("📧 [EMAIL] Értesítő folyamat indul (V129 - Multi-Port Test)...")
         if not os.path.exists("social_state.json"):
             print("⚠️ [EMAIL] Nincs elmentett poszt (social_state.json hiányzik).")
             return
@@ -253,34 +304,53 @@ class BooksySocialAgent:
             print("❌ [EMAIL] SMTP adatok hiányoznak!")
             return
 
-        try:
-            print(f"🔗 [EMAIL] Csatlakozás a szerverhez: {server_addr}:587 (STARTTLS)...")
-            # VÁLTOZÁS: 465 (SSL) helyett 587 (STARTTLS) a timeout hibák elkerülésére
-            server = smtplib.SMTP(server_addr, 587, timeout=20)
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            
-            print("🔑 [EMAIL] Bejelentkezés...")
-            server.login(sender, password)
-            
-            for admin in admin_emails:
-                msg = MIMEMultipart()
-                msg['From'] = f"Booksy Social Agent <{sender}>"; msg['To'] = admin
-                msg['Subject'] = f"✅ Booksy Poszt Elkészült ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                body = f"<html><body><h3>A mai poszt elkészült és vázlatba került:</h3><pre style='background:#f4f4f4;padding:10px;border:1px solid #ddd;'>{state['text']}</pre></body></html>"
-                msg.attach(MIMEText(body, 'html'))
-                server.send_message(msg)
-                print(f"📧 [EMAIL] Sikeresen elküldve ide: {admin}")
-            
-            server.quit()
+        # Végigpróbáljuk az összes lehetséges portot, hogy áttörjük a tűzfalat
+        ports_to_try = [
+            (465, True),   # SSL
+            (587, False),  # STARTTLS
+            (2525, False), # STARTTLS Bypass (Gyakori cPanel/Hosting kiskapu)
+            (25, False)    # STARTTLS (Alap port)
+        ]
+        
+        email_sent_successfully = False
+
+        for port, use_ssl in ports_to_try:
+            try:
+                print(f"🔗 [EMAIL] Próbálkozás a(z) {port} porton...")
+                if use_ssl:
+                    server = smtplib.SMTP_SSL(server_addr, port, timeout=10)
+                else:
+                    server = smtplib.SMTP(server_addr, port, timeout=10)
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                
+                server.login(sender, password)
+                
+                for admin in admin_emails:
+                    msg = MIMEMultipart()
+                    msg['From'] = f"Booksy Social Agent <{sender}>"; msg['To'] = admin
+                    msg['Subject'] = f"✅ Booksy Poszt Elkészült ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                    body = f"<html><body><h3>A mai poszt elkészült és vázlatba került:</h3><pre style='background:#f4f4f4;padding:10px;border:1px solid #ddd;'>{state['text']}</pre></body></html>"
+                    msg.attach(MIMEText(body, 'html'))
+                    server.send_message(msg)
+                    print(f"📧 [EMAIL] Sikeresen elküldve ide: {admin} a(z) {port} porton!")
+                
+                server.quit()
+                email_sent_successfully = True
+                break # Ha sikerült, kilépünk a ciklusból
+                
+            except Exception as e:
+                print(f"⚠️ [EMAIL] Port {port} sikertelen: {e}")
+
+        if email_sent_successfully:
             os.remove("social_state.json")
             print("🗑️ [EMAIL] social_state.json törölve.")
-        except Exception as e:
-            print(f"❌ [EMAIL] Kritikus SMTP hiba (587 STARTTLS): {str(e)}")
+        else:
+            print("❌ [EMAIL] KRITIKUS HIBA: Minden port időtúllépésre vagy visszautasításra futott. A szervered (vagy a Railway) blokkolja a kimenő SMTP forgalmat.")
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V128)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V129)...")
         calendar = self._get_agentic_calendar()
         napi_ünnep, ünnepeltek = calendar.get("holiday"), calendar.get("authors", [])
         
@@ -352,6 +422,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# VISSZAÁLLÍTOTT CHAT API VÉGPONTOK
+@app.get("/")
+def home(): return {"status": "Booksy V129 (ENDPOINTS RESTORED & SMTP MULTIPORT BYPASS)"}
+@app.post("/chat")
+def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
+@app.post("/init-chat")
+def init_chat(req: InitRequest): return bot.negotiate_handshake(req.url, req.session_id, req.ui_lang)
 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Triggered"}
