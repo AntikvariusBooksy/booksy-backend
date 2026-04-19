@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V125 (DYNAMIC DALL-E CONTEXT & EXPLICIT BIRTHDAY PROMPT)
+# BOOKSY BRAIN - V126 (WIKIPEDIA RAG + STRICT ACADEMIC FILTER & ZERO QUOTA)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -161,14 +161,14 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V125|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V126|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
                     clean_meta = book_data.copy()
                     del clean_meta['description'] 
-                    clean_meta['text_preview'] = book_data['description'][:150] # Növeltük a DALL-E miatt
+                    clean_meta['text_preview'] = book_data['description'][:150]
                     ids_batch.append(bid); embeddings_batch.append(emb); metadatas_batch.append(clean_meta)
                     if len(ids_batch) >= 50:
                         self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
@@ -226,14 +226,14 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V125 - DYNAMIC DALL-E & BIRTHDAY FIX) ---
+# --- PURE AGENTIC SOCIAL AGENT (V126) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _fetch_wikipedia_births(self):
-        """Kimegy a Wikipédiára, és letölti a ROMÁN IDŐ szerinti MAI valós születéseket."""
+        """Kimegy a Wikipédiára, és letölti a ROMÁN IDŐ szerinti MAI valós születéseket (Szigorított szűrővel)."""
         today = datetime.now(LOCAL_TZ)
         mm = today.strftime("%m")
         dd = today.strftime("%d")
@@ -245,7 +245,10 @@ class BooksySocialAgent:
             if response.status_code == 200:
                 births = response.json().get('births', [])
                 verified_writers = []
+                
+                # Pozitív és negatív kulcsszavak a szigorú irodalmi szűréshez
                 writer_keywords = ['writer', 'author', 'novelist', 'poet', 'playwright', 'essayist', 'literature']
+                forbidden_keywords = ['mathematician', 'physicist', 'economist', 'politician', 'chemist', 'biologist', 'actor', 'composer', 'singer', 'athlete', 'bishop', 'pope']
                 
                 for person in births:
                     text = person.get('text', '').lower()
@@ -253,7 +256,8 @@ class BooksySocialAgent:
                     desc = (pages[0].get('extract', '').lower() + " " + pages[0].get('description', '').lower()) if pages else ""
                     combined = text + " " + desc
                     
-                    if any(kw in combined for kw in writer_keywords) and 'actor' not in combined and 'composer' not in combined:
+                    # Szigorú szűrés: Tartalmaznia kell írói kulcsszót, de NEM tartalmazhat akadémiai/más szakmai kulcsszót!
+                    if any(kw in combined for kw in writer_keywords) and not any(fkw in combined for fkw in forbidden_keywords):
                         verified_writers.append({
                             "name": person.get('text', '').split(',')[0],
                             "year": person.get('year'),
@@ -273,26 +277,27 @@ class BooksySocialAgent:
         wiki_writers = self._fetch_wikipedia_births()
         
         if not wiki_writers:
-            print("⚠️ A Wikipedia nem adott vissza adatot.")
-            wiki_text = "No Wikipedia data available for today."
+            print("⚠️ A Wikipedia nem adott vissza tisztán irodalmi adatot.")
+            wiki_text = "No valid Wikipedia data available for today."
         else:
-            print(f"✅ A Wikipedia {len(wiki_writers)} valódi írót talált a mai napra ({today_str}).")
-            wiki_text = json.dumps(wiki_writers[:30], ensure_ascii=False)
+            print(f"✅ A Wikipedia {len(wiki_writers)} szigorúan szűrt, irodalmi írót talált a mai napra ({today_str}).")
+            wiki_text = json.dumps(wiki_writers[:25], ensure_ascii=False)
 
         prompt = f"""
         Today's exact local date in Bucharest, Romania is {today_str}.
-        You are a factual literary editor. You MUST NOT invent any birthdates.
+        You are a factual literary editor. You MUST NOT invent any birthdates or names.
         
-        Here is the FACTUAL, verified list of writers born exactly on {today_str}, downloaded directly from Wikipedia:
+        Here is the FACTUAL, verified list of strictly literary writers born exactly on {today_str}, downloaded directly from Wikipedia:
         {wiki_text}
 
         YOUR TASK:
-        1. Select between 4 to 10 prominent authors ONLY FROM THE PROVIDED WIKIPEDIA LIST.
-        2. Format Hungarian names correctly (Lastname Firstname, e.g., Németh László).
-        3. Translate and summarize their Wikipedia bio into a 1-sentence Hungarian tribute.
-        4. Identify major holidays in Romania or Hungary today.
-
-        CRITICAL: DO NOT add anyone not in the list. Output [] if list is empty.
+        1. Select ONLY the most prominent, widely recognized literary authors (novelists, poets, playwrights) from the provided Wikipedia list. 
+        2. NO MINIMUM QUOTA: If there are only 1, 2, or 3 genuinely famous authors in the list, ONLY output those 1, 2, or 3. Do not fill the list with obscure names. If there are none, output an empty array [].
+        3. NAMING CONVENTIONS: 
+           - Format Hungarian names correctly (Lastname Firstname, e.g., Németh László).
+           - For Russian authors, use the standard Hungarian transliteration (e.g., Venyiamin Kaverin).
+           - For Spanish authors, use their full correct name (e.g., José Echegaray y Eizaguirre).
+        4. Translate and summarize their Wikipedia bio into a 1-sentence Hungarian tribute.
 
         Output ONLY a JSON:
         {{
@@ -344,7 +349,7 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V125)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V126)...")
         calendar = self._get_agentic_calendar()
         
         napi_ünnep = calendar.get("holiday")
@@ -359,7 +364,6 @@ class BooksySocialAgent:
                     for i in range(len(results['ids'][0])):
                         meta = results['metadatas'][0][i]
                         if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
-                            # Kimentjük a text_preview-t a DALL-E-nek
                             poszt_adatai.append({
                                 "author": író['name'], "bio": író.get('bio', ''), 
                                 "title": meta.get('title'), "url": meta.get('url'), 
@@ -430,7 +434,7 @@ class BooksySocialAgent:
         Today's holiday (if any): {napi_ünnep if napi_ünnep else 'Nincs ünnep'}.
         Celebrated book authors born exactly on this day: {json.dumps(ünnepeltek, ensure_ascii=False)}.
 
-        CRITICAL RULE 1: If the 'celebrated authors' list is empty, greeting only.
+        CRITICAL RULE 1: If the 'celebrated authors' list is empty, DO NOT mention anything about birthdays or celebrating authors. Just greet the readers and directly recommend the books below.
         CRITICAL RULE 2: If the list is NOT empty, you MUST explicitly state in the VERY FIRST SENTENCE that we are celebrating them because TODAY IS THEIR BIRTHDAY (ma ünneplik születésnapjukat / a mai napon születtek). Then honor them by name and bio. Do not just say "we celebrate them" without mentioning the birthday context.
         """
         
@@ -501,7 +505,6 @@ bot = BooksyBrain(db_handler)
 social_agent = BooksySocialAgent(db_handler)
 
 scheduler = BackgroundScheduler()
-# A scheduler is a romániai időt használja a munkák indításához!
 scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
 scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=4, minute=0, timezone=LOCAL_TZ))
 scheduler.add_job(social_agent.send_morning_email, CronTrigger(hour=9, minute=0, timezone=LOCAL_TZ))
@@ -516,7 +519,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V125 (DYNAMIC DALL-E CONTEXT + EXPLICIT BIRTHDAY)"}
+def home(): return {"status": "Booksy V126 (STRICT ACADEMIC FILTER & ZERO QUOTA)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
