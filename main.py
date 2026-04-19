@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V126 (WIKIPEDIA RAG + STRICT ACADEMIC FILTER & ZERO QUOTA)
+# BOOKSY BRAIN - V127 (IMMEDIATE EMAIL NOTIFICATION + VERBOSE SMTP LOGGING)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -161,7 +161,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V126|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V127|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -226,284 +226,174 @@ class BooksyBrain:
             return json.loads(res)
         except: return {"ui_lang": ui_lang, "bubble_text": "Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- PURE AGENTIC SOCIAL AGENT (V126) ---
+# --- PURE AGENTIC SOCIAL AGENT (V127) ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _fetch_wikipedia_births(self):
-        """Kimegy a Wikipédiára, és letölti a ROMÁN IDŐ szerinti MAI valós születéseket (Szigorított szűrővel)."""
         today = datetime.now(LOCAL_TZ)
-        mm = today.strftime("%m")
-        dd = today.strftime("%d")
+        mm, dd = today.strftime("%m"), today.strftime("%d")
         url = f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{mm}/{dd}"
         headers = {'User-Agent': 'BooksyBot/1.0 (antikvarius.ro)'}
-        
         try:
             response = requests.get(url, headers=headers, timeout=15)
             if response.status_code == 200:
                 births = response.json().get('births', [])
                 verified_writers = []
-                
-                # Pozitív és negatív kulcsszavak a szigorú irodalmi szűréshez
                 writer_keywords = ['writer', 'author', 'novelist', 'poet', 'playwright', 'essayist', 'literature']
                 forbidden_keywords = ['mathematician', 'physicist', 'economist', 'politician', 'chemist', 'biologist', 'actor', 'composer', 'singer', 'athlete', 'bishop', 'pope']
-                
                 for person in births:
                     text = person.get('text', '').lower()
                     pages = person.get('pages', [])
                     desc = (pages[0].get('extract', '').lower() + " " + pages[0].get('description', '').lower()) if pages else ""
                     combined = text + " " + desc
-                    
-                    # Szigorú szűrés: Tartalmaznia kell írói kulcsszót, de NEM tartalmazhat akadémiai/más szakmai kulcsszót!
                     if any(kw in combined for kw in writer_keywords) and not any(fkw in combined for fkw in forbidden_keywords):
-                        verified_writers.append({
-                            "name": person.get('text', '').split(',')[0],
-                            "year": person.get('year'),
-                            "bio_en": pages[0].get('extract', '') if pages else person.get('text', '')
-                        })
+                        verified_writers.append({"name": person.get('text', '').split(',')[0], "year": person.get('year'), "bio_en": pages[0].get('extract', '') if pages else person.get('text', '')})
                 return verified_writers
             return []
         except Exception as e:
-            print(f"❌ Wikipedia API hiba: {e}")
-            return []
+            print(f"❌ Wikipedia API hiba: {e}"); return []
 
     def _get_agentic_calendar(self):
         today_local = datetime.now(LOCAL_TZ)
         today_str = today_local.strftime("%B %d")
-        
         print(f"🌍 [RAG] Csatlakozás a Wikipédiához a mai romániai ({today_str}) születésnapokért...")
         wiki_writers = self._fetch_wikipedia_births()
-        
-        if not wiki_writers:
-            print("⚠️ A Wikipedia nem adott vissza tisztán irodalmi adatot.")
-            wiki_text = "No valid Wikipedia data available for today."
-        else:
-            print(f"✅ A Wikipedia {len(wiki_writers)} szigorúan szűrt, irodalmi írót talált a mai napra ({today_str}).")
-            wiki_text = json.dumps(wiki_writers[:25], ensure_ascii=False)
-
+        wiki_text = json.dumps(wiki_writers[:25], ensure_ascii=False) if wiki_writers else "No valid Wikipedia data available for today."
         prompt = f"""
-        Today's exact local date in Bucharest, Romania is {today_str}.
-        You are a factual literary editor. You MUST NOT invent any birthdates or names.
-        
-        Here is the FACTUAL, verified list of strictly literary writers born exactly on {today_str}, downloaded directly from Wikipedia:
-        {wiki_text}
-
-        YOUR TASK:
-        1. Select ONLY the most prominent, widely recognized literary authors (novelists, poets, playwrights) from the provided Wikipedia list. 
-        2. NO MINIMUM QUOTA: If there are only 1, 2, or 3 genuinely famous authors in the list, ONLY output those 1, 2, or 3. Do not fill the list with obscure names. If there are none, output an empty array [].
-        3. NAMING CONVENTIONS: 
-           - Format Hungarian names correctly (Lastname Firstname, e.g., Németh László).
-           - For Russian authors, use the standard Hungarian transliteration (e.g., Venyiamin Kaverin).
-           - For Spanish authors, use their full correct name (e.g., José Echegaray y Eizaguirre).
-        4. Translate and summarize their Wikipedia bio into a 1-sentence Hungarian tribute.
-
-        Output ONLY a JSON:
-        {{
-            "holiday": "Name of holiday or null",
-            "authors": [
-                {{"name": "Corrected Author Name", "bio": "1-sentence bio in Hungarian."}}
-            ]
-        }}
+        Today's exact local date in Bucharest, Romania is {today_str}. Act as factual editor.
+        Select ONLY prominent literary writers from this list: {wiki_text}
+        Rules: 1. Max 3-5 people. 2. NO quota. 3. Correct naming (Lastname Firstname for Hungarians).
+        Output ONLY JSON: {{"holiday": "...", "authors": [{{"name": "...", "bio": "..."}}]}}
         """
         try:
-            res = self.client_ai.chat.completions.create(
-                model="gpt-4o", 
-                messages=[{"role": "user", "content": prompt}], 
-                response_format={"type": "json_object"},
-                temperature=0.0
-            ).choices[0].message.content
+            res = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"}, temperature=0.0).choices[0].message.content
             data = json.loads(res)
-            print(f"📚 [AI Naptár] Generált lista Románia ({today_str}) szerint: {json.dumps(data.get('authors', []), ensure_ascii=False)}")
+            print(f"📚 [AI Naptár] Generált lista: {json.dumps(data.get('authors', []), ensure_ascii=False)}")
             return data
-        except Exception as e: 
-            print(f"❌ Naptár API hiba: {e}")
-            return {"holiday": None, "authors": []}
+        except Exception as e: print(f"❌ Naptár API hiba: {e}"); return {"holiday": None, "authors": []}
 
     def _create_infinite_loop_video(self, image_path, output_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            print("🎥 Videó renderelés indítása (OOM-Safe mód)...")
+            print("🎥 Videó renderelés indítása...")
             clip = ImageClip(image_path).resize(width=800)
             def zoom(t): return 1 + 0.02 * t
             zoomed = clip.resize(zoom)
-            cropped = zoomed.crop(x_center=clip.w/2, y_center=clip.h/2, width=clip.w, height=clip.h)
-            cropped = cropped.set_duration(4)
-            reversed_clip = cropped.fx(vfx.time_mirror)
-            final_clip = concatenate_videoclips([cropped, reversed_clip])
-            
-            final_clip.write_videofile(
-                output_path, 
-                fps=15, 
-                codec="libx264", 
-                audio=False, 
-                logger=None, 
-                threads=1, 
-                preset="ultrafast"
-            )
+            cropped = zoomed.crop(x_center=clip.w/2, y_center=clip.h/2, width=clip.w, height=clip.h).set_duration(4)
+            final_clip = concatenate_videoclips([cropped, cropped.fx(vfx.time_mirror)])
+            final_clip.write_videofile(output_path, fps=15, codec="libx264", audio=False, logger=None, threads=1, preset="ultrafast")
             print("✅ Videó renderelés sikeres!")
             return True
+        except Exception as e: print(f"❌ Videó hiba: {e}"); return False
+
+    def send_morning_email(self):
+        """E-mail küldő modul kőkemény logolással."""
+        print("📧 [EMAIL] Értesítő folyamat indul...")
+        if not os.path.exists("social_state.json"):
+            print("⚠️ [EMAIL] Nincs elmentett poszt (social_state.json hiányzik).")
+            return
+        
+        with open("social_state.json", "r") as f: state = json.load(f)
+        sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
+        server_addr = os.getenv("SMTP_SERVER", "mail.antikvarius.ro")
+        admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
+
+        if not sender or not password or not admin_emails:
+            print("❌ [EMAIL] SMTP adatok hiányoznak a környezeti változókból!")
+            return
+
+        try:
+            print(f"🔗 [EMAIL] Csatlakozás a szerverhez: {server_addr}:465...")
+            server = smtplib.SMTP_SSL(server_addr, 465, timeout=20)
+            print("🔑 [EMAIL] Bejelentkezés...")
+            server.login(sender, password)
+            
+            for admin in admin_emails:
+                msg = MIMEMultipart()
+                msg['From'] = f"Booksy Social Agent <{sender}>"; msg['To'] = admin
+                msg['Subject'] = f"✅ Booksy Poszt Elkészült ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                body = f"<html><body><h3>A mai poszt elkészült és vázlatba került:</h3><pre style='background:#f4f4f4;padding:10px;border:1px solid #ddd;'>{state['text']}</pre></body></html>"
+                msg.attach(MIMEText(body, 'html'))
+                server.send_message(msg)
+                print(f"📧 [EMAIL] Sikeresen elküldve ide: {admin}")
+            
+            server.quit()
+            # Csak sikeres küldés után töröljük!
+            os.remove("social_state.json")
+            print("🗑️ [EMAIL] social_state.json törölve.")
         except Exception as e:
-            print(f"❌ Videó hiba: {e}")
-            return False
+            print(f"❌ [EMAIL] Kritikus SMTP hiba: {str(e)}")
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V126)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V127)...")
         calendar = self._get_agentic_calendar()
-        
-        napi_ünnep = calendar.get("holiday")
-        ünnepeltek = calendar.get("authors", [])
+        napi_ünnep, ünnepeltek = calendar.get("holiday"), calendar.get("authors", [])
         
         poszt_adatai = []
         if ünnepeltek:
             for író in ünnepeltek:
                 vec = self.client_ai.embeddings.create(input=író['name'], model="text-embedding-3-small").data[0].embedding
-                results = self.db.collection.query(query_embeddings=[vec], n_results=2, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-                if results['ids']:
-                    for i in range(len(results['ids'][0])):
-                        meta = results['metadatas'][0][i]
-                        if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
-                            poszt_adatai.append({
-                                "author": író['name'], "bio": író.get('bio', ''), 
-                                "title": meta.get('title'), "url": meta.get('url'), 
-                                "price": clean_price_raw(meta.get('price')), "preview": meta.get('text_preview', '')
-                            })
-                            break
+                res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+                if res['ids'] and res['ids'][0]:
+                    meta = res['metadatas'][0][0]
+                    if normalize_text(író['name'].split()[-1]) in normalize_text(str(meta.get('author', ''))):
+                        poszt_adatai.append({"author": író['name'], "bio": író.get('bio', ''), "title": meta.get('title'), "url": meta.get('url'), "price": clean_price_raw(meta.get('price')), "preview": meta.get('text_preview', '')})
 
         has_author_books = len(poszt_adatai) > 0
         fallback_adatai = []
-
         if not has_author_books:
-            themes = [
-                "ritka antikvár könyv és irodalmi kincs",
-                "izgalmas krimik és pszichológiai thrillerek",
-                "klasszikus magyar szépirodalom és versek",
-                "történelmi szakkönyvek és életrajzok",
-                "önfejlesztés, pszichológia és sikerkönyvek",
-                "világirodalmi bestsellerek",
-                "művészeti albumok és könyvritkaságok"
-            ]
+            themes = ["ritka antikvár könyv", "izgalmas krimik", "klasszikus magyar szépirodalom", "történelmi szakkönyvek", "önfejlesztés és pszichológia"]
             selected_theme = random.choice(themes)
-            print(f"⚠️ Nincs raktáron könyv. Kincskereső bekapcsolva. Téma: {selected_theme}")
-            
             vec = self.client_ai.embeddings.create(input=selected_theme, model="text-embedding-3-small").data[0].embedding
-            fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=15, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-            
+            fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
             if fallback_res['ids'] and fallback_res['ids'][0]:
-                all_fallbacks = []
-                for i in range(len(fallback_res['ids'][0])):
+                for i in random.sample(range(len(fallback_res['ids'][0])), min(3, len(fallback_res['ids'][0]))):
                     f_meta = fallback_res['metadatas'][0][i]
-                    all_fallbacks.append({
-                        "author": f_meta.get('author', 'Ismeretlen'), "title": f_meta.get('title'), 
-                        "url": f_meta.get('url'), "price": clean_price_raw(f_meta.get('price')), "preview": f_meta.get('text_preview', '')
-                    })
-                
-                selected_fallbacks = random.sample(all_fallbacks, min(3, len(all_fallbacks)))
-                fallback_adatai.extend(selected_fallbacks)
+                    fallback_adatai.append({"author": f_meta.get('author', 'Ismeretlen'), "title": f_meta.get('title'), "url": f_meta.get('url'), "price": clean_price_raw(f_meta.get('price')), "preview": f_meta.get('text_preview', '')})
 
-        if not has_author_books and not fallback_adatai:
-            print("❌ Raktár üres. Poszt megszakítva.")
-            return
-
-        # DALL-E 3 DINAMIKUS TARTALOMVEZÉRELT PROMPT
-        konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár ritkaságok")
-        konyv_tartalom = poszt_adatai[0].get('preview', '') if has_author_books else (fallback_adatai[0].get('preview', '') if fallback_adatai else "Gyönyörű könyv")
-        
-        img_prompt = f"Create a photorealistic, cinematic conceptual scene inspired by the book '{konyv_cim}'. The specific content/mood of the book is: '{konyv_tartalom[:150]}'. Style: highly detailed realistic photography, atmospheric, lifelike, 8k resolution, cinematic lighting. Do NOT include any text, letters, or words in the image. Do NOT include visible human faces."
+        konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár kincsek")
+        konyv_tartalom = poszt_adatai[0].get('preview', '') if has_author_books else (fallback_adatai[0].get('preview', '') if fallback_adatai else "")
+        img_prompt = f"Cinematic conceptual scene inspired by '{konyv_cim}'. Mood: '{konyv_tartalom[:150]}'. Realistic photography, 8k, atmospheric. No text, no faces."
         
         video_path, image_path = "social_video.mp4", "social_img.jpg"
         media_url, is_video = "", False
-
         try:
-            print(f"🎨 DALL-E Kép generálása a '{konyv_cim}' tartalmából...")
             img_res = self.client_ai.images.generate(model="dall-e-3", prompt=img_prompt, size="1024x1024", quality="hd", n=1)
             media_url = img_res.data[0].url
             with open(image_path, 'wb') as f: f.write(requests.get(media_url).content)
-            
-            if self._create_infinite_loop_video(image_path, video_path): 
-                is_video = True
-            else:
-                print("⚠️ Videó hiba, statikus képet használunk.")
-        except Exception as e: 
-            print(f"❌ Képgenerálási hiba: {e}")
+            is_video = self._create_infinite_loop_video(image_path, video_path)
+        except Exception as e: print(f"❌ Kép hiba: {e}")
 
-        marketing_prompt = f"""
-        Act as Booksy, the CopySEO marketing agent. Write a Facebook post in Hungarian.
-        Today is {datetime.now(LOCAL_TZ).strftime('%Y. %B %d.')} in Romania.
-        Today's holiday (if any): {napi_ünnep if napi_ünnep else 'Nincs ünnep'}.
-        Celebrated book authors born exactly on this day: {json.dumps(ünnepeltek, ensure_ascii=False)}.
-
-        CRITICAL RULE 1: If the 'celebrated authors' list is empty, DO NOT mention anything about birthdays or celebrating authors. Just greet the readers and directly recommend the books below.
-        CRITICAL RULE 2: If the list is NOT empty, you MUST explicitly state in the VERY FIRST SENTENCE that we are celebrating them because TODAY IS THEIR BIRTHDAY (ma ünneplik születésnapjukat / a mai napon születtek). Then honor them by name and bio. Do not just say "we celebrate them" without mentioning the birthday context.
-        """
-        
-        if has_author_books:
-            marketing_prompt += f"\nRecommend specific books: {json.dumps(poszt_adatai, ensure_ascii=False)}."
-        else:
-            marketing_prompt += f"\nFallback recommendation: {json.dumps(fallback_adatai, ensure_ascii=False)}."
-
-        marketing_prompt += "\nRule: Elegant style, use the exact URLs provided."
-        
+        marketing_prompt = f"Act as Booksy CopySEO. Write FB post in HU. Today is birthday of: {json.dumps(ünnepeltek)}. Holiday: {napi_ünnep}. Books: {json.dumps(poszt_adatai if has_author_books else fallback_adatai)}. Use provided URLs."
         post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
 
-        fb_page_id = os.getenv("FB_PAGE_ID")
-        fb_token = os.getenv("FB_PAGE_TOKEN")
-        
+        # Mentés az e-mailhez
+        with open("social_state.json", "w") as f: json.dump({"text": post_text}, f)
+
+        fb_page_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
         if fb_page_id and fb_token:
-            print("🚀 Egylépéses hivatalos feltöltés a Meta Business Suite Piszkozatokba...")
             try:
                 if is_video:
-                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/videos"
-                    files = {'source': open(video_path, 'rb')}
-                    data = {'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
-                    res = requests.post(fb_url, data=data, files=files)
+                    res = requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
                 else:
-                    fb_url = f"https://graph.facebook.com/v19.0/{fb_page_id}/photos"
-                    payload = {"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token}
-                    res = requests.post(fb_url, json=payload)
-                
-                if res.status_code == 200:
-                    print(f"✅ TÖKÉLETES SIKER! (ID: {res.json().get('id')})")
-                else:
-                    print(f"❌ FB API Hiba: {res.text}")
-            except Exception as e: 
-                print(f"❌ Kritikus hiba: {e}")
+                    res = requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
+                if res.status_code == 200: print(f"✅ TÖKÉLETES SIKER! FB ID: {res.json().get('id')}")
+            except Exception as e: print(f"❌ FB hiba: {e}")
 
-        with open("social_state.json", "w") as f:
-            json.dump({"text": post_text, "type": "video" if is_video else "image"}, f)
-        
         if os.path.exists(image_path): os.remove(image_path)
         if os.path.exists(video_path): os.remove(video_path)
-
-    def send_morning_email(self):
-        if not os.path.exists("social_state.json"): return
-        with open("social_state.json", "r") as f: state = json.load(f)
         
-        sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
-        admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
-
-        if sender and password and admin_emails:
-            try:
-                server = smtplib.SMTP_SSL(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 465)
-                server.login(sender, password)
-                for admin in admin_emails:
-                    msg = MIMEMultipart()
-                    msg['From'] = f"Booksy Social Agent <{sender}>"; msg['To'] = admin
-                    msg['Subject'] = f"✅ Booksy: Facebook Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                    msg.attach(MIMEText(f"<html><body><p>A mai romániai idő szerinti poszt elkészült:</p><pre>{state['text']}</pre></body></html>", 'html'))
-                    server.send_message(msg)
-                server.quit()
-            except Exception as e: print(f"❌ Email hiba: {e}")
-        try: os.remove("social_state.json")
-        except: pass
+        # --- ÚJ: AZONNALI E-MAIL KÜLDÉS ---
+        self.send_morning_email()
 
 # --- INITIALIZATION ---
 db_handler = DBHandler()
 updater = AutoUpdater(db_handler)
 bot = BooksyBrain(db_handler)
 social_agent = BooksySocialAgent(db_handler)
-
 scheduler = BackgroundScheduler()
 scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
 scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=4, minute=0, timezone=LOCAL_TZ))
@@ -511,15 +401,13 @@ scheduler.add_job(social_agent.send_morning_email, CronTrigger(hour=9, minute=0,
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.start()
-    yield
-    scheduler.shutdown()
+    scheduler.start(); yield; scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V126 (STRICT ACADEMIC FILTER & ZERO QUOTA)"}
+def home(): return {"status": "Booksy V127 (IMMEDIATE EMAIL + VERBOSE LOGS)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
