@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V142 (CLAUDE SONNET 4.6 ONLY & CLEAN ORIGINAL URLS)
+# BOOKSY BRAIN - V147 (CLAUDE SONNET 4.6 & BASE64 URL PROTECTION)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 import gc
 import chromadb
 import pytz
+import base64
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -48,8 +49,9 @@ except Exception as e:
 
 load_dotenv()
 
-# --- TISZTA, EREDETI URL-EK ---
-XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
+# --- BOLONDBIZTOS BASE64 URL-EK A MARKDOWN MÁSOLÁSI HIBA ELLEN ---
+# aHR0cHM6Ly93d3cuYW50aWt2YXJpdXMucm8vd3AtY29udGVudC91cGxvYWRzL3dvby1mZWVkL2dvb2dsZS94bWwvYm9va3N5ZnVsbGZlZWQueG1s -> https://www.antikvarius.ro/...
+XML_FEED_URL = os.getenv("XML_FEED_URL", base64.b64decode("aHR0cHM6Ly93d3cuYW50aWt2YXJpdXMucm8vd3AtY29udGVudC91cGxvYWRzL3dvby1mZWVkL2dvb2dsZS94bWwvYm9va3N5ZnVsbGZlZWQueG1s").decode('utf-8'))
 TEMP_FILE = "temp_feed.xml"
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 
@@ -147,7 +149,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V142|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V147|{bid}|{book_data['title']}|{book_data['price']}")
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
@@ -218,7 +220,11 @@ class BooksySocialAgent:
     def _fetch_wikipedia_births(self):
         today = datetime.now(LOCAL_TZ)
         mm, dd = today.strftime("%m"), today.strftime("%d")
-        url = f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{mm}/{dd}"
+        
+        # Base64 Dekódolás a Wiki URL-hez
+        base_wiki = base64.b64decode("aHR0cHM6Ly9lbi53aWtpcGVkaWEub3JnL2FwaS9yZXN0X3YxL2ZlZWQvb250aGlzZGF5L2JpcnRocy8=").decode('utf-8')
+        url = f"{base_wiki}{mm}/{dd}"
+        
         headers = {'User-Agent': 'BooksyBot/1.0 (antikvarius.ro)'}
         try:
             response = requests.get(url, headers=headers, timeout=15)
@@ -264,7 +270,7 @@ class BooksySocialAgent:
         try:
             print("🧠 [CLAUDE] Naptár elemzése folyamatban...")
             res = self.client_claude.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-4-6", # A BIZONYÍTOTTAN MŰKÖDŐ MODELL
                 max_tokens=1000,
                 temperature=0.0,
                 messages=[{"role": "user", "content": prompt}]
@@ -313,7 +319,7 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V142 - CLAUDE 4.6 & CLEAN URLS)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V147 - BASE64 FB URLS + CLAUDE 4.6)...")
         calendar = self._get_agentic_calendar()
         ünnepeltek = calendar.get("authors", [])
         
@@ -357,7 +363,7 @@ class BooksySocialAgent:
         try:
             print("🖋️ [CLAUDE] Szövegírás folyamatban...")
             post_res = self.client_claude.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-4-6", # A BIZONYÍTOTTAN MŰKÖDŐ MODELL
                 max_tokens=1500,
                 temperature=0.7,
                 messages=[{"role": "user", "content": marketing_prompt}]
@@ -375,10 +381,14 @@ class BooksySocialAgent:
         else:
             try:
                 print("🚀 [FB] Poszt küldése a Meta Business Suite-ba...")
+                
+                # Base64 Dekódolás a FB URL-hez
+                fb_base = base64.b64decode("aHR0cHM6Ly9ncmFwaC5mYWNlYm9vay5jb20vdjE5LjAv").decode('utf-8')
+                
                 if is_video:
-                    res = requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
+                    res = requests.post(f"{fb_base}{fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
                 else:
-                    res = requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
+                    res = requests.post(f"{fb_base}{fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
                 
                 if res.status_code == 200:
                     print(f"✅ [FB] TÖKÉLETES SIKER! FB ID: {res.json().get('id')}")
@@ -408,7 +418,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V142 (CLAUDE 4.6 + ORIGINAL URLS)"}
+def home(): return {"status": "Booksy V147 (BASE64 FB URLS & CLAUDE 4.6)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
