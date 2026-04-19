@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V134 (CLAUDE 3.5 SONNET API VERSION FIX)
+# BOOKSY BRAIN - V136 (CLAUDE 3.5 SONNET OCTOBER RELEASE + AUTH DIAGNOSTICS)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -145,7 +145,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V134|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V136|{bid}|{book_data['title']}|{book_data['price']}")
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
@@ -159,7 +159,7 @@ class AutoUpdater:
                 except: pass
             if ids_batch: self.db.collection.upsert(ids=ids_batch, embeddings=embeddings_batch, metadatas=metadatas_batch)
             if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
-        except: pass
+        except Exception as e: pass
 
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
@@ -262,7 +262,7 @@ class BooksySocialAgent:
         try:
             print("🧠 [CLAUDE] Naptár elemzése folyamatban...")
             res = self.client_claude.messages.create(
-                model="claude-3-5-sonnet-20240620", # <-- STABIL JÚNIUSI MODELL VERZIÓ
+                model="claude-3-5-sonnet-20241022", # <-- VISSZA A CSÚCSMODELLRE!
                 max_tokens=1000,
                 temperature=0.0,
                 messages=[{"role": "user", "content": prompt}]
@@ -272,7 +272,10 @@ class BooksySocialAgent:
                 raw_json = raw_json.split("```json")[1].split("```")[0].strip()
             return json.loads(raw_json)
         except Exception as e:
-            print(f"❌ Claude API hiba (Naptár): {e}") 
+            if "not_found_error" in str(e):
+                print("❌ [CLAUDE JOGOSULTSÁG HIBA]: A jelenlegi API kulcsodnak nincs joga a Sonnet 3.5 modellhez. Kérlek generálj egy új kulcsot az Anthropic Console-ban!")
+            else:
+                print(f"❌ Claude API hiba (Naptár): {e}") 
             return {"holiday": None, "authors": []}
 
     def _create_infinite_loop_video(self, image_path, output_path):
@@ -311,7 +314,7 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V134 - Claude 3.5 Sonnet Fix)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V136 - Claude 3.5 Sonnet)...")
         calendar = self._get_agentic_calendar()
         ünnepeltek = calendar.get("authors", [])
         
@@ -355,7 +358,7 @@ class BooksySocialAgent:
         try:
             print("🖋️ [CLAUDE] Szövegírás folyamatban...")
             post_res = self.client_claude.messages.create(
-                model="claude-3-5-sonnet-20240620", # <-- STABIL JÚNIUSI MODELL VERZIÓ
+                model="claude-3-5-sonnet-20241022", # <-- VISSZA A CSÚCSMODELLRE!
                 max_tokens=1500,
                 temperature=0.7,
                 messages=[{"role": "user", "content": marketing_prompt}]
@@ -397,7 +400,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V134 (CLAUDE 3.5 SONNET API FIX)"}
+def home(): return {"status": "Booksy V136 (CLAUDE 3.5 SONNET OCTOBER RELEASE)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
