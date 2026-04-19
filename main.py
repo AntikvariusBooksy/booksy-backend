@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V150 (NEW GOOGLE GENAI SDK MIGRATION + CLAUDE 4.6)
+# BOOKSY BRAIN - V151 (GEMINI-EMBEDDING-001 UPDATE + CLAUDE 4.6)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -53,7 +53,7 @@ except Exception as e:
 
 load_dotenv()
 
-# Google Gemini Új Kliens Inicializálása
+# Google Gemini Kliens Inicializálása
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
@@ -108,7 +108,8 @@ def extract_all_data(elem) -> Dict[str, Any]:
 class DBHandler:
     def __init__(self):
         self.client = chromadb.PersistentClient(path="./booksy_db")
-        self.collection = self.client.get_or_create_collection(name="booksy_collection_gemini")
+        # Új V2 kollekció a tiszta induláshoz
+        self.collection = self.client.get_or_create_collection(name="booksy_collection_gemini_v2")
 
 class AutoUpdater:
     def __init__(self, db: DBHandler):
@@ -165,7 +166,11 @@ class AutoUpdater:
                 
                 if len(ids_batch) >= 50:
                     try:
-                        result = gemini_client.models.embed_content(model="text-embedding-004", contents=emb_texts_batch)
+                        result = gemini_client.models.embed_content(
+                            model="gemini-embedding-001", 
+                            contents=emb_texts_batch,
+                            config=types.EmbedContentConfig(output_dimensionality=768)
+                        )
                         emb_values = [e.values for e in result.embeddings]
                         self.db.collection.upsert(ids=ids_batch, embeddings=emb_values, metadatas=metadatas_batch)
                     except Exception as e: print(f"Hiba a Gemini embeddingnél: {e}")
@@ -174,7 +179,11 @@ class AutoUpdater:
             
             if ids_batch: 
                 try:
-                    result = gemini_client.models.embed_content(model="text-embedding-004", contents=emb_texts_batch)
+                    result = gemini_client.models.embed_content(
+                        model="gemini-embedding-001", 
+                        contents=emb_texts_batch,
+                        config=types.EmbedContentConfig(output_dimensionality=768)
+                    )
                     emb_values = [e.values for e in result.embeddings]
                     self.db.collection.upsert(ids=ids_batch, embeddings=emb_values, metadatas=metadatas_batch)
                 except: pass
@@ -194,7 +203,7 @@ class BooksyBrain:
 
     def process(self, msg, context_url, session_id):
         try:
-            # 1. Agy (Gemini elemzi a szándékot) - ÚJ SDK
+            # 1. Agy (Gemini elemzi a szándékot)
             prompt_intent = f"Intent analysis for bookstore. Input: '{msg}'. JSON output MUST be EXACTLY: {{\"intent\": \"search\"|\"policy\", \"query\": \"query\"}}"
             analysis = gemini_client.models.generate_content(
                 model='gemini-1.5-flash',
@@ -203,9 +212,13 @@ class BooksyBrain:
             ).text
             intent_data = json.loads(analysis)
             
-            # 2. Kutató (Gemini keres az adatbázisban)
+            # 2. Kutató (Gemini keres az adatbázisban az ÚJ modellel)
             query_text = intent_data.get('query', msg)
-            vec = gemini_client.models.embed_content(model="text-embedding-004", contents=query_text).embeddings[0].values
+            vec = gemini_client.models.embed_content(
+                model="gemini-embedding-001", 
+                contents=query_text,
+                config=types.EmbedContentConfig(output_dimensionality=768)
+            ).embeddings[0].values
             
             final_reply, final_products = "", []
             
@@ -361,14 +374,18 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V150 - GOOGLE GENAI MIGRATION)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V151 - GEMINI-EMBEDDING-001)...")
         calendar = self._get_agentic_calendar()
         ünnepeltek = calendar.get("authors", [])
         
         poszt_adatai = []
         if ünnepeltek:
             for író in ünnepeltek:
-                vec = gemini_client.models.embed_content(model="text-embedding-004", contents=író['name']).embeddings[0].values
+                vec = gemini_client.models.embed_content(
+                    model="gemini-embedding-001", 
+                    contents=író['name'],
+                    config=types.EmbedContentConfig(output_dimensionality=768)
+                ).embeddings[0].values
                 res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 if res['ids'] and res['ids'][0]:
                     meta = res['metadatas'][0][0]
@@ -379,7 +396,11 @@ class BooksySocialAgent:
         fallback_adatai = []
         if not has_author_books:
             themes = ["ritka antikvár könyv", "izgalmas krimik", "klasszikus magyar szépirodalom", "történelmi szakkönyvek"]
-            vec = gemini_client.models.embed_content(model="text-embedding-004", contents=random.choice(themes)).embeddings[0].values
+            vec = gemini_client.models.embed_content(
+                model="gemini-embedding-001", 
+                contents=random.choice(themes),
+                config=types.EmbedContentConfig(output_dimensionality=768)
+            ).embeddings[0].values
             fallback_res = self.db.collection.query(query_embeddings=[vec], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
             if fallback_res['ids'] and fallback_res['ids'][0]:
                 for i in random.sample(range(len(fallback_res['ids'][0])), min(3, len(fallback_res['ids'][0]))):
@@ -494,7 +515,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V150 (GOOGLE GENAI MIGRATION)"}
+def home(): return {"status": "Booksy V151 (GEMINI-EMBEDDING-001 MIGRATION)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
