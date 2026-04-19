@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V130 (CPANEL PORT 26 NON-SSL FIREWALL BYPASS)
+# BOOKSY BRAIN - V131 (ANTI-SPAM HEADERS & CPANEL PORT 26 OPTIMIZATION)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -31,6 +31,7 @@ import markdownify
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate, make_msgid # ÚJ: Spam-ellenes fejlécekhez
 
 # --- KÖTELEZŐ MONKEY PATCH A PILLOW 10+ ÉS MOVIEPY KOMPATIBILITÁSHOZ ---
 import PIL.Image
@@ -44,22 +45,14 @@ try:
     MOVIEPY_AVAILABLE = True
     print("✅ MoviePy és Pillow Patch sikeresen betöltve a videóhoz.")
 except Exception as e:
-    print(f"⚠️ MoviePy nem elérhető (A videó generálás képként fog lefutni): {e}")
+    print(f"⚠️ MoviePy nem elérhető: {e}")
     MOVIEPY_AVAILABLE = False
 
 load_dotenv()
 XML_FEED_URL = os.getenv("XML_FEED_URL", "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml")
 TEMP_FILE = "temp_feed.xml"
 
-# --- HIVATALOS ROMÁNIAI IDŐZÓNA BEÁLLÍTÁSA ---
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
-
-POLICY_PAGES = [
-    {"url": "https://www.antikvarius.ro/termeni-si-conditii-de-utilizare/", "lang": "ro", "name": "Termeni și condiții"},
-    {"url": "https://www.antikvarius.ro/informatii-despre-plata/", "lang": "ro", "name": "Informații despre plată"},
-    {"url": "https://www.antikvarius.ro/informatii-despre-livrare/", "lang": "ro", "name": "Informații despre livrare"},
-    {"url": "https://www.antikvarius.ro/contact/", "lang": "ro", "name": "Contact"},
-]
 
 # --- ALAP FUNKCIÓK ---
 def normalize_text(text):
@@ -161,7 +154,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V130|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V131|{bid}|{book_data['title']}|{book_data['price']}")
                 book_data['content_hash'] = d_hash
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
@@ -250,8 +243,7 @@ class BooksySocialAgent:
                         verified_writers.append({"name": person.get('text', '').split(',')[0], "year": person.get('year'), "bio_en": pages[0].get('extract', '') if pages else person.get('text', '')})
                 return verified_writers
             return []
-        except Exception as e:
-            print(f"❌ Wikipedia API hiba: {e}"); return []
+        except: return []
 
     def _get_agentic_calendar(self):
         today_local = datetime.now(LOCAL_TZ)
@@ -265,15 +257,14 @@ class BooksySocialAgent:
         
         CRITICAL RULES: 
         1. Max 3-5 people. 
-        2. Format ONLY Hungarian names as Lastname Firstname (e.g. Németh László). Keep English/American/Spanish names in their original order (e.g. Stanley Fish, José Echegaray y Eizaguirre).
-        3. You MUST translate and summarize the bio into exactly 1 SENTENCE IN HUNGARIAN. Do not leave the bio in English!
+        2. Format ONLY Hungarian names as Lastname Firstname.
+        3. You MUST translate and summarize the bio into exactly 1 SENTENCE IN HUNGARIAN.
         
         Output ONLY JSON: {{"holiday": "...", "authors": [{{"name": "...", "bio": "Hungarian translation of bio..."}}]}}
         """
         try:
             res = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"}, temperature=0.0).choices[0].message.content
-            data = json.loads(res)
-            return data
+            return json.loads(res)
         except: return {"holiday": None, "authors": []}
 
     def _create_infinite_loop_video(self, image_path, output_path):
@@ -289,10 +280,8 @@ class BooksySocialAgent:
         except: return False
 
     def send_morning_email(self):
-        """E-mail küldő modul - 26-os port fókusszal (Non-SSL)"""
-        print("📧 [EMAIL] Értesítő folyamat indul (V130 - Port 26 Non-SSL Bypass)...")
+        print("📧 [EMAIL] Értesítő folyamat indul (V131 - Anti-Spam Headers + Port 26 STARTTLS)...")
         if not os.path.exists("social_state.json"):
-            print("⚠️ [EMAIL] Nincs elmentett poszt (social_state.json hiányzik).")
             return
         
         with open("social_state.json", "r") as f: state = json.load(f)
@@ -301,58 +290,46 @@ class BooksySocialAgent:
         admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
 
         if not sender or not password or not admin_emails:
-            print("❌ [EMAIL] SMTP adatok hiányoznak!")
             return
 
-        # Sorrend: 1. Port 26 Non-SSL, 2. Port 26 STARTTLS, 3. Port 587, 4. Port 465
-        ports_to_try = [
-            (26, "non-ssl"),
-            (26, "starttls"),
-            (587, "starttls"),
-            (465, "ssl")
-        ]
-        
         email_sent_successfully = False
 
-        for port, encryption in ports_to_try:
-            try:
-                print(f"🔗 [EMAIL] Próbálkozás a(z) {port} porton ({encryption})...")
+        try:
+            print(f"🔗 [EMAIL] Csatlakozás a szerverhez: {server_addr}:26 (STARTTLS)...")
+            server = smtplib.SMTP(server_addr, 26, timeout=15)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(sender, password)
+            
+            for admin in admin_emails:
+                msg = MIMEMultipart()
+                msg['From'] = f"Booksy Social Agent <{sender}>"
+                msg['To'] = admin
+                msg['Subject'] = f"✅ Booksy Poszt Elkészült ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
                 
-                if encryption == "ssl":
-                    server = smtplib.SMTP_SSL(server_addr, port, timeout=10)
-                else:
-                    server = smtplib.SMTP(server_addr, port, timeout=10)
-                    if encryption == "starttls":
-                        server.ehlo()
-                        server.starttls()
-                        server.ehlo()
+                # --- ANTI-SPAM FEJLÉCEK ---
+                msg['Date'] = formatdate(localtime=False)
+                msg['Message-ID'] = make_msgid(domain=server_addr.replace('mail.', ''))
                 
-                server.login(sender, password)
+                body = f"<html><body><h3>A mai poszt elkészült és vázlatba került:</h3><pre style='background:#f4f4f4;padding:10px;border:1px solid #ddd;font-family:sans-serif;'>{state['text']}</pre></body></html>"
+                msg.attach(MIMEText(body, 'html'))
                 
-                for admin in admin_emails:
-                    msg = MIMEMultipart()
-                    msg['From'] = f"Booksy Social Agent <{sender}>"; msg['To'] = admin
-                    msg['Subject'] = f"✅ Booksy Poszt Elkészült ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                    body = f"<html><body><h3>A mai poszt elkészült és vázlatba került:</h3><pre style='background:#f4f4f4;padding:10px;border:1px solid #ddd;'>{state['text']}</pre></body></html>"
-                    msg.attach(MIMEText(body, 'html'))
-                    server.send_message(msg)
-                    print(f"📧 [EMAIL] Sikeresen elküldve ide: {admin} a(z) {port} porton!")
-                
-                server.quit()
-                email_sent_successfully = True
-                break
-                
-            except Exception as e:
-                print(f"⚠️ [EMAIL] Port {port} ({encryption}) sikertelen: {e}")
+                server.send_message(msg)
+                print(f"📧 [EMAIL] Sikeresen elküldve ide: {admin}")
+            
+            server.quit()
+            email_sent_successfully = True
+            
+        except Exception as e:
+            print(f"⚠️ [EMAIL] Küldés sikertelen a 26-os porton: {e}")
 
         if email_sent_successfully:
             os.remove("social_state.json")
             print("🗑️ [EMAIL] social_state.json törölve.")
-        else:
-            print("❌ [EMAIL] KRITIKUS HIBA: Minden port blokkolva. SMTP hívás sikertelen.")
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V130)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V131)...")
         calendar = self._get_agentic_calendar()
         napi_ünnep, ünnepeltek = calendar.get("holiday"), calendar.get("authors", [])
         
@@ -389,7 +366,7 @@ class BooksySocialAgent:
             media_url = img_res.data[0].url
             with open(image_path, 'wb') as f: f.write(requests.get(media_url).content)
             is_video = self._create_infinite_loop_video(image_path, video_path)
-        except Exception as e: print(f"❌ Kép hiba: {e}")
+        except: pass
 
         marketing_prompt = f"Act as Booksy CopySEO. Write FB post in HU. Today is birthday of: {json.dumps(ünnepeltek)}. Holiday: {napi_ünnep}. Books: {json.dumps(poszt_adatai if has_author_books else fallback_adatai)}. Use provided URLs."
         post_text = self.client_ai.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": marketing_prompt}]).choices[0].message.content
@@ -403,7 +380,7 @@ class BooksySocialAgent:
                     res = requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
                 else:
                     res = requests.post(f"https://graph.facebook.com/v19.0/{fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
-            except Exception as e: pass
+            except: pass
 
         if os.path.exists(image_path): os.remove(image_path)
         if os.path.exists(video_path): os.remove(video_path)
@@ -426,7 +403,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V130 (CPANEL NON-SSL 26 PORT BYPASS)"}
+def home(): return {"status": "Booksy V131 (ANTI-SPAM FIX & PORT 26)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
