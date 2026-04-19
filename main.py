@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V133 (HYBRID ORCHESTRATION: CLAUDE 3.5 SONNET + OPENAI)
+# BOOKSY BRAIN - V134 (CLAUDE 3.5 SONNET API VERSION FIX)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from openai import OpenAI
-import anthropic # ÚJ: Claude SDK
+import anthropic 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from typing import List, Optional, Dict, Any
@@ -103,7 +103,7 @@ class DBHandler:
 
 class AutoUpdater:
     def __init__(self, db: DBHandler):
-        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) # Embeddings miatt marad OpenAI
+        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.db = db
 
     def download_feed(self):
@@ -145,7 +145,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V133|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V134|{bid}|{book_data['title']}|{book_data['price']}")
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
@@ -167,7 +167,6 @@ class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
 class BooksyBrain:
     def __init__(self, db: DBHandler):
         self.db = db
-        # A Chat egyelőre marad GPT a Gemini beépítéséig
         self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.user_session_cache = {}
 
@@ -211,8 +210,8 @@ class BooksyBrain:
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
-        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) # Képgenerálás és Embedding
-        self.client_claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) # Szövegírás és Logika
+        self.client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) 
+        self.client_claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) 
 
     def _fetch_wikipedia_births(self):
         today = datetime.now(LOCAL_TZ)
@@ -243,7 +242,6 @@ class BooksySocialAgent:
         wiki_writers = self._fetch_wikipedia_births()
         wiki_text = json.dumps(wiki_writers[:25], ensure_ascii=False) if wiki_writers else "No valid Wikipedia data available for today."
         
-        # CLAUDE 3.5 SONNET PROMPT
         prompt = f"""
         Today's exact local date in Bucharest, Romania is {today_str}. Act as factual editor.
         Select ONLY prominent literary writers from this list: {wiki_text}
@@ -264,13 +262,12 @@ class BooksySocialAgent:
         try:
             print("🧠 [CLAUDE] Naptár elemzése folyamatban...")
             res = self.client_claude.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-5-sonnet-20240620", # <-- STABIL JÚNIUSI MODELL VERZIÓ
                 max_tokens=1000,
                 temperature=0.0,
                 messages=[{"role": "user", "content": prompt}]
             )
             raw_json = res.content[0].text
-            # Tisztítás hátha markdownba teszi
             if "```json" in raw_json:
                 raw_json = raw_json.split("```json")[1].split("```")[0].strip()
             return json.loads(raw_json)
@@ -314,7 +311,7 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V133 - Claude 3.5 Sonnet)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V134 - Claude 3.5 Sonnet Fix)...")
         calendar = self._get_agentic_calendar()
         ünnepeltek = calendar.get("authors", [])
         
@@ -342,7 +339,6 @@ class BooksySocialAgent:
         konyv_cim = poszt_adatai[0]['title'] if has_author_books else (fallback_adatai[0]['title'] if fallback_adatai else "Antikvár kincsek")
         konyv_tartalom = poszt_adatai[0].get('preview', '') if has_author_books else (fallback_adatai[0].get('preview', '') if fallback_adatai else "")
         
-        # OPENAI DALL-E 3 GENERÁLÁS (Claude nem tud képet rajzolni)
         img_prompt = f"A photorealistic, cinematic atmospheric scene inspired by the mood of the book '{konyv_cim}'. Context: '{konyv_tartalom[:150]}'. Style: high-end photography, 8k resolution, lifelike textures. CRITICAL: DO NOT include any text, letters, typography, words, or signs in the image. Ensure any visible book covers are completely blank without any writing. No human faces."
         video_path, image_path = "social_video.mp4", "social_img.jpg"
         media_url, is_video = "", False
@@ -354,13 +350,12 @@ class BooksySocialAgent:
             is_video = self._create_infinite_loop_video(image_path, video_path)
         except Exception as e: print(f"❌ Kép hiba: {e}")
 
-        # CLAUDE 3.5 SONNET SZÖVEGÍRÁS (CopySEO)
         marketing_prompt = f"Act as Booksy CopySEO, the ultimate marketing expert. Write an engaging Facebook post in Hungarian. State clearly that TODAY is the birthday of: {json.dumps(ünnepeltek)}. Holiday: {calendar.get('holiday')}. Books to recommend: {json.dumps(poszt_adatai if has_author_books else fallback_adatai)}. Use the exact provided URLs. Keep the tone elegant and persuasive. Do not hallucinate."
         
         try:
             print("🖋️ [CLAUDE] Szövegírás folyamatban...")
             post_res = self.client_claude.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-5-sonnet-20240620", # <-- STABIL JÚNIUSI MODELL VERZIÓ
                 max_tokens=1500,
                 temperature=0.7,
                 messages=[{"role": "user", "content": marketing_prompt}]
@@ -402,7 +397,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V133 (CLAUDE 3.5 SONNET HYBRID)"}
+def home(): return {"status": "Booksy V134 (CLAUDE 3.5 SONNET API FIX)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
