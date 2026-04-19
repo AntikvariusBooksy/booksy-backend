@@ -1,4 +1,4 @@
-# BOOKSY BRAIN - V137 (CLAUDE SONNET 4.6 MODERNIZATION FIX)
+# BOOKSY BRAIN - V138 (CLAUDE SONNET 4.6 + LOUD FACEBOOK API LOGGING)
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -145,7 +145,7 @@ class AutoUpdater:
             
             ids_batch, embeddings_batch, metadatas_batch = [], [], []
             for bid, book_data in unique_books_buffer.items():
-                d_hash = generate_content_hash(f"V137|{bid}|{book_data['title']}|{book_data['price']}")
+                d_hash = generate_content_hash(f"V138|{bid}|{book_data['title']}|{book_data['price']}")
                 emb_text = f"SKU: {bid}. Nyelv: {book_data['lang']}. Cím: {book_data['title']}. Szerző: {book_data['author']}. Leírás: {book_data['description'][:800]}"
                 try:
                     emb = self.client_ai.embeddings.create(input=emb_text[:8000], model="text-embedding-3-small").data[0].embedding
@@ -262,7 +262,7 @@ class BooksySocialAgent:
         try:
             print("🧠 [CLAUDE] Naptár elemzése folyamatban...")
             res = self.client_claude.messages.create(
-                model="claude-sonnet-4-6", # <-- ÚJ, ÉLŐ MODELL
+                model="claude-sonnet-4-6",
                 max_tokens=1000,
                 temperature=0.0,
                 messages=[{"role": "user", "content": prompt}]
@@ -311,7 +311,7 @@ class BooksySocialAgent:
         except: pass
 
     def run_night_generation(self):
-        print("🕒 [SOCIAL] Agentikus Generálás indul (V137 - Claude Sonnet 4.6)...")
+        print("🕒 [SOCIAL] Agentikus Generálás indul (V138 - Claude Sonnet 4.6 + LOUD FB LOGS)...")
         calendar = self._get_agentic_calendar()
         ünnepeltek = calendar.get("authors", [])
         
@@ -355,7 +355,7 @@ class BooksySocialAgent:
         try:
             print("🖋️ [CLAUDE] Szövegírás folyamatban...")
             post_res = self.client_claude.messages.create(
-                model="claude-sonnet-4-6", # <-- ÚJ, ÉLŐ MODELL
+                model="claude-sonnet-4-6",
                 max_tokens=1500,
                 temperature=0.7,
                 messages=[{"role": "user", "content": marketing_prompt}]
@@ -367,14 +367,31 @@ class BooksySocialAgent:
 
         with open("social_state.json", "w") as f: json.dump({"text": post_text}, f)
 
+        # --- JAVÍTOTT FB LOGOLÁS ---
         fb_page_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
-        if fb_page_id and fb_token:
+        if not fb_page_id or not fb_token:
+            print("⚠️ [FB] Hiányzik a FB_PAGE_ID vagy az FB_PAGE_TOKEN a környezeti változókból!")
+        else:
             try:
+                print("🚀 [FB] Poszt küldése a Meta Business Suite-ba...")
                 if is_video:
-                    requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(video_path, 'rb')})
+                    res = requests.post(
+                        f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/videos", 
+                        data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, 
+                        files={'source': open(video_path, 'rb')}
+                    )
                 else:
-                    requests.post(f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/photos", json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token})
-            except: pass
+                    res = requests.post(
+                        f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){fb_page_id}/photos", 
+                        json={"url": media_url, "message": post_text, "published": False, "unpublished_content_type": "DRAFT", "access_token": fb_token}
+                    )
+                
+                if res.status_code == 200:
+                    print(f"✅ [FB] TÖKÉLETES SIKER! FB ID: {res.json().get('id')}")
+                else:
+                    print(f"❌ [FB] API Hiba ({res.status_code}): {res.text}")
+            except Exception as e: 
+                print(f"❌ [FB] Rendszerhiba a küldés során: {e}")
 
         if os.path.exists(image_path): os.remove(image_path)
         if os.path.exists(video_path): os.remove(video_path)
@@ -397,7 +414,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Booksy V137 (CLAUDE SONNET 4.6 MODERNIZATION FIX)"}
+def home(): return {"status": "Booksy V138 (LOUD FACEBOOK LOGS)"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
