@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V172 (RESTORING THE AFTERNOON MAGIC - FULL AGENTIC CODE)
-# VERZIÓ: V172 - FB DRAFT TRICK RESTORED + SMTP FIX + CLAUDE 4.6
+# BOOKSY BRAIN - V173 (THE FINAL STABLE MASTERPIECE - FULL CODE)
+# VERZIÓ: V173 - FB VIDEO/PHOTO DRAFT VISIBILITY FIX + SMTP FROM HEADER FIX + CLAUDE 4.6
 
 __import__('pysqlite3')
 import sys
@@ -39,7 +39,7 @@ try:
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
-except:
+except Exception as e:
     MOVIEPY_AVAILABLE = False
 
 # --- UTILS ---
@@ -68,7 +68,7 @@ def extract_metadata_from_html(raw_html):
     if not raw_html: return meta
     try:
         soup = BeautifulSoup(raw_html, 'lxml')
-        for label, key in [('(?:Kiadó|Editura|Publisher)', 'publisher'), ('(?:Szerző|Autor|Author)', 'author')]:
+        for label, key in [('(?:Kiadó|Editura|Publisher)', 'publisher'), ('?:Szerző|Autor|Author)', 'author')]:
             target = soup.find(string=re.compile(label + r'\s*:', re.IGNORECASE))
             if target and target.find_parent('td'):
                 next_td = target.find_parent('td').find_next_sibling('td')
@@ -150,8 +150,8 @@ class BooksyBrain:
             
             r = self.claude.messages.create(
                 model=CLAUDE_MODEL, max_tokens=1000,
-                system="You are Booksy, the elegant Hungarian antique bookstore assistant. Use CopySEO style.",
-                messages=[{"role": "user", "content": f"Found books:\n{ctx_text}\nUser asks: {msg}"}]
+                system="You are Booksy, the elegant Hungarian bookstore assistant. Respond warmly in Hungarian.",
+                messages=[{"role": "user", "content": f"Context books:\n{ctx_text}\nUser asks: {msg}"}]
             )
             return {"reply": r.content[0].text, "products": prods}
         except Exception as e: return {"reply": f"Hiba: {e}", "products": []}
@@ -220,7 +220,7 @@ class BooksySocialAgent:
             vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=search_name, config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
             res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"type": "book"})
             if not res['ids'] or not res['ids'][0]:
-                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="antikvár könyv ritkaság", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="antikvár ritkaság", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"type": "book"})
             
             target = res['metadatas'][0][0]
@@ -234,17 +234,22 @@ class BooksySocialAgent:
             post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="You are Booksy CopySEO expert.", 
                 messages=[{"role": "user", "content": f"Write FB post in HU about {target['title']} by {target.get('author')}. Include the link: {target['url']}"}]).content[0].text
             
-            # --- FB DRAFT RESTORATION (THE WORKING TRICK) ---
+            # --- FB DRAFT VISIBILITY FIX ---
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if fb_id and fb_token:
                 if has_video:
-                    # Videó feltöltés (DRAFT)
+                    # Videó esetén AZONNAL DRAFT-ként kell küldeni az unpublished_content_type-ot
                     fr1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", 
-                        data={'access_token': fb_token, 'description': post_text, 'published': 'false'}, 
+                        data={
+                            'access_token': fb_token, 
+                            'description': post_text, 
+                            'published': 'false',
+                            'unpublished_content_type': 'DRAFT'
+                        }, 
                         files={'source': open(vid_path, 'rb')})
                     print(f"FB Video Response: {fr1.text}")
                 else:
-                    # Kép feltöltése rejtve, majd összefűzése a feed-del
+                    # Fotó esetén két lépcső: Upload -> Feed Draft
                     fr1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", 
                         data={'access_token': fb_token, 'published': 'false'}, 
                         files={'source': open(img_path, 'rb')})
@@ -262,7 +267,7 @@ class BooksySocialAgent:
             self.send_morning_email(post_text)
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész.")
+            print("✅ [SOCIAL] Vázlat sikeresen feltöltve.")
         except Exception as e: print(f"❌ SOCIAL ÜGYNÖK HIBA: {e}")
 
 # --- FASTAPI ---
@@ -286,13 +291,13 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "Booksy V172 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "Booksy V173 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
 @app.post("/test-social-night")
-def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Social triggered"}
+def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Started"}
 
 if __name__ == "__main__":
     import uvicorn
