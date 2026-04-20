@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V179 (THE FLAWLESS BUSINESS LOGIC EDITION)
-# VERZIÓ: V179 - EXACT 6 AUTHORS (MIXED NATIONALITY) + STRICT INSTOCK + POPULAR FALLBACK + CLAUDE 4.6
+# BOOKSY BRAIN - V180 (THE BULLETPROOF AGENTIC EDITION)
+# VERZIÓ: V180 - AI KNOWLEDGE OVERRIDE + STRICT 6 AUTHORS + POPULAR FALLBACK + INSTOCK ONLY
 
 __import__('pysqlite3')
 import sys
@@ -60,9 +60,12 @@ def html_to_markdown_clean(raw_html):
 
 def safe_json_parse(text):
     try:
-        clean_text = re.sub(r'```json\s*|\s*```', '', text).strip()
-        return json.loads(clean_text)
-    except: return {}
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match: return json.loads(match.group(0))
+        return json.loads(text)
+    except Exception as e:
+        print(f"⚠️ JSON Parse Hiba: {e} | Nyers Claude válasz: {text[:150]}")
+        return {}
 
 def extract_metadata_from_html(raw_html):
     meta = {"publisher": "Ismeretlen", "author": "Ismeretlen"}
@@ -174,9 +177,10 @@ class BooksySocialAgent:
             r = requests.get(url, headers={'User-Agent': 'BooksyBot/1.0'}, timeout=15)
             if r.status_code == 200:
                 v = []
+                keywords = ['writer', 'author', 'poet', 'novelist', 'playwright', 'essayist', 'philosopher', 'literature', 'historian']
                 for p in r.json().get('births', []):
                     comb = (p.get('text', '') + " " + (p.get('pages', [{}])[0].get('extract', '') if p.get('pages') else "")).lower()
-                    if any(kw in comb for kw in ['writer', 'author', 'poet', 'novelist']):
+                    if any(kw in comb for kw in keywords):
                         v.append({
                             "name": p.get('text', '').split(',')[0], 
                             "bio": p.get('pages', [{}])[0].get('extract', '') if p.get('pages') else p.get('text')
@@ -224,16 +228,17 @@ class BooksySocialAgent:
     def run_night_generation(self):
         print(f"🕒 [SOCIAL] Agent indul ({CLAUDE_MODEL})...")
         try:
-            # 1. ÍRÓK LEKÉRÉSE ÉS KIVÁLASZTÁSA (PONTOSAN 6, KEVERT NEMZETISÉGGEL)
+            # 1. ÍRÓK LEKÉRÉSE ÉS KIVÁLASZTÁSA (PONTOSAN 6, AI TUDÁSSAL KIEGÉSZÍTVE)
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
             writers = self._fetch_wikipedia_births()
             
-            prompt_wiki = f"""Today is {today_date}. Here are writers born today: {json.dumps(writers[:40])}.
-CRITICAL TASK: Select EXACTLY 6 legendary writers from this list. 
-You MUST include a mix of nationalities if available in the list:
-- Include Hungarian (Magyar) writers (Highest priority if present)
-- Include Romanian (Román) writers (Second priority if present)
-- MUST include International writers to complete the list of 6.
+            prompt_wiki = f"""Today is {today_date}. Here is a helper list from Wikipedia of people born today: {json.dumps(writers[:50])}.
+CRITICAL TASK: You MUST provide an EXACT list of 6 real writers/authors/poets who were born on {today_date}. 
+If the helper list does not contain enough writers, USE YOUR OWN AI KNOWLEDGE to find real writers born on {today_date}. NEVER return less than 6.
+NATIONALITY RULES:
+1. You MUST include Hungarian (Magyar) writers born today if any exist in history.
+2. You MUST include Romanian (Román) writers born today if any exist.
+3. Fill the rest of the 6 spots with famous International writers born today.
 
 Output JSON ONLY format: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi", "bio": "1 short interesting sentence in Hungarian"}}]}}"""
             
@@ -241,22 +246,24 @@ Output JSON ONLY format: {{"authors": [{{"name": "...", "nationality": "Magyar/R
             w_data = safe_json_parse(r_wiki.content[0].text)
             authors_list = w_data.get('authors', [])
             
-            if not authors_list:
-                authors_list = [{"name": "Klasszikus Szerzők", "nationality": "Világirodalom", "bio": "Ma a régi idők nagy irodalmáraira emlékezünk."}]
+            # Végső védelem, ha a Claude teljesen megőrülne
+            if not authors_list or len(authors_list) < 3:
+                authors_list = [{"name": "Klasszikus Szerzők", "nationality": "Világirodalom", "bio": "A világirodalom legnagyobb alakjaira emlékezünk ma."}]
 
             # 2. KÖNYV KERESÉSE (SZIGORÚAN RAKTÁRON LÉVŐ!)
             target = None
+            found_author = None
             for author in authors_list:
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=author['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
-                # CRITICAL: ONLY INSTOCK
                 res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 
                 if res['ids'] and res['ids'][0]:
                     target = res['metadatas'][0][0]
+                    found_author = author['name']
                     print(f"📚 RAKTÁRON LÉVŐ könyvet találtunk a szerzőhöz: {author['name']} -> {target['title']}")
                     break
 
-            # 3. FALLBACK - NÉPSZERŰ KÖNYVEK (HA NINCS A SZERZŐKTŐL RAKTÁRON)
+            # 3. FALLBACK - NÉPSZERŰ KÖNYVEK
             if not target:
                 print("⚠️ Egyik szerzőhöz sincs könyv RAKTÁRON. Népszerű bestsellerek/témák keresése...")
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="legnépszerűbb keresett antikvár bestsellerek klasszikusok sikerkönyvek", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
@@ -272,12 +279,18 @@ Output JSON ONLY format: {{"authors": [{{"name": "...", "nationality": "Magyar/R
             
             # 5. VÉGSŐ FB POSZT MEGÍRÁSA
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Nemzetközi')}): {a['bio']}" for a in authors_list])
+            
+            if found_author:
+                transition_instructions = f"CRITICAL: We found a book in our store written by one of the birthday authors ({found_author})! Title: {target['title']}. Make a HUGE, enthusiastic connection!"
+            else:
+                transition_instructions = f"CRITICAL: We didn't have books from the birthday authors, so we are recommending a general popular antique book today. Title: {target['title']}. Make a smooth, elegant transition from the birthdays to recommending this great antique book."
+
             final_prompt = (
                 f"Write a highly engaging Hungarian Facebook post for Antikvarius.ro.\n"
-                f"1. Start by enthusiastically celebrating that today ({today_date}) is the birthday of these 6 legendary writers:\n{authors_text}\n\n"
-                f"2. Smoothly transition to recommending this specific IN-STOCK book from our store:\n"
+                f"1. Start by enthusiastically listing EXACTLY these writers who were born today ({today_date}):\n{authors_text}\n\n"
+                f"2. Transition to recommending this IN-STOCK book from our store:\n"
                 f"Title: {target['title']}\nAuthor: {target.get('author')}\nInfo: {target.get('text_preview', '')}\nURL: {target['url']}\n\n"
-                f"CRITICAL: If the recommended book is written by one of the birthday authors, highlight that connection! If the book is NOT by them (because it's a general popular recommendation), make a smooth, elegant transition from the birthdays to recommending this highly sought-after antique book.\n"
+                f"{transition_instructions}\n"
                 f"Use CopySEO rules, emojis, and end with a question to drive engagement."
             )
             
@@ -333,7 +346,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "Booksy V179 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "Booksy V180 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
