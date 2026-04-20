@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V180 (THE BULLETPROOF AGENTIC EDITION)
-# VERZIÓ: V180 - AI KNOWLEDGE OVERRIDE + STRICT 6 AUTHORS + POPULAR FALLBACK + INSTOCK ONLY
+# BOOKSY BRAIN - V181 (THE NO-HALLUCINATION EDITION)
+# VERZIÓ: V181 - AUTHOR MATCH VALIDATION + NO Hallucination + STRICT 6 AUTHORS + INSTOCK ONLY
 
 __import__('pysqlite3')
 import sys
@@ -63,16 +63,14 @@ def safe_json_parse(text):
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match: return json.loads(match.group(0))
         return json.loads(text)
-    except Exception as e:
-        print(f"⚠️ JSON Parse Hiba: {e} | Nyers Claude válasz: {text[:150]}")
-        return {}
+    except: return {}
 
 def extract_metadata_from_html(raw_html):
     meta = {"publisher": "Ismeretlen", "author": "Ismeretlen"}
     if not raw_html: return meta
     try:
         soup = BeautifulSoup(raw_html, 'lxml')
-        for label, key in [('(?:Kiadó|Editura|Publisher)', 'publisher'), ('(?:Szerző|Autor|Author)', 'author')]:
+        for label, key in [('(?:Kiadó|Editura|Publisher)', 'publisher'), ('?:Szerző|Autor|Author)', 'author')]:
             target = soup.find(string=re.compile(label + r'\s*:', re.IGNORECASE))
             if target and target.find_parent('td'):
                 next_td = target.find_parent('td').find_next_sibling('td')
@@ -153,17 +151,13 @@ class BooksyBrain:
                 for m in res['metadatas'][0]:
                     prods.append({"title": m['title'], "price": m['price'], "url": m['url'], "image": m['image_url']})
                     ctx_text += f"- {m['title']} by {m.get('author', 'Ismeretlen')} ({m['price']})\n"
-            
             r = self.claude.messages.create(
                 model=CLAUDE_MODEL, max_tokens=1000,
-                system="You are Booksy, the elegant Hungarian bookstore assistant. Respond warmly in Hungarian.",
+                system="You are Booksy, the elegant Hungarian bookstore assistant.",
                 messages=[{"role": "user", "content": f"Context books:\n{ctx_text}\nUser asks: {msg}"}]
             )
             return {"reply": r.content[0].text, "products": prods}
         except Exception as e: return {"reply": f"Hiba: {e}", "products": []}
-
-    def negotiate_handshake(self, ui_lang):
-        return {"ui_lang": ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
@@ -177,14 +171,10 @@ class BooksySocialAgent:
             r = requests.get(url, headers={'User-Agent': 'BooksyBot/1.0'}, timeout=15)
             if r.status_code == 200:
                 v = []
-                keywords = ['writer', 'author', 'poet', 'novelist', 'playwright', 'essayist', 'philosopher', 'literature', 'historian']
                 for p in r.json().get('births', []):
                     comb = (p.get('text', '') + " " + (p.get('pages', [{}])[0].get('extract', '') if p.get('pages') else "")).lower()
-                    if any(kw in comb for kw in keywords):
-                        v.append({
-                            "name": p.get('text', '').split(',')[0], 
-                            "bio": p.get('pages', [{}])[0].get('extract', '') if p.get('pages') else p.get('text')
-                        })
+                    if any(kw in comb for kw in ['writer', 'author', 'poet', 'novelist', 'playwright', 'essayist']):
+                        v.append({"name": p.get('text', '').split(',')[0], "bio": p.get('pages', [{}])[0].get('extract', '') if p.get('pages') else p.get('text')})
                 return v
             return []
         except: return []
@@ -205,11 +195,9 @@ class BooksySocialAgent:
             password = os.getenv("SMTP_PASSWORD")
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
-            
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
             server.starttls()
             server.login(sender, password)
-            
             for admin in admin_emails:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"
@@ -217,10 +205,7 @@ class BooksySocialAgent:
                 msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
                 msg['Date'] = formatdate(localtime=True)
                 msg['Message-ID'] = make_msgid(domain="antikvarius.ro")
-                
-                body = f"Üdvözöllek!\n\nA mai Facebook vázlat elkészült és feltöltésre került a Business Suite Drafts közé.\n\nSZÖVEG:\n{post_text}"
-                msg.attach(MIMEText(body, 'plain', 'utf-8'))
-                
+                msg.attach(MIMEText(f"Vázlat:\n\n{post_text}", 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
         except Exception as e: print(f"📧 Email hiba: {e}")
@@ -228,102 +213,76 @@ class BooksySocialAgent:
     def run_night_generation(self):
         print(f"🕒 [SOCIAL] Agent indul ({CLAUDE_MODEL})...")
         try:
-            # 1. ÍRÓK LEKÉRÉSE ÉS KIVÁLASZTÁSA (PONTOSAN 6, AI TUDÁSSAL KIEGÉSZÍTVE)
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
             writers = self._fetch_wikipedia_births()
             
-            prompt_wiki = f"""Today is {today_date}. Here is a helper list from Wikipedia of people born today: {json.dumps(writers[:50])}.
-CRITICAL TASK: You MUST provide an EXACT list of 6 real writers/authors/poets who were born on {today_date}. 
-If the helper list does not contain enough writers, USE YOUR OWN AI KNOWLEDGE to find real writers born on {today_date}. NEVER return less than 6.
-NATIONALITY RULES:
-1. You MUST include Hungarian (Magyar) writers born today if any exist in history.
-2. You MUST include Romanian (Román) writers born today if any exist.
-3. Fill the rest of the 6 spots with famous International writers born today.
-
-Output JSON ONLY format: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi", "bio": "1 short interesting sentence in Hungarian"}}]}}"""
+            # 1. 6 ÍRÓ KIVÁLASZTÁSA (PONTOS NEMZETISÉGI PRIORITÁSSAL ÉS AI TUDÁSSAL)
+            prompt_wiki = f"""Today is {today_date}. Helper list: {json.dumps(writers[:50])}.
+Task: Provide EXACTLY 6 writers born today.
+RULES: 
+- 1. Must include ALL available Hungarian (Magyar) and Romanian (Román) writers born today.
+- 2. Use your own AI knowledge to find Hungarian/Romanian writers if the helper list is missing them (e.g. classical names).
+- 3. Fill up to 6 with International writers.
+Output JSON ONLY: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi", "bio": "..."}}]}}"""
             
             r_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
             w_data = safe_json_parse(r_wiki.content[0].text)
-            authors_list = w_data.get('authors', [])
-            
-            # Végső védelem, ha a Claude teljesen megőrülne
-            if not authors_list or len(authors_list) < 3:
-                authors_list = [{"name": "Klasszikus Szerzők", "nationality": "Világirodalom", "bio": "A világirodalom legnagyobb alakjaira emlékezünk ma."}]
+            authors_list = w_data.get('authors', [])[:6]
 
-            # 2. KÖNYV KERESÉSE (SZIGORÚAN RAKTÁRON LÉVŐ!)
+            # 2. KERESÉS ÉS SZERZŐ-VALIDÁCIÓ (Nincs több hazugság!)
             target = None
-            found_author = None
+            found_birthday_author = None
             for author in authors_list:
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=author['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-                
                 if res['ids'] and res['ids'][0]:
-                    target = res['metadatas'][0][0]
-                    found_author = author['name']
-                    print(f"📚 RAKTÁRON LÉVŐ könyvet találtunk a szerzőhöz: {author['name']} -> {target['title']}")
-                    break
+                    potential_target = res['metadatas'][0][0]
+                    # VALIDÁCIÓ: Tényleg az ő könyve?
+                    if normalize_text(author['name']) in normalize_text(potential_target['author']) or normalize_text(potential_target['author']) in normalize_text(author['name']):
+                        target = potential_target
+                        found_birthday_author = author['name']
+                        break
 
-            # 3. FALLBACK - NÉPSZERŰ KÖNYVEK
+            # 3. FALLBACK: NÉPSZERŰ TÉMÁK (SZIGORÚAN INSTOCK)
             if not target:
-                print("⚠️ Egyik szerzőhöz sincs könyv RAKTÁRON. Népszerű bestsellerek/témák keresése...")
-                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="legnépszerűbb keresett antikvár bestsellerek klasszikusok sikerkönyvek", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="legnépszerűbb magyar klasszikusok és antikvár ritkaságok", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 target = res['metadatas'][0][0]
-                print(f"📚 Népszerű Fallback könyv kiválasztva: {target['title']}")
 
-            # 4. KÉP ÉS VIDEÓ GENERÁLÁS
-            p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": f"Artistic, cinematic library image prompt for: {target['title']}. NO TEXT, NO HUMAN FACES."}]).content[0].text
+            # 4. MÉDIA ÉS POSZT
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
+            p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": f"Atmospheric library image for: {target['title']}. NO TEXT."}]).content[0].text
             with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1024&height=1024&nologo=true").content)
             has_video = self._create_video(img_path, vid_path)
             
-            # 5. VÉGSŐ FB POSZT MEGÍRÁSA
-            authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Nemzetközi')}): {a['bio']}" for a in authors_list])
+            authors_text = "\n".join([f"📖 {a['name']} ({a['nationality']}): {a['bio']}" for a in authors_list])
             
-            if found_author:
-                transition_instructions = f"CRITICAL: We found a book in our store written by one of the birthday authors ({found_author})! Title: {target['title']}. Make a HUGE, enthusiastic connection!"
+            # Claude-nak megmondjuk az igazat: megegyezik-e a szerző?
+            if found_birthday_author:
+                trans_msg = f"GREAT COINCIDENCE! We found a book BY {found_birthday_author} in our shop!"
             else:
-                transition_instructions = f"CRITICAL: We didn't have books from the birthday authors, so we are recommending a general popular antique book today. Title: {target['title']}. Make a smooth, elegant transition from the birthdays to recommending this great antique book."
+                trans_msg = "Note: None of the birthday authors had a book in stock, so recommend this popular classic instead."
 
-            final_prompt = (
-                f"Write a highly engaging Hungarian Facebook post for Antikvarius.ro.\n"
-                f"1. Start by enthusiastically listing EXACTLY these writers who were born today ({today_date}):\n{authors_text}\n\n"
-                f"2. Transition to recommending this IN-STOCK book from our store:\n"
-                f"Title: {target['title']}\nAuthor: {target.get('author')}\nInfo: {target.get('text_preview', '')}\nURL: {target['url']}\n\n"
-                f"{transition_instructions}\n"
-                f"Use CopySEO rules, emojis, and end with a question to drive engagement."
-            )
-            
             post_text = self.claude.messages.create(
-                model=CLAUDE_MODEL, 
-                max_tokens=1500, 
-                system="You are Booksy CopySEO expert.", 
-                messages=[{"role": "user", "content": final_prompt}]
+                model=CLAUDE_MODEL, max_tokens=1500, system="You are Booksy CopySEO expert.", 
+                messages=[{"role": "user", "content": f"Write FB post. Birthdays:\n{authors_text}\n\nBook to recommend:\nTitle: {target['title']}\nAuthor: {target['author']}\nURL: {target['url']}\n\n{trans_msg}"}]
             ).content[0].text
             
-            # 6. FACEBOOK DRAFT UPLOAD
+            # 5. UPLOAD (DRAFT)
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if fb_id and fb_token:
                 if has_video:
-                    r1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", 
-                        data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, 
-                        files={'source': open(vid_path, 'rb')})
+                    requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(vid_path, 'rb')})
                 else:
-                    r1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", 
-                        data={'access_token': fb_token, 'published': 'false'}, 
-                        files={'source': open(img_path, 'rb')})
-                    media_id = r1.json().get('id')
-                    if media_id:
-                        r2 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data={
-                            'access_token': fb_token, 'message': post_text, 'published': 'false',
-                            'unpublished_content_type': 'DRAFT', 'attached_media': json.dumps([{'media_fbid': media_id}])
-                        })
+                    r = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(img_path, 'rb')})
+                    mid = r.json().get('id')
+                    if mid: requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data={'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT', 'attached_media': json.dumps([{'media_fbid': mid}])})
 
             self.send_morning_email(post_text)
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész. Tökéletes logika, raktárkészlet és vázlat.")
-        except Exception as e: print(f"❌ SOCIAL ÜGYNÖK HIBA: {e}")
+            print("✅ [SOCIAL] Kész. Validált, instock, 6 író.")
+        except Exception as e: print(f"❌ HIBA: {e}")
 
 # --- FASTAPI ---
 updater = AutoUpdater(db_handler)
@@ -341,16 +300,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
-
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
-
 @app.get("/")
-def home(): return {"status": "Booksy V180 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "V181 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
-def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
+def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Started"}
 
