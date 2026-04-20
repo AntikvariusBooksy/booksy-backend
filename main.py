@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V170 (ULTIMATE CONSOLIDATED MASTERPIECE - FULL CODE)
-# VERZIÓ: V170 - FB DRAFT FIX + SMTP FROM HEADER FIX + CLAUDE 4.6
+# BOOKSY BRAIN - V172 (RESTORING THE AFTERNOON MAGIC - FULL AGENTIC CODE)
+# VERZIÓ: V172 - FB DRAFT TRICK RESTORED + SMTP FIX + CLAUDE 4.6
 
 __import__('pysqlite3')
 import sys
@@ -39,7 +39,7 @@ try:
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
-except Exception as e:
+except:
     MOVIEPY_AVAILABLE = False
 
 # --- UTILS ---
@@ -84,7 +84,7 @@ class DBHandler:
 
 db_handler = DBHandler()
 
-# --- AUTO UPDATER ---
+# --- SERVICES ---
 class AutoUpdater:
     def __init__(self, db: DBHandler): self.db = db
     def download_feed(self):
@@ -96,7 +96,7 @@ class AutoUpdater:
         except: return False
 
     def run_daily_update(self):
-        print("🚀 [SZINKRON] Indítás...")
+        print("🚀 [FULL SYNC] Indítás...")
         if not self.download_feed(): return
         unique_books = {}
         try:
@@ -116,7 +116,7 @@ class AutoUpdater:
                     elem.clear()
             
             ids, texts, metas = [], [], []
-            for bid, b in unique_books.items():
+            for i, (bid, b) in enumerate(unique_books.items()):
                 ids.append(bid)
                 texts.append(f"Cím: {b['title']}. Szerző: {b['author']}. Leírás: {b['description'][:600]}")
                 m = b.copy(); del m['description']; m['text_preview'] = b['description'][:150]
@@ -132,7 +132,6 @@ class AutoUpdater:
             print("✅ [SZINKRON] Kész.")
         except Exception as e: print(f"❌ SZINKRON HIBA: {e}")
 
-# --- CHAT BRAIN ---
 class BooksyBrain:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -151,8 +150,8 @@ class BooksyBrain:
             
             r = self.claude.messages.create(
                 model=CLAUDE_MODEL, max_tokens=1000,
-                system="You are Booksy, the elegant Hungarian bookstore assistant. Respond warmly in Hungarian.",
-                messages=[{"role": "user", "content": f"Context: {ctx_text}\nUser asks: {msg}"}]
+                system="You are Booksy, the elegant Hungarian antique bookstore assistant. Use CopySEO style.",
+                messages=[{"role": "user", "content": f"Found books:\n{ctx_text}\nUser asks: {msg}"}]
             )
             return {"reply": r.content[0].text, "products": prods}
         except Exception as e: return {"reply": f"Hiba: {e}", "products": []}
@@ -160,7 +159,6 @@ class BooksyBrain:
     def negotiate_handshake(self, ui_lang):
         return {"ui_lang": ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
-# --- SOCIAL AGENT ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -197,7 +195,6 @@ class BooksySocialAgent:
             password = os.getenv("SMTP_PASSWORD")
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
-            
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
             server.starttls()
             server.login(sender, password)
@@ -215,54 +212,58 @@ class BooksySocialAgent:
         print(f"🕒 [SOCIAL] Agent indul ({CLAUDE_MODEL})...")
         try:
             writers = self._fetch_wikipedia_births()
-            prompt = f"Today is {datetime.now(LOCAL_TZ).strftime('%B %d')}. Select 1 writer from: {json.dumps(writers[:15])}. JSON ONLY: {{\"name\": \"...\", \"bio\": \"...\"}}"
+            prompt = f"Today is {datetime.now(LOCAL_TZ).strftime('%B %d')}. Choose 1 writer from: {json.dumps(writers[:15])}. JSON ONLY: {{\"name\": \"...\", \"bio\": \"...\"}}"
             r_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": prompt}])
             w_data = safe_json_parse(r_wiki.content[0].text)
             
             search_name = w_data.get('name', 'ritka antikvár könyv')
             vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=search_name, config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
             res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"type": "book"})
-            
             if not res['ids'] or not res['ids'][0]:
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="antikvár könyv ritkaság", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"type": "book"})
             
             target = res['metadatas'][0][0]
-            print(f"📚 Kiválasztott könyv: {target['title']}")
+            print(f"📚 Kiválasztva: {target['title']}")
 
-            p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": f"Atmospheric image prompt for: {target['title']}. NO TEXT."}]).content[0].text
+            p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": f"Artistic image prompt for: {target['title']}. NO TEXT."}]).content[0].text
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
             with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1024&height=1024&nologo=true").content)
             
             has_video = self._create_video(img_path, vid_path)
             post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="You are Booksy CopySEO expert.", 
-                messages=[{"role": "user", "content": f"Write FB post in HU about {target['title']} by {target.get('author')}. URL: {target['url']}"}]).content[0].text
+                messages=[{"role": "user", "content": f"Write FB post in HU about {target['title']} by {target.get('author')}. Include the link: {target['url']}"}]).content[0].text
             
-            # --- FB DRAFT FIX (2-STEP) ---
+            # --- FB DRAFT RESTORATION (THE WORKING TRICK) ---
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if fb_id and fb_token:
-                # 1. Media upload (unpublished)
                 if has_video:
-                    r1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(vid_path, 'rb')})
+                    # Videó feltöltés (DRAFT)
+                    fr1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", 
+                        data={'access_token': fb_token, 'description': post_text, 'published': 'false'}, 
+                        files={'source': open(vid_path, 'rb')})
+                    print(f"FB Video Response: {fr1.text}")
                 else:
-                    r1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(img_path, 'rb')})
-                
-                media_id = r1.json().get('id')
-                # 2. Feed post (DRAFT)
-                if media_id:
-                    fb_res = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data={
-                        'access_token': fb_token, 'message': post_text, 'link': target['url'],
-                        'published': 'false', 'unpublished_content_type': 'DRAFT',
-                        'attached_media': json.dumps([{'media_fbid': media_id}]) if not has_video else None,
-                        'object_attachment': media_id if has_video else None
-                    })
-                    print(f"FB Feed response: {fb_res.text}")
+                    # Kép feltöltése rejtve, majd összefűzése a feed-del
+                    fr1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", 
+                        data={'access_token': fb_token, 'published': 'false'}, 
+                        files={'source': open(img_path, 'rb')})
+                    media_id = fr1.json().get('id')
+                    if media_id:
+                        fr2 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data={
+                            'access_token': fb_token,
+                            'message': post_text,
+                            'published': 'false',
+                            'unpublished_content_type': 'DRAFT',
+                            'attached_media': json.dumps([{'media_fbid': media_id}])
+                        })
+                        print(f"FB Feed Response: {fr2.text}")
 
             self.send_morning_email(post_text)
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Vázlat sikeresen feltöltve.")
-        except Exception as e: print(f"❌ SOCIAL ERROR: {e}")
+            print("✅ [SOCIAL] Kész.")
+        except Exception as e: print(f"❌ SOCIAL ÜGYNÖK HIBA: {e}")
 
 # --- FASTAPI ---
 updater = AutoUpdater(db_handler)
@@ -285,13 +286,13 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "Booksy V170 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "Booksy V172 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
 @app.post("/test-social-night")
-def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Started"}
+def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Social triggered"}
 
 if __name__ == "__main__":
     import uvicorn
