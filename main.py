@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V173 (THE FINAL STABLE MASTERPIECE - FULL CODE)
-# VERZIÓ: V173 - FB VIDEO/PHOTO DRAFT VISIBILITY FIX + SMTP FROM HEADER FIX + CLAUDE 4.6
+# BOOKSY BRAIN - V174 (ANTI-SPAM SMTP + FB DRAFT STABLE MASTERPIECE)
+# VERZIÓ: V174 - FULL EMAIL HEADERS (DATE, MSG-ID) + FB DRAFT FIX + CLAUDE 4.6
 
 __import__('pysqlite3')
 import sys
@@ -23,6 +23,7 @@ from bs4 import BeautifulSoup
 import markdownify
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate, make_msgid
 
 # --- CONFIG & CLIENTS ---
 load_dotenv()
@@ -68,7 +69,7 @@ def extract_metadata_from_html(raw_html):
     if not raw_html: return meta
     try:
         soup = BeautifulSoup(raw_html, 'lxml')
-        for label, key in [('(?:Kiadó|Editura|Publisher)', 'publisher'), ('?:Szerző|Autor|Author)', 'author')]:
+        for label, key in [('(?:Kiadó|Editura|Publisher)', 'publisher'), ('(?:Szerző|Autor|Author)', 'author')]:
             target = soup.find(string=re.compile(label + r'\s*:', re.IGNORECASE))
             if target and target.find_parent('td'):
                 next_td = target.find_parent('td').find_next_sibling('td')
@@ -190,29 +191,40 @@ class BooksySocialAgent:
         except: return False
 
     def send_morning_email(self, post_text):
+        """HIBÁTLAN SMTP KÜLDÉS - ANTI-SPAM FEJLÉCEKKEL"""
         try:
             sender = os.getenv("SMTP_SENDER")
             password = os.getenv("SMTP_PASSWORD")
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
+            
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
             server.starttls()
             server.login(sender, password)
+            
             for admin in admin_emails:
                 msg = MIMEMultipart()
-                msg['From'] = sender
+                # --- KRITIKUS ANTI-SPAM FEJLÉCEK ---
+                msg['From'] = f"Booksy AI <{sender}>"
                 msg['To'] = admin
                 msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                msg.attach(MIMEText(f"<html><body><h2>Vázlat:</h2><pre>{post_text}</pre></body></html>", 'html'))
+                msg['Date'] = formatdate(localtime=True)
+                msg['Message-ID'] = make_msgid(domain="antikvarius.ro")
+                # ------------------------------------
+                
+                body = f"Üdvözöllek!\n\nA mai Facebook vázlat elkészült és feltöltésre került a Business Suite Drafts közé.\n\nSZÖVEG:\n{post_text}"
+                msg.attach(MIMEText(body, 'plain', 'utf-8'))
+                
                 server.send_message(msg)
             server.quit()
+            print("📧 Email sikeresen kiküldve (Anti-Spam fejlécekkel).")
         except Exception as e: print(f"📧 Email hiba: {e}")
 
     def run_night_generation(self):
         print(f"🕒 [SOCIAL] Agent indul ({CLAUDE_MODEL})...")
         try:
             writers = self._fetch_wikipedia_births()
-            prompt = f"Today is {datetime.now(LOCAL_TZ).strftime('%B %d')}. Choose 1 writer from: {json.dumps(writers[:15])}. JSON ONLY: {{\"name\": \"...\", \"bio\": \"...\"}}"
+            prompt = f"Today is {datetime.now(LOCAL_TZ).strftime('%B %d')}. Select 1 writer from: {json.dumps(writers[:15])}. JSON ONLY: {{\"name\": \"...\", \"bio\": \"...\"}}"
             r_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": prompt}])
             w_data = safe_json_parse(r_wiki.content[0].text)
             
@@ -224,7 +236,7 @@ class BooksySocialAgent:
                 res = self.db.collection.query(query_embeddings=[vec], n_results=1, where={"type": "book"})
             
             target = res['metadatas'][0][0]
-            print(f"📚 Kiválasztva: {target['title']}")
+            print(f"📚 Könyv kiválasztva: {target['title']}")
 
             p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": f"Artistic image prompt for: {target['title']}. NO TEXT."}]).content[0].text
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
@@ -234,40 +246,29 @@ class BooksySocialAgent:
             post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="You are Booksy CopySEO expert.", 
                 messages=[{"role": "user", "content": f"Write FB post in HU about {target['title']} by {target.get('author')}. Include the link: {target['url']}"}]).content[0].text
             
-            # --- FB DRAFT VISIBILITY FIX ---
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if fb_id and fb_token:
                 if has_video:
-                    # Videó esetén AZONNAL DRAFT-ként kell küldeni az unpublished_content_type-ot
-                    fr1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", 
-                        data={
-                            'access_token': fb_token, 
-                            'description': post_text, 
-                            'published': 'false',
-                            'unpublished_content_type': 'DRAFT'
-                        }, 
+                    r1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", 
+                        data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, 
                         files={'source': open(vid_path, 'rb')})
-                    print(f"FB Video Response: {fr1.text}")
+                    print(f"FB Video Draft Response: {r1.text}")
                 else:
-                    # Fotó esetén két lépcső: Upload -> Feed Draft
-                    fr1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", 
+                    r1 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", 
                         data={'access_token': fb_token, 'published': 'false'}, 
                         files={'source': open(img_path, 'rb')})
-                    media_id = fr1.json().get('id')
+                    media_id = r1.json().get('id')
                     if media_id:
-                        fr2 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data={
-                            'access_token': fb_token,
-                            'message': post_text,
-                            'published': 'false',
-                            'unpublished_content_type': 'DRAFT',
-                            'attached_media': json.dumps([{'media_fbid': media_id}])
+                        r2 = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data={
+                            'access_token': fb_token, 'message': post_text, 'published': 'false',
+                            'unpublished_content_type': 'DRAFT', 'attached_media': json.dumps([{'media_fbid': media_id}])
                         })
-                        print(f"FB Feed Response: {fr2.text}")
+                        print(f"FB Feed Draft Response: {r2.text}")
 
             self.send_morning_email(post_text)
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Vázlat sikeresen feltöltve.")
+            print("✅ [SOCIAL] Vázlat és Email sikeresen kész.")
         except Exception as e: print(f"❌ SOCIAL ÜGYNÖK HIBA: {e}")
 
 # --- FASTAPI ---
@@ -291,11 +292,11 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "Booksy V173 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "Booksy V174 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
-def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
+def init_chat(req: InitRequest): return bot.negotiate_handshake(req.ui_lang)
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Started"}
 
