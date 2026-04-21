@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V190 (THE DEEP LOGGING & SELF-CHECK EDITION)
-# VERZIÓ: V190 - VERBOSE API LOGGING + SILENT FAILURE FIX + BEAUTIFULSOUP XML
+# BOOKSY BRAIN - V191 (THE WATCHTOWER EDITION)
+# VERZIÓ: V191 - ENV WATCHTOWER + EXPLICIT FAILURE LOGGING + ALL PREVIOUS MASTER FEATURES
 
 __import__('pysqlite3')
 import sys
@@ -259,7 +259,6 @@ class BooksySocialAgent:
         print(f"🕒 [SOCIAL] Agent indul ({CLAUDE_MODEL})...")
         try:
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
-            print("🕒 [SOCIAL] Wikipedia lekérdezése...")
             writers = self._fetch_wikipedia_births()
             
             prompt_wiki = f"""Today is {today_date}. Helper list: {json.dumps(writers[:50])}.
@@ -277,10 +276,8 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
   </author>
 </authors>"""
             
-            print("🕒 [SOCIAL] Claude hívása írókhoz...")
             r_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
             authors_list = safe_authors_parse(r_wiki.content[0].text)[:6]
-            print(f"🕒 [SOCIAL] {len(authors_list)} író sikeresen kinyerve az XML-ből.")
 
             selected_books, seen_ids = [], set()
             for author in authors_list:
@@ -293,7 +290,6 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                                 selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
             if len(selected_books) < 3:
-                print("🕒 [SOCIAL] Nincs elég szerzői könyv. Fallback népszerű könyvek betöltése...")
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="legnépszerűbb magyar klasszikusok", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res = self.db.collection.query(query_embeddings=[vec], n_results=5, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 if res['ids'] and res['ids'][0]:
@@ -307,12 +303,9 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                 print(msg); self.send_morning_email("", "", error_log=msg)
                 return
 
-            print(f"🕒 [SOCIAL] {len(selected_books)} könyv kiválasztva. Főkönyv: {selected_books[0]['title']}")
-
             main_book = selected_books[0]
             vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. NO text, no typography, no human faces."
             p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": vision_prompt}]).content[0].text
-            print(f"🕒 [SOCIAL] Kép generálása Pollinations segítségével...")
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
             with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1024&height=1024&nologo=true").content)
             has_video = self._create_video(img_path, vid_path)
@@ -328,15 +321,18 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                 f"3. Recommendation (Multi-book collection):\n{books_context}\n"
                 f"CRITICAL: NO URLs in text! Tell them links are in FIRST COMMENT. Use FOMO."
             )
-            print("🕒 [SOCIAL] Claude hívása a végső FB poszt szövegéhez...")
             post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are Booksy CopySEO expert.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
 
             memory_data = {"date": today_date, "links": [{"title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
-            print("🕒 [SOCIAL] Memória lementve a komment-bothoz.")
 
-            # --- DEEP LOGGING FB UPLOAD ---
-            fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
+            # --- DEEP LOGGING FB UPLOAD & WATCHTOWER ---
+            fb_id = os.getenv("FB_PAGE_ID")
+            fb_token = os.getenv("FB_PAGE_TOKEN")
+            
+            print(f"🔍 [WATCHTOWER] FB_PAGE_ID státusz: {'OK' if fb_id else 'HIÁNYZIK'}")
+            print(f"🔍 [WATCHTOWER] FB_PAGE_TOKEN státusz: {'OK' if fb_token else 'HIÁNYZIK'}")
+
             if fb_id and fb_token:
                 print("🕒 [SOCIAL] Kezdődik a FB API feltöltés...")
                 api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT', 'place': fb_id}
@@ -347,14 +343,12 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                     print(f"📸 FB Video Upload válasz: {r_vid.status_code} - {r_vid.text}")
                     if r_vid.status_code != 200: self.send_morning_email("", "", error_log=f"FB Video hiba: {r_vid.text}")
                 else:
-                    print("🕒 [SOCIAL] Fénykép feltöltése DRAFT-ként (no_story=true)...")
                     r_photo = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
                     print(f"📸 FB Photo Upload válasz: {r_photo.status_code} - {r_photo.text}")
                     
                     if r_photo.status_code != 200:
                         err_msg = f"A Meta elutasította a képet! Részletek: {r_photo.text}"
-                        print(f"❌ {err_msg}")
-                        self.send_morning_email("", "", error_log=err_msg)
+                        print(f"❌ {err_msg}"); self.send_morning_email("", "", error_log=err_msg)
                         return
 
                     mid = r_photo.json().get('id')
@@ -366,11 +360,15 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                         
                         if r_feed.status_code != 200:
                             err_msg = f"A Meta elutasította a posztot! Lehet, hogy a place ID ({fb_id}) érvénytelen. Részletek: {r_feed.text}"
-                            print(f"❌ {err_msg}")
-                            self.send_morning_email("", "", error_log=err_msg)
+                            print(f"❌ {err_msg}"); self.send_morning_email("", "", error_log=err_msg)
                             return
                     else:
                         print("❌ Nem kaptunk 'id'-t a Meta válaszában a képfeltöltéskor.")
+            else:
+                err_msg = "❌ FATÁLIS HIBA: A Railway környezeti változók (FB_PAGE_ID vagy FB_PAGE_TOKEN) nem érkeztek meg a Python kódba!"
+                print(err_msg)
+                self.send_morning_email("", "", error_log=err_msg)
+                return
 
             self.send_morning_email(post_text, json.dumps(memory_data['links'], indent=2, ensure_ascii=False))
             for p in [img_path, vid_path]:
@@ -395,7 +393,7 @@ app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origi
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V190 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "V191 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
