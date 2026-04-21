@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V191 (THE WATCHTOWER EDITION)
-# VERZIÓ: V191 - ENV WATCHTOWER + EXPLICIT FAILURE LOGGING + ALL PREVIOUS MASTER FEATURES
+# BOOKSY BRAIN - V192 (THE SELF-HEALING UPLOAD EDITION)
+# VERZIÓ: V192 - SMART VIDEO FALLBACK TO PHOTO + DEEP LOGGING + ALL STRATEGY FEATURES
 
 __import__('pysqlite3')
 import sys
@@ -244,10 +244,10 @@ class BooksySocialAgent:
             for admin in admin_emails:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
-                msg['Subject'] = f"⚠️ Booksy Social HIBA" if error_log else f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                msg['Subject'] = f"⚠️ Booksy Social INFO" if error_log else f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
                 msg['Date'] = formatdate(localtime=True); msg['Message-ID'] = make_msgid(domain="antikvarius.ro")
                 if error_log:
-                    body = f"Hiba történt az éjszakai posztolás során!\n\nRÉSZLETEK:\n{error_log}"
+                    body = f"RÉSZLETEK A FUTÁSRÓL:\n{error_log}"
                 else:
                     body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\nAmint publikáltad, írd be a Booksy chatbe ezt: /booklink admin123\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY:\n{links_text}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
@@ -326,7 +326,7 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
             memory_data = {"date": today_date, "links": [{"title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
-            # --- DEEP LOGGING FB UPLOAD & WATCHTOWER ---
+            # --- SELF HEALING FB UPLOAD BLOCK ---
             fb_id = os.getenv("FB_PAGE_ID")
             fb_token = os.getenv("FB_PAGE_TOKEN")
             
@@ -337,17 +337,28 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                 print("🕒 [SOCIAL] Kezdődik a FB API feltöltés...")
                 api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT', 'place': fb_id}
                 
+                video_success = False
                 if has_video:
-                    v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
+                    print("🕒 [SOCIAL] Videó feltöltés megkísérlése...")
+                    v_data = api_data.copy()
+                    v_data['description'] = v_data.pop('message')
                     r_vid = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
                     print(f"📸 FB Video Upload válasz: {r_vid.status_code} - {r_vid.text}")
-                    if r_vid.status_code != 200: self.send_morning_email("", "", error_log=f"FB Video hiba: {r_vid.text}")
-                else:
+                    
+                    if r_vid.status_code == 200:
+                        video_success = True
+                    else:
+                        print("⚠️ FB Video API hiba, azonnali önjavító átállás a Fénykép feltöltésre!")
+                        self.send_morning_email("", "", error_log=f"FB Video engedélyezési hiba, de a rendszer átkapcsolt fénykép posztra!\nAPI Hiba: {r_vid.text}")
+                
+                # FALLBACK: Ha nincs videó, vagy a videó feltöltés hibára futott
+                if not has_video or not video_success:
+                    print("🕒 [SOCIAL] Fénykép feltöltése DRAFT-ként (no_story=true)...")
                     r_photo = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
                     print(f"📸 FB Photo Upload válasz: {r_photo.status_code} - {r_photo.text}")
                     
                     if r_photo.status_code != 200:
-                        err_msg = f"A Meta elutasította a képet! Részletek: {r_photo.text}"
+                        err_msg = f"A Meta elutasította a képet is! Részletek: {r_photo.text}"
                         print(f"❌ {err_msg}"); self.send_morning_email("", "", error_log=err_msg)
                         return
 
@@ -363,17 +374,18 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                             print(f"❌ {err_msg}"); self.send_morning_email("", "", error_log=err_msg)
                             return
                     else:
-                        print("❌ Nem kaptunk 'id'-t a Meta válaszában a képfeltöltéskor.")
+                        err_msg = "❌ Nem kaptunk 'id'-t a Meta válaszában a képfeltöltéskor."
+                        print(err_msg); self.send_morning_email("", "", error_log=err_msg)
+                        return
             else:
-                err_msg = "❌ FATÁLIS HIBA: A Railway környezeti változók (FB_PAGE_ID vagy FB_PAGE_TOKEN) nem érkeztek meg a Python kódba!"
-                print(err_msg)
-                self.send_morning_email("", "", error_log=err_msg)
+                err_msg = "❌ FATÁLIS HIBA: A Railway környezeti változók hiányoznak!"
+                print(err_msg); self.send_morning_email("", "", error_log=err_msg)
                 return
 
             self.send_morning_email(post_text, json.dumps(memory_data['links'], indent=2, ensure_ascii=False))
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész. Hibátlanul lefutott.")
+            print("✅ [SOCIAL] Kész. Hibátlanul lefutott az önjavító algoritmussal.")
             
         except Exception as e:
             err_msg = f"Fatális kivétel a futás során: {str(e)}"
@@ -393,7 +405,7 @@ app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origi
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V191 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "V192 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
