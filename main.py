@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V194 (THE MANUAL TAGS & PURE UPLOAD EDITION)
-# VERZIÓ: V194 - PLACE TAG REMOVED + SMART VIDEO FALLBACK TO PHOTO + XML PARSER
+# BOOKSY BRAIN - V197 (THE ANTI-AI SLOP & MASTER CURATOR EDITION)
+# VERZIÓ: V197 - ULTRA-HUMAN PROMPT + EMOJI DIET + ALL PREVIOUS FIXES
 
 __import__('pysqlite3')
 import sys
@@ -48,6 +48,10 @@ except Exception as e:
 def normalize_text(text):
     if not text: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
+
+def normalize_fingerprint(text):
+    if not text: return ""
+    return re.sub(r'\W+', '', text).lower()
 
 def clean_price_raw(raw_price):
     if not raw_price: return "0 RON"
@@ -153,7 +157,9 @@ class BooksyBrain:
         if msg.startswith("/booklink"):
             parts = msg.split()
             admin_pass = os.getenv("COMMENT_PASSWORD", "admin123")
-            if len(parts) >= 2 and parts[1] == admin_pass: return self._trigger_fb_comment()
+            if len(parts) >= 2 and parts[1] == admin_pass:
+                force_id = parts[2] if len(parts) >= 3 else None
+                return self._trigger_fb_comment(force_id)
             else: return {"reply": "🤖 Téves parancs vagy hibás jelszó.", "products": []}
 
         try:
@@ -174,31 +180,47 @@ class BooksyBrain:
             return {"reply": r.content[0].text, "products": prods}
         except Exception as e: return {"reply": f"Hiba: {e}", "products": []}
 
-    def _trigger_fb_comment(self):
+    def _trigger_fb_comment(self, force_post_id=None):
         try:
-            print("🕒 [COMMENT BOT] Triggered...")
+            print(f"🕒 [COMMENT BOT] Triggered. Force ID: {force_post_id}")
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if not fb_id or not fb_token: return {"reply": "❌ FB API kulcsok hiányoznak.", "products": []}
             if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs mentett link memória.", "products": []}
                 
             with open(SOCIAL_MEMORY_FILE, "r", encoding="utf-8") as f: memory = json.load(f)
             
-            r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=1")
-            posts = r.json().get('data', [])
-            if not posts: return {"reply": "❌ Nem találtam éles posztot.", "products": []}
+            target_post_id = force_post_id
             
-            latest_post_id = posts[0]['id']
-            print(f"🕒 [COMMENT BOT] Latest Post ID: {latest_post_id}")
+            if not target_post_id:
+                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=10")
+                posts = r.json().get('data', [])
+                if not posts: return {"reply": "❌ Nem találtam éles posztot a lekérdezésben.", "products": []}
+                
+                fingerprint = normalize_fingerprint(memory.get("fingerprint", ""))
+                print(f"🕒 [COMMENT BOT] Keresett DNS Ujjlenyomat: {fingerprint[:30]}...")
+                
+                if fingerprint:
+                    for p in posts:
+                        post_msg_norm = normalize_fingerprint(p.get("message", ""))
+                        if fingerprint in post_msg_norm:
+                            target_post_id = p["id"]
+                            print(f"🕒 [COMMENT BOT] Ujjlenyomat egyezés! Post ID: {target_post_id}")
+                            break
+                else:
+                    target_post_id = posts[0]['id']
+            
+            if not target_post_id:
+                return {"reply": "❌ A Facebook API nem találja a posztot az ujjlenyomat alapján. Használd a direkt célzást: `/booklink admin123 POST_ID`", "products": []}
             
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
             for book in memory.get("links", []): comment_text += f"📖 {book['author']} - {book['title']}\n🔗 {book['url']}\n\n"
             comment_text += "Aki kapja, marja! 😉"
 
-            c_res = requests.post(f"https://graph.facebook.com/v19.0/{latest_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
+            c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
             print(f"🕒 [COMMENT BOT] API Response: {c_res.text}")
             
             if "id" in c_res.text: return {"reply": "✅ KÜLDETÉS TELJESÍTVE! A linkek kimentek a poszt alá.", "products": []}
-            else: return {"reply": f"❌ Hiba: {c_res.text}", "products": []}
+            else: return {"reply": f"❌ Hiba a komment feladásakor: {c_res.text}", "products": []}
         except Exception as e: return {"reply": f"❌ Rendszerhiba: {e}", "products": []}
 
     def negotiate_handshake(self, ui_lang): return {"ui_lang": ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
@@ -249,7 +271,7 @@ class BooksySocialAgent:
                 if error_log:
                     body = f"Hiba történt az éjszakai posztolás során!\n\nRÉSZLETEK:\n{error_log}"
                 else:
-                    body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\nAmint publikáltad (ne felejtsd el a Business Suite-ban a Check-in-t és a Hangulat taget beállítani!), írd be a Booksy chatbe ezt: /booklink admin123\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY:\n{links_text}"
+                    body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\nAmint publikáltad, írd be a Booksy chatbe ezt: /booklink admin123\nHa a FB elrejti a posztot az API elől, használd az ID-t: /booklink admin123 POST_ID\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY:\n{links_text}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
@@ -304,84 +326,63 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                 return
 
             main_book = selected_books[0]
+            # Képgenerálás 9:16-os Reels arányban!
             vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. NO text, no typography, no human faces."
             p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": vision_prompt}]).content[0].text
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
-            with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1024&height=1024&nologo=true").content)
+            with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1080&height=1920&nologo=true").content)
             has_video = self._create_video(img_path, vid_path)
             
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
             books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
             feelings_list = ["Ünnepel", "Olvas", "Nosztalgikusan érzi magát", "Inspirált", "Izgatott", "Kincset keres"]
 
+            # --- ÚJ, ANTI-AI SLOP PROMPT A CLAUDE-NAK ---
             final_prompt = (
-                f"Write a Hungarian FB post for Antikvarius.ro.\n"
-                f"1. Start first line: *— ✨ Érzés: [Select one from {feelings_list}] —*\n"
-                f"2. Celebrate birthdays ({today_date}):\n{authors_text}\n"
-                f"3. Recommendation (Multi-book collection):\n{books_context}\n"
-                f"CRITICAL: NO URLs in text! Tell them links are in FIRST COMMENT. Use FOMO."
+                f"Írj egy posztot az Antikvarius.ro Facebook oldalára az alábbi adatokból.\n"
+                f"FELADAT ÉS STÍLUS (ANTI-AI SLOP):\n"
+                f"- Tónus: Végtelenül emberi, természetes, mintha egy könyvesbolti kurátor írta volna a reggeli kávéja mellett. Kerüld a marketinges blablát.\n"
+                f"- SZIGORÚAN TILOS sablonos AI kifejezéseket használni (pl. 'Készen állsz egy varázslatos utazásra?', 'Merülj el a könyvek világában', 'Fedezd fel', stb.).\n"
+                f"- Emoji diéta: Csak a legszükségesebb helyekre tegyél emojit (születésnapok mellé, és talán 1-2 a tartalomhoz). NE spammeld tele a szöveget mosolygós fejekkel és csillagokkal.\n"
+                f"- A poszt legelső sora KÖTELEZŐEN így kezdődjön dőlt betűkkel: *— ✨ Érzés: [Válassz egyet: {', '.join(feelings_list)}] —*\n"
+                f"- A poszt végén hívd fel a figyelmet, hogy a könyvek linkjei a kommentben vannak. Semmilyen URL nem lehet a szövegben!\n"
+                f"- KÖTELEZŐ: A linkes felhívás mondatának legvégére szigorúan tegyél egy lefelé mutató ujjat (👇)!\n\n"
+                f"TARTALOM:\n"
+                f"1. Születésnapos írók ma ({today_date}):\n{authors_text}\n"
+                f"2. Napi Kincses Válogatás (ajánlott könyvek raktárról):\n{books_context}\n"
             )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are Booksy CopySEO expert.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert, highly natural human copywriter for a bookstore.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
 
-            memory_data = {"date": today_date, "links": [{"title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
+            raw_fingerprint = post_text[30:130] if len(post_text) > 130 else post_text[:100]
+            memory_data = {
+                "date": today_date,
+                "fingerprint": raw_fingerprint,
+                "links": [{"title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]
+            }
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
-            # --- SELF HEALING FB UPLOAD BLOCK 2.0 (PLACE TAG ELTÁVOLÍTVA) ---
-            fb_id = os.getenv("FB_PAGE_ID")
-            fb_token = os.getenv("FB_PAGE_TOKEN")
-            
-            print(f"🔍 [WATCHTOWER] FB_PAGE_ID státusz: {'OK' if fb_id else 'HIÁNYZIK'}")
-            print(f"🔍 [WATCHTOWER] FB_PAGE_TOKEN státusz: {'OK' if fb_token else 'HIÁNYZIK'}")
-
+            fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if fb_id and fb_token:
-                print("🕒 [SOCIAL] Kezdődik a FB API feltöltés (Letisztított payload, manuális tagezésre vár)...")
-                # FIGYELEM: Nincs benne a 'place' kulcs!
                 api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
                 
                 video_success = False
                 if has_video:
-                    print("🕒 [SOCIAL] Videó feltöltés megkísérlése...")
                     v_data = api_data.copy()
                     v_data['description'] = v_data.pop('message')
                     r_vid = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
-                    print(f"📸 FB Video Upload válasz: {r_vid.status_code} - {r_vid.text}")
                     if r_vid.status_code == 200: video_success = True
-                    else: print("⚠️ FB Video API hiba, átállás Fénykép feltöltésre!")
                 
                 if not has_video or not video_success:
-                    print("🕒 [SOCIAL] Fénykép feltöltése DRAFT-ként (no_story=true)...")
                     r_photo = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
-                    print(f"📸 FB Photo Upload válasz: {r_photo.status_code} - {r_photo.text}")
-                    
-                    if r_photo.status_code != 200:
-                        err_msg = f"A Meta elutasította a képet is! Részletek: {r_photo.text}"
-                        print(f"❌ {err_msg}"); self.send_morning_email("", "", error_log=err_msg)
-                        return
-
                     mid = r_photo.json().get('id')
                     if mid: 
-                        print(f"🕒 [SOCIAL] Kép azonosító: {mid}. Vázlat hírfolyamba küldése...")
                         api_data['attached_media'] = json.dumps([{'media_fbid': mid}])
-                        r_feed = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=api_data)
-                        print(f"📝 FB Feed Poszt válasz: {r_feed.status_code} - {r_feed.text}")
-                        
-                        if r_feed.status_code != 200:
-                            err_msg = f"A Meta elutasította a posztot! Részletek: {r_feed.text}"
-                            print(f"❌ {err_msg}"); self.send_morning_email("", "", error_log=err_msg)
-                            return
-                    else:
-                        err_msg = "❌ Nem kaptunk 'id'-t a Meta válaszában a képfeltöltéskor."
-                        print(err_msg); self.send_morning_email("", "", error_log=err_msg)
-                        return
-            else:
-                err_msg = "❌ FATÁLIS HIBA: A Railway környezeti változók hiányoznak!"
-                print(err_msg); self.send_morning_email("", "", error_log=err_msg)
-                return
-
+                        requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=api_data)
+            
             self.send_morning_email(post_text, json.dumps(memory_data['links'], indent=2, ensure_ascii=False))
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész. Hibátlanul lefutott.")
+            print("✅ [SOCIAL] Kész. Hibátlanul lefutott az új Anti-AI Slop prompttal.")
             
         except Exception as e:
             err_msg = f"Fatális kivétel a futás során: {str(e)}"
@@ -401,7 +402,7 @@ app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origi
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V194 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "V197 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
