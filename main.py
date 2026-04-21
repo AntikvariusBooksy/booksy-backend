@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V198 (THE MASTER SNIPER & LIVE CHECK EDITION)
-# VERZIÓ: V198 - ANTI-AI SLOP + 8AM SCHED + LIVE CHECK + 100-CHAR FINGERPRINT
+# BOOKSY BRAIN - V199 (THE GOLYÓÁLLÓ EDITION)
+# VERZIÓ: V199 - FLEXIBLE STOCK SYNC + LIVE CHECK + ANTI-AI SLOP + 8AM SCHED
 
 __import__('pysqlite3')
 import sys
@@ -110,7 +110,7 @@ class AutoUpdater:
         except: return False
 
     def run_daily_update(self):
-        print("🚀 [FULL SYNC] Indítás (3:00 AM)...")
+        print("🚀 [SYNC] Indítás (XML -> DB)...")
         if not self.download_feed(): return
         unique_books = {}
         try:
@@ -121,12 +121,17 @@ class AutoUpdater:
                     if bid:
                         raw_desc = f"{d.get('description', '')} {d.get('shortdescription', '')}"
                         ext = extract_metadata_from_html(raw_desc)
+                        
+                        # --- RUGALMAS STOCK ELLENŐRZÉS (in_stock, in stock, instock javítás) ---
+                        raw_avail = d.get('availability', 'instock').lower().replace('_', '').replace(' ', '')
+                        stock_status = "instock" if raw_avail == "instock" else "outofstock"
+                        
                         unique_books[bid] = {
                             "id": bid, "title": d.get('title', 'Nincs cím'), "url": d.get('link', ''),
                             "image_url": d.get('image_link', ''), "price": clean_price_raw(d.get('sale_price') or d.get('price')),
                             "publisher": ext['publisher'], "author": d.get('author') or ext['author'],
                             "description": html_to_markdown_clean(raw_desc), 
-                            "stock": "instock" if d.get('availability', 'instock') == 'instock' else "outofstock", 
+                            "stock": stock_status, 
                             "type": "book"
                         }
                     elem.clear()
@@ -145,7 +150,7 @@ class AutoUpdater:
             if ids:
                 res = gemini_client.models.embed_content(model="gemini-embedding-001", contents=texts, config=types.EmbedContentConfig(output_dimensionality=768))
                 self.db.collection.upsert(ids=ids, embeddings=[e.values for e in res.embeddings], metadatas=metas)
-            print("✅ [SZINKRON] Kész.")
+            print("✅ [SYNC] Kész.")
         except Exception as e: print(f"❌ SZINKRON HIBA: {e}")
 
 class BooksyBrain:
@@ -202,10 +207,9 @@ class BooksyBrain:
             if not target_post_id:
                 return {"reply": "❌ Nem találom a posztot ujjlenyomat alapján. Használd az ID-t: /booklink admin123 POST_ID", "products": []}
 
-            # --- LIVE CHECK SZAKASZ ---
+            # --- LIVE CHECK (Belesimul a komment generálásába) ---
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
             for book in memory.get("links", []):
-                # Megnézzük a DB-ben, mi a helyzet az ID-vel
                 res = self.db.collection.get(ids=[book.get('id', 'None')])
                 status_suffix = ""
                 if res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock':
@@ -241,7 +245,7 @@ class BooksySocialAgent:
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
             
-            # Formázott, emberi szöveg a linkekhez
+            # --- TISZTA FORMÁZÁS AZ EMAILBEN (MÁSOLHATÓ) ---
             links_body = ""
             for b in memory_links: links_body += f"📖 {b['author']} - {b['title']}\n🔗 {b['url']}\n\n"
 
@@ -258,10 +262,10 @@ class BooksySocialAgent:
         except Exception as e: print(f"📧 Email hiba: {e}")
 
     def run_night_generation(self):
-        print(f"🕒 [SOCIAL] Agent indul (8:00 AM)...")
+        print(f"🕒 [SOCIAL] Agent indul (Reggel 8:00 AM)...")
         try:
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
-            # Wiki births logic (rövidítve)
+            # Wiki births
             r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
             writers = []
             if r_wiki.status_code == 200:
@@ -281,27 +285,36 @@ class BooksySocialAgent:
                         if p_target['id'] not in seen_ids:
                             selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
+            # FALLBACK: Ha nincs elég könyv az íróktól, feltöltjük népszerűekkel (MOST MÁR LÁTNI FOGJA AZ IN_STOCK-OT IS)
+            if len(selected_books) < 4:
+                vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+                res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+                if res_fb['ids'] and res_fb['ids'][0]:
+                    for p_target in res_fb['metadatas'][0]:
+                        if p_target['id'] not in seen_ids:
+                            selected_books.append(p_target); seen_ids.add(p_target['id'])
+                        if len(selected_books) >= 5: break
+
             main_book = selected_books[0]
-            vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Vertical 9:16."
+            vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. Vertical 9:16."
             p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": vision_prompt}]).content[0].text
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
-            # 9:16 ARÁNY KÉNYSZERÍTÉSE
             with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1080&height=1920&nologo=true").content)
             has_video = self._create_video(img_path, vid_path)
             
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
             books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
 
-            # --- ANTI-AI SLOP PROMPT ---
+            # --- ANTI-AI SLOP SYSTEM PROMPT (SZIGORÚ EMBERI TÓNUS) ---
             final_prompt = (
-                f"Írj egy posztot az Antikvarius.ro FB oldalára. SZABÁLYOK:\n"
-                f"- Tónus: Végtelenül emberi, kerüld a marketinges blablát és az AI sablonokat.\n"
-                f"- Emoji diéta: Csak a legszükségesebb helyekre. Nincs emoji-tenger.\n"
+                f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS ÉS SZABÁLYOK:\n"
+                f"- Tónus: Végtelenül emberi, természetes, mintha egy barátodnak ajánlanád. Kerüld az AI-szagú szavakat és a gépies lelkesedést.\n"
+                f"- Emoji diéta: Csak 1-2 emojit használj, ott ahol tényleg fontos. Ne spammeld.\n"
                 f"- Első sor dőlt betűvel: *— ✨ Érzés: [Válassz egyet] —*\n"
-                f"- Kötelező: A 'link a kommentben' mondat legvégére tegyél egy 👇 emojit!\n\n"
+                f"- Kötelező: A 'link a kommentben' mondat legvégére tegyél egy lefelé mutató ujjat (👇)!\n\n"
                 f"Szerzők: {authors_text}\nKönyvek: {books_context}"
             )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert human bookstore curator. No AI slop.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert human bookstore curator. You despise AI clichés and formal corporate tone.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
 
             raw_fingerprint = post_text[30:130] if len(post_text) > 130 else post_text[:100]
             memory_data = {
@@ -326,7 +339,7 @@ class BooksySocialAgent:
             self.send_morning_email(post_text, memory_data['links'])
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész reggel 8:00-kor.")
+            print("✅ [SOCIAL] Kész.")
         except Exception as e: print(f"❌ HIBA: {e}")
 
 # --- FASTAPI ---
@@ -334,7 +347,7 @@ updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent =
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # SZIGORÚ SORREND: 3-kor szinkron, 8-kor poszt generálás.
+    # SZIGORÚ SORREND: 3:00 Szinkronizáció, 8:00 Poszt generálás
     scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
     scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
     scheduler.start(); yield; scheduler.shutdown()
@@ -343,13 +356,20 @@ app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origi
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V198 Online", "project": "Booksy"}
+def home(): return {"status": "V199 Online", "project": "Booksy"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
+
+# --- TEST ENDPOINT (SZIGORÚ SORRENDDEL: SYNC -> GEN) ---
 @app.post("/test-social-night")
-def test_night(bt: BackgroundTasks): bt.add_task(social_agent.run_night_generation); return {"status": "Started"}
+def test_night(bt: BackgroundTasks): 
+    def full_workflow():
+        updater.run_daily_update() # Először frissítjük a DB-t az XML-ből
+        social_agent.run_night_generation() # Utána generálunk posztot
+    bt.add_task(full_workflow)
+    return {"status": "Full Sync & Generation Started"}
 
 if __name__ == "__main__":
     import uvicorn
