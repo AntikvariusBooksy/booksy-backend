@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V187 (THE LOCAL SEO & MASTER STRATEGY EDITION)
-# VERZIÓ: V187 - PLACE TAG ACTIVATED + FEELINGS + MULTI-BOOK + PERSISTENT MEMORY + COMMENT BOT
+# BOOKSY BRAIN - V189 (THE UNBREAKABLE BEAUTIFULSOUP EDITION)
+# VERZIÓ: V189 - XML/BEAUTIFULSOUP PARSING + MULTI-BOOK + DEEP VISION + COMMENT BOT
 
 __import__('pysqlite3')
 import sys
@@ -59,17 +59,25 @@ def html_to_markdown_clean(raw_html):
     try: return markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style']).strip()
     except: return str(raw_html)
 
-def safe_json_parse(text):
+# --- CRITICAL FIX: BeautifulSoup XML Parser a Claude válaszához ---
+def safe_authors_parse(text):
     try:
-        clean_text = re.sub(r'```json\s*', '', text, flags=re.IGNORECASE)
-        clean_text = re.sub(r'```\s*', '', clean_text)
-        clean_text = re.sub(r'[\x00-\x1F\x7F]', '', clean_text)
-        match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-        if match: return json.loads(match.group(0), strict=False)
-        return json.loads(clean_text, strict=False)
+        soup = BeautifulSoup(text, 'html.parser')
+        authors = []
+        for auth in soup.find_all('author'):
+            name = auth.find('name').get_text(strip=True) if auth.find('name') else ""
+            nat = auth.find('nationality').get_text(strip=True) if auth.find('nationality') else "Világirodalom"
+            bio = auth.find('bio').get_text(strip=True) if auth.find('bio') else ""
+            
+            if name:
+                authors.append({"name": name, "nationality": nat, "bio": bio})
+                
+        if len(authors) > 0:
+            return authors
     except Exception as e:
-        print(f"⚠️ JSON Parse Hiba: {e}")
-        return {"authors": [{"name": "Klasszikus Szerzők", "nationality": "Világirodalom", "bio": "Ma a világirodalom nagyjaira emlékezünk."}]}
+        print(f"⚠️ XML Parse Hiba (BeautifulSoup): {e}")
+        
+    return [{"name": "Klasszikus Szerzők", "nationality": "Világirodalom", "bio": "Ma a világirodalom nagyjaira emlékezünk, akiknek művei örökké élnek."}]
 
 def extract_metadata_from_html(raw_html):
     meta = {"publisher": "Ismeretlen", "author": "Ismeretlen"}
@@ -150,6 +158,7 @@ class BooksyBrain:
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     def process(self, msg, context_url, session_id):
+        # --- SECRET COMMENT BOT TRIGGER ---
         if msg.startswith("/booklink"):
             parts = msg.split()
             admin_pass = os.getenv("COMMENT_PASSWORD", "admin123")
@@ -246,7 +255,7 @@ class BooksySocialAgent:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin; msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
                 msg['Date'] = formatdate(localtime=True); msg['Message-ID'] = make_msgid(domain="antikvarius.ro")
-                body = f"Üdv!\n\nA FB vázlat elkészült.\nKözzététel után Booksy chat: /booklink admin123\n\nSZÖVEG:\n{post_text}\n\nKOMMENT:\n{links_text}"
+                body = f"Üdv!\n\nA FB vázlat elkészült.\nKözzététel után Booksy chat: /booklink admin123\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY:\n{links_text}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
@@ -258,21 +267,28 @@ class BooksySocialAgent:
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
             writers = self._fetch_wikipedia_births()
             
-            # 1. 6 ÍRÓ KIVÁLASZTÁSA
+            # 1. 6 ÍRÓ KIVÁLASZTÁSA - XML FORMÁTUM (NINCS TÖBB JSON HIBA)
             prompt_wiki = f"""Today is {today_date}. Helper list: {json.dumps(writers[:50])}.
 Task: Provide EXACTLY 6 writers born today.
 RULES: 
 - Include ALL Hungarian (Magyar) and Romanian (Román) writers born today.
 - Use your own knowledge if the list is missing them.
 - Fill up to 6 with International writers.
-CRITICAL: Output ONLY raw JSON. No markdown. Escape quotes.
-Format: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi", "bio": "..."}}]}}"""
+CRITICAL: You MUST output your answer strictly in the following XML format. Do NOT use JSON!
+<authors>
+  <author>
+    <name>Writer Name</name>
+    <nationality>Magyar/Román/Nemzetközi</nationality>
+    <bio>1 short interesting sentence in Hungarian.</bio>
+  </author>
+</authors>"""
             
             r_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
-            w_data = safe_json_parse(r_wiki.content[0].text)
-            authors_list = w_data.get('authors', [])[:6]
+            
+            # Parsing XML using BeautifulSoup
+            authors_list = safe_authors_parse(r_wiki.content[0].text)[:6]
 
-            # 2. KÖNYVEK KERESÉSE (MULTI-BOOK)
+            # 2. KÖNYVEK KERESÉSE (MULTI-BOOK LOGIKA)
             selected_books, seen_ids = [], set()
             for author in authors_list:
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=author['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
@@ -283,14 +299,17 @@ Format: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi
                             if p_target['id'] not in seen_ids:
                                 selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
+            # Fallback kiegészítés
             if len(selected_books) < 3:
-                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="legnépszerűbb magyar klasszikusok", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="legnépszerűbb magyar klasszikusok és antikvár ritkaságok", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res = self.db.collection.query(query_embeddings=[vec], n_results=5, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 if res['ids'] and res['ids'][0]:
                     for p_target in res['metadatas'][0]:
                         if p_target['id'] not in seen_ids:
                             selected_books.append(p_target); seen_ids.add(p_target['id'])
                         if len(selected_books) >= 4: break
+
+            if not selected_books: return print("⚠️ Hiba: Nincs raktáron könyv!")
 
             # 3. DEEP VISION KÉP
             main_book = selected_books[0]
@@ -300,7 +319,7 @@ Format: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi
             with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1024&height=1024&nologo=true").content)
             has_video = self._create_video(img_path, vid_path)
             
-            # 4. VÉGSŐ FB POSZT (LOKÁLIS SEO + VIBE TAG)
+            # 4. VÉGSŐ FB POSZT
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
             books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
             feelings_list = ["Ünnepel", "Olvas", "Nosztalgikusan érzi magát", "Inspirált", "Izgatott", "Kincset keres"]
@@ -314,7 +333,7 @@ Format: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi
             )
             post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are Booksy CopySEO expert.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
 
-            # 5. LINK MEMÓRIA (PERSISTENT)
+            # 5. LINK MEMÓRIA
             memory_data = {"date": today_date, "links": [{"title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
             
@@ -333,7 +352,7 @@ Format: {{"authors": [{{"name": "...", "nationality": "Magyar/Román/Nemzetközi
             self.send_morning_email(post_text, json.dumps(memory_data['links'], indent=2, ensure_ascii=False))
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész. (Place Tag, Feelings, Multi-Book, Persistent Memory)")
+            print("✅ [SOCIAL] Kész. (XML/BeautifulSoup Parser, Place Tag, Multi-Book)")
         except Exception as e: print(f"❌ HIBA: {e}")
 
 # --- FASTAPI ---
@@ -349,7 +368,7 @@ app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origi
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V187 Master Edition Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "V189 Online", "model": CLAUDE_MODEL}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
