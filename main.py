@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V199 (THE GOLYÓÁLLÓ EDITION)
-# VERZIÓ: V199 - FLEXIBLE STOCK SYNC + LIVE CHECK + ANTI-AI SLOP + 8AM SCHED
+# BOOKSY BRAIN - V200 (THE MILESTONE EDITION)
+# VERZIÓ: V200 - ZERO-DISTORTION REELS + UNICODE FIX + SMART AUTHOR FORMATTING
 
 __import__('pysqlite3')
 import sys
@@ -122,14 +122,18 @@ class AutoUpdater:
                         raw_desc = f"{d.get('description', '')} {d.get('shortdescription', '')}"
                         ext = extract_metadata_from_html(raw_desc)
                         
-                        # --- RUGALMAS STOCK ELLENŐRZÉS (in_stock, in stock, instock javítás) ---
+                        # --- UNICODE DEKÓDOLÁS ---
+                        clean_title = html.unescape(d.get('title', 'Nincs cím'))
+                        clean_author = html.unescape(d.get('author') or ext['author'])
+                        
+                        # --- RUGALMAS STOCK ELLENŐRZÉS ---
                         raw_avail = d.get('availability', 'instock').lower().replace('_', '').replace(' ', '')
                         stock_status = "instock" if raw_avail == "instock" else "outofstock"
                         
                         unique_books[bid] = {
-                            "id": bid, "title": d.get('title', 'Nincs cím'), "url": d.get('link', ''),
+                            "id": bid, "title": clean_title, "url": d.get('link', ''),
                             "image_url": d.get('image_link', ''), "price": clean_price_raw(d.get('sale_price') or d.get('price')),
-                            "publisher": ext['publisher'], "author": d.get('author') or ext['author'],
+                            "publisher": ext['publisher'], "author": clean_author,
                             "description": html_to_markdown_clean(raw_desc), 
                             "stock": stock_status, 
                             "type": "book"
@@ -207,7 +211,7 @@ class BooksyBrain:
             if not target_post_id:
                 return {"reply": "❌ Nem találom a posztot ujjlenyomat alapján. Használd az ID-t: /booklink admin123 POST_ID", "products": []}
 
-            # --- LIVE CHECK (Belesimul a komment generálásába) ---
+            # --- LIVE CHECK & SMART FORMATTING ---
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
             for book in memory.get("links", []):
                 res = self.db.collection.get(ids=[book.get('id', 'None')])
@@ -215,7 +219,10 @@ class BooksyBrain:
                 if res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock':
                     status_suffix = " ❌ (Már el is kelt!)"
                 
-                comment_text += f"📖 {book['author']} - {book['title']}{status_suffix}\n🔗 {book['url']}\n\n"
+                # Ha a szerző ismeretlen, eltüntetjük, csak a cím jelenik meg
+                author_display = f"{book['author']} - " if book.get('author') and book['author'] != 'Ismeretlen' else ""
+                
+                comment_text += f"📖 {author_display}{book['title']}{status_suffix}\n🔗 {book['url']}\n\n"
             
             comment_text += "Aki kapja, marja! 😉"
 
@@ -245,9 +252,11 @@ class BooksySocialAgent:
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
             
-            # --- TISZTA FORMÁZÁS AZ EMAILBEN (MÁSOLHATÓ) ---
+            # --- TISZTA FORMÁZÁS AZ EMAILBEN (SMART FORMATTING) ---
             links_body = ""
-            for b in memory_links: links_body += f"📖 {b['author']} - {b['title']}\n🔗 {b['url']}\n\n"
+            for b in memory_links:
+                author_display = f"{b['author']} - " if b.get('author') and b['author'] != 'Ismeretlen' else ""
+                links_body += f"📖 {author_display}{b['title']}\n🔗 {b['url']}\n\n"
 
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
             server.starttls(); server.login(sender, password)
@@ -285,7 +294,6 @@ class BooksySocialAgent:
                         if p_target['id'] not in seen_ids:
                             selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
-            # FALLBACK: Ha nincs elég könyv az íróktól, feltöltjük népszerűekkel (MOST MÁR LÁTNI FOGJA AZ IN_STOCK-OT IS)
             if len(selected_books) < 4:
                 vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
@@ -299,13 +307,16 @@ class BooksySocialAgent:
             vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. Vertical 9:16."
             p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": vision_prompt}]).content[0].text
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
-            with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1080&height=1920&nologo=true").content)
+            
+            # --- ZERO-DISTORTION 9:16 (FLUX MODEL KÉNYSZERÍTÉSE) ---
+            flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1080&height=1920&nologo=true&model=flux"
+            with open(img_path, 'wb') as f: f.write(requests.get(flux_url).content)
             has_video = self._create_video(img_path, vid_path)
             
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
             books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
 
-            # --- ANTI-AI SLOP SYSTEM PROMPT (SZIGORÚ EMBERI TÓNUS) ---
+            # --- ANTI-AI SLOP SYSTEM PROMPT ---
             final_prompt = (
                 f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS ÉS SZABÁLYOK:\n"
                 f"- Tónus: Végtelenül emberi, természetes, mintha egy barátodnak ajánlanád. Kerüld az AI-szagú szavakat és a gépies lelkesedést.\n"
@@ -356,18 +367,18 @@ app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origi
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V199 Online", "project": "Booksy"}
+def home(): return {"status": "V200 Online", "project": "Booksy"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
 
-# --- TEST ENDPOINT (SZIGORÚ SORRENDDEL: SYNC -> GEN) ---
+# --- TEST ENDPOINT ---
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     def full_workflow():
-        updater.run_daily_update() # Először frissítjük a DB-t az XML-ből
-        social_agent.run_night_generation() # Utána generálunk posztot
+        updater.run_daily_update()
+        social_agent.run_night_generation()
     bt.add_task(full_workflow)
     return {"status": "Full Sync & Generation Started"}
 
