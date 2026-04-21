@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V197 (THE ANTI-AI SLOP & MASTER CURATOR EDITION)
-# VERZIÓ: V197 - ULTRA-HUMAN PROMPT + EMOJI DIET + ALL PREVIOUS FIXES
+# BOOKSY BRAIN - V198 (THE MASTER SNIPER & LIVE CHECK EDITION)
+# VERZIÓ: V198 - ANTI-AI SLOP + 8AM SCHED + LIVE CHECK + 100-CHAR FINGERPRINT
 
 __import__('pysqlite3')
 import sys
@@ -73,7 +73,7 @@ def safe_authors_parse(text):
             bio = auth.find('bio').get_text(strip=True) if auth.find('bio') else ""
             if name: authors.append({"name": name, "nationality": nat, "bio": bio})
         if len(authors) > 0: return authors
-    except Exception as e: print(f"⚠️ XML Parse Hiba (BeautifulSoup): {e}")
+    except Exception as e: print(f"⚠️ XML Parse Hiba: {e}")
     return [{"name": "Klasszikus Szerzők", "nationality": "Világirodalom", "bio": "Ma a világirodalom nagyjaira emlékezünk."}]
 
 def extract_metadata_from_html(raw_html):
@@ -110,7 +110,7 @@ class AutoUpdater:
         except: return False
 
     def run_daily_update(self):
-        print("🚀 [FULL SYNC] Indítás...")
+        print("🚀 [FULL SYNC] Indítás (3:00 AM)...")
         if not self.download_feed(): return
         unique_books = {}
         try:
@@ -190,60 +190,40 @@ class BooksyBrain:
             with open(SOCIAL_MEMORY_FILE, "r", encoding="utf-8") as f: memory = json.load(f)
             
             target_post_id = force_post_id
-            
             if not target_post_id:
                 r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=10")
                 posts = r.json().get('data', [])
-                if not posts: return {"reply": "❌ Nem találtam éles posztot a lekérdezésben.", "products": []}
-                
                 fingerprint = normalize_fingerprint(memory.get("fingerprint", ""))
-                print(f"🕒 [COMMENT BOT] Keresett DNS Ujjlenyomat: {fingerprint[:30]}...")
-                
                 if fingerprint:
                     for p in posts:
-                        post_msg_norm = normalize_fingerprint(p.get("message", ""))
-                        if fingerprint in post_msg_norm:
-                            target_post_id = p["id"]
-                            print(f"🕒 [COMMENT BOT] Ujjlenyomat egyezés! Post ID: {target_post_id}")
-                            break
-                else:
-                    target_post_id = posts[0]['id']
+                        if fingerprint in normalize_fingerprint(p.get("message", "")):
+                            target_post_id = p["id"]; break
             
             if not target_post_id:
-                return {"reply": "❌ A Facebook API nem találja a posztot az ujjlenyomat alapján. Használd a direkt célzást: `/booklink admin123 POST_ID`", "products": []}
-            
+                return {"reply": "❌ Nem találom a posztot ujjlenyomat alapján. Használd az ID-t: /booklink admin123 POST_ID", "products": []}
+
+            # --- LIVE CHECK SZAKASZ ---
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
-            for book in memory.get("links", []): comment_text += f"📖 {book['author']} - {book['title']}\n🔗 {book['url']}\n\n"
+            for book in memory.get("links", []):
+                # Megnézzük a DB-ben, mi a helyzet az ID-vel
+                res = self.db.collection.get(ids=[book.get('id', 'None')])
+                status_suffix = ""
+                if res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock':
+                    status_suffix = " ❌ (Már el is kelt!)"
+                
+                comment_text += f"📖 {book['author']} - {book['title']}{status_suffix}\n🔗 {book['url']}\n\n"
+            
             comment_text += "Aki kapja, marja! 😉"
 
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
-            print(f"🕒 [COMMENT BOT] API Response: {c_res.text}")
-            
             if "id" in c_res.text: return {"reply": "✅ KÜLDETÉS TELJESÍTVE! A linkek kimentek a poszt alá.", "products": []}
-            else: return {"reply": f"❌ Hiba a komment feladásakor: {c_res.text}", "products": []}
+            else: return {"reply": f"❌ FB hiba: {c_res.text}", "products": []}
         except Exception as e: return {"reply": f"❌ Rendszerhiba: {e}", "products": []}
-
-    def negotiate_handshake(self, ui_lang): return {"ui_lang": ui_lang, "bubble_text": "Szia! Miben segíthetek?", "placeholder": "Keresel valamit?"}
 
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-    def _fetch_wikipedia_births(self):
-        today = datetime.now(LOCAL_TZ).strftime('%m/%d')
-        url = f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{today}"
-        try:
-            r = requests.get(url, headers={'User-Agent': 'BooksyBot/1.0'}, timeout=15)
-            if r.status_code == 200:
-                v = []
-                for p in r.json().get('births', []):
-                    comb = (p.get('text', '') + " " + (p.get('pages', [{}])[0].get('extract', '') if p.get('pages') else "")).lower()
-                    if any(kw in comb for kw in ['writer', 'author', 'poet', 'novelist', 'playwright', 'essayist']):
-                        v.append({"name": p.get('text', '').split(',')[0], "bio": p.get('pages', [{}])[0].get('extract', '') if p.get('pages') else p.get('text')})
-                return v
-            return []
-        except: return []
 
     def _create_video(self, img_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
@@ -255,51 +235,42 @@ class BooksySocialAgent:
             return True
         except: return False
 
-    def send_morning_email(self, post_text, links_text, error_log=""):
+    def send_morning_email(self, post_text, memory_links):
         try:
             sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
+            
+            # Formázott, emberi szöveg a linkekhez
+            links_body = ""
+            for b in memory_links: links_body += f"📖 {b['author']} - {b['title']}\n🔗 {b['url']}\n\n"
+
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
-            server.starttls()
-            server.login(sender, password)
+            server.starttls(); server.login(sender, password)
             for admin in admin_emails:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
-                msg['Subject'] = f"⚠️ Booksy Social HIBA" if error_log else f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                msg['Date'] = formatdate(localtime=True); msg['Message-ID'] = make_msgid(domain="antikvarius.ro")
-                if error_log:
-                    body = f"Hiba történt az éjszakai posztolás során!\n\nRÉSZLETEK:\n{error_log}"
-                else:
-                    body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\nAmint publikáltad, írd be a Booksy chatbe ezt: /booklink admin123\nHa a FB elrejti a posztot az API elől, használd az ID-t: /booklink admin123 POST_ID\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY:\n{links_text}"
+                msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY (MÁSOLHATÓ):\n{links_body}\n\nPublikálás után: /booklink admin123"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
         except Exception as e: print(f"📧 Email hiba: {e}")
 
     def run_night_generation(self):
-        print(f"🕒 [SOCIAL] Agent indul ({CLAUDE_MODEL})...")
+        print(f"🕒 [SOCIAL] Agent indul (8:00 AM)...")
         try:
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
-            writers = self._fetch_wikipedia_births()
+            # Wiki births logic (rövidítve)
+            r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
+            writers = []
+            if r_wiki.status_code == 200:
+                for p in r_wiki.json().get('births', []):
+                    if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet']): writers.append(p)
             
-            prompt_wiki = f"""Today is {today_date}. Helper list: {json.dumps(writers[:50])}.
-Task: Provide EXACTLY 6 writers born today.
-RULES: 
-- Include ALL Hungarian (Magyar) and Romanian (Román) writers born today.
-- Use your own knowledge if the list is missing them.
-- Fill up to 6 with International writers.
-CRITICAL: You MUST output your answer strictly in the following XML format. Do NOT use JSON!
-<authors>
-  <author>
-    <name>Writer Name</name>
-    <nationality>Magyar/Román/Nemzetközi</nationality>
-    <bio>1 short interesting sentence in Hungarian.</bio>
-  </author>
-</authors>"""
-            
-            r_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
-            authors_list = safe_authors_parse(r_wiki.content[0].text)[:6]
+            prompt_wiki = f"Today is {today_date}. Provide EXACTLY 6 writers born today (inc. Hungarian/Romanian) in XML format <authors><author><name>...</name><nationality>...</nationality><bio>...</bio></author></authors>."
+            r_claude_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
+            authors_list = safe_authors_parse(r_claude_wiki.content[0].text)[:6]
 
             selected_books, seen_ids = [], set()
             for author in authors_list:
@@ -307,102 +278,72 @@ CRITICAL: You MUST output your answer strictly in the following XML format. Do N
                 res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 if res['ids'] and res['ids'][0]:
                     for p_target in res['metadatas'][0]:
-                        if normalize_text(author['name']) in normalize_text(p_target['author']) or normalize_text(p_target['author']) in normalize_text(author['name']):
-                            if p_target['id'] not in seen_ids:
-                                selected_books.append(p_target); seen_ids.add(p_target['id']); break
-
-            if len(selected_books) < 3:
-                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents="legnépszerűbb magyar klasszikusok", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
-                res = self.db.collection.query(query_embeddings=[vec], n_results=5, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-                if res['ids'] and res['ids'][0]:
-                    for p_target in res['metadatas'][0]:
                         if p_target['id'] not in seen_ids:
-                            selected_books.append(p_target); seen_ids.add(p_target['id'])
-                        if len(selected_books) >= 4: break
-
-            if not selected_books:
-                msg = "⚠️ Hiba: Nincs raktáron könyv! A posztolás leáll."
-                print(msg); self.send_morning_email("", "", error_log=msg)
-                return
+                            selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
             main_book = selected_books[0]
-            # Képgenerálás 9:16-os Reels arányban!
-            vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. NO text, no typography, no human faces."
+            vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Vertical 9:16."
             p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": vision_prompt}]).content[0].text
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
+            # 9:16 ARÁNY KÉNYSZERÍTÉSE
             with open(img_path, 'wb') as f: f.write(requests.get(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1080&height=1920&nologo=true").content)
             has_video = self._create_video(img_path, vid_path)
             
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
             books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
-            feelings_list = ["Ünnepel", "Olvas", "Nosztalgikusan érzi magát", "Inspirált", "Izgatott", "Kincset keres"]
 
-            # --- ÚJ, ANTI-AI SLOP PROMPT A CLAUDE-NAK ---
+            # --- ANTI-AI SLOP PROMPT ---
             final_prompt = (
-                f"Írj egy posztot az Antikvarius.ro Facebook oldalára az alábbi adatokból.\n"
-                f"FELADAT ÉS STÍLUS (ANTI-AI SLOP):\n"
-                f"- Tónus: Végtelenül emberi, természetes, mintha egy könyvesbolti kurátor írta volna a reggeli kávéja mellett. Kerüld a marketinges blablát.\n"
-                f"- SZIGORÚAN TILOS sablonos AI kifejezéseket használni (pl. 'Készen állsz egy varázslatos utazásra?', 'Merülj el a könyvek világában', 'Fedezd fel', stb.).\n"
-                f"- Emoji diéta: Csak a legszükségesebb helyekre tegyél emojit (születésnapok mellé, és talán 1-2 a tartalomhoz). NE spammeld tele a szöveget mosolygós fejekkel és csillagokkal.\n"
-                f"- A poszt legelső sora KÖTELEZŐEN így kezdődjön dőlt betűkkel: *— ✨ Érzés: [Válassz egyet: {', '.join(feelings_list)}] —*\n"
-                f"- A poszt végén hívd fel a figyelmet, hogy a könyvek linkjei a kommentben vannak. Semmilyen URL nem lehet a szövegben!\n"
-                f"- KÖTELEZŐ: A linkes felhívás mondatának legvégére szigorúan tegyél egy lefelé mutató ujjat (👇)!\n\n"
-                f"TARTALOM:\n"
-                f"1. Születésnapos írók ma ({today_date}):\n{authors_text}\n"
-                f"2. Napi Kincses Válogatás (ajánlott könyvek raktárról):\n{books_context}\n"
+                f"Írj egy posztot az Antikvarius.ro FB oldalára. SZABÁLYOK:\n"
+                f"- Tónus: Végtelenül emberi, kerüld a marketinges blablát és az AI sablonokat.\n"
+                f"- Emoji diéta: Csak a legszükségesebb helyekre. Nincs emoji-tenger.\n"
+                f"- Első sor dőlt betűvel: *— ✨ Érzés: [Válassz egyet] —*\n"
+                f"- Kötelező: A 'link a kommentben' mondat legvégére tegyél egy 👇 emojit!\n\n"
+                f"Szerzők: {authors_text}\nKönyvek: {books_context}"
             )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert, highly natural human copywriter for a bookstore.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert human bookstore curator. No AI slop.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
 
             raw_fingerprint = post_text[30:130] if len(post_text) > 130 else post_text[:100]
             memory_data = {
-                "date": today_date,
                 "fingerprint": raw_fingerprint,
-                "links": [{"title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]
+                "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]
             }
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if fb_id and fb_token:
                 api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
-                
-                video_success = False
                 if has_video:
-                    v_data = api_data.copy()
-                    v_data['description'] = v_data.pop('message')
-                    r_vid = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
-                    if r_vid.status_code == 200: video_success = True
-                
-                if not has_video or not video_success:
-                    r_photo = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
-                    mid = r_photo.json().get('id')
+                    v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
+                    requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
+                else:
+                    r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
+                    mid = r_p.json().get('id')
                     if mid: 
                         api_data['attached_media'] = json.dumps([{'media_fbid': mid}])
                         requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=api_data)
             
-            self.send_morning_email(post_text, json.dumps(memory_data['links'], indent=2, ensure_ascii=False))
+            self.send_morning_email(post_text, memory_data['links'])
             for p in [img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész. Hibátlanul lefutott az új Anti-AI Slop prompttal.")
-            
-        except Exception as e:
-            err_msg = f"Fatális kivétel a futás során: {str(e)}"
-            print(f"❌ HIBA: {err_msg}")
-            self.send_morning_email("", "", error_log=err_msg)
+            print("✅ [SOCIAL] Kész reggel 8:00-kor.")
+        except Exception as e: print(f"❌ HIBA: {e}")
 
 # --- FASTAPI ---
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # SZIGORÚ SORREND: 3-kor szinkron, 8-kor poszt generálás.
     scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
-    scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=4, minute=0, timezone=LOCAL_TZ))
+    scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
     scheduler.start(); yield; scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V197 Online", "model": CLAUDE_MODEL}
+def home(): return {"status": "V198 Online", "project": "Booksy"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
