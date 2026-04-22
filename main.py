@@ -1,12 +1,12 @@
-# BOOKSY BRAIN - V213 (THE CASCADE & STAMPING EDITION)
-# VERZIÓ: V213 - EVENT-DRIVEN SYNC -> POST CASCADE + FRAME-BY-FRAME TEXT STAMPING
+# BOOKSY BRAIN - V215 (THE STRICT HANDSHAKE EDITION)
+# VERZIÓ: V215 - STRICT FACEBOOK API RESPONSE VALIDATION & TRUE FALLBACK CASCADE
 
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 import os, time, requests, hashlib, re, json, random, unicodedata, html, urllib.parse, gc, chromadb, pytz, smtplib
-import numpy as np  # KÖTELEZŐ a frame-by-frame videó módosításhoz
+import numpy as np
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, Request
@@ -306,7 +306,7 @@ class BooksySocialAgent:
     def _create_video(self, raw_img_path, overlay_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            log_event("Videó renderelés indítása (Frame-by-Frame Stamping)...")
+            log_event("Videó renderelés indítása (Ipari Frame-by-Frame Stamping)...")
             
             clip = ImageClip(raw_img_path).set_duration(5)
             zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center')
@@ -316,9 +316,9 @@ class BooksySocialAgent:
             if os.path.exists(overlay_path):
                 overlay_img = PIL.Image.open(overlay_path).convert("RGBA")
                 
-                # IPARI VÍZJELEZÉS: Fizikai rábélyegzés minden egyes képkockára
                 def stamp_overlay(frame_array):
-                    pil_frame = PIL.Image.fromarray(frame_array).convert("RGBA")
+                    clean_frame = np.clip(frame_array, 0, 255).astype(np.uint8)
+                    pil_frame = PIL.Image.fromarray(clean_frame).convert("RGBA")
                     pil_frame.alpha_composite(overlay_img)
                     return np.array(pil_frame.convert("RGB"))
                 
@@ -419,24 +419,50 @@ class BooksySocialAgent:
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
-            api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
             
+            fb_success = False
+
+            # --- KŐKEMÉNY KÉZFOGÁS (STRICT HANDSHAKE) FELTÖLTÉS ---
             if has_video:
-                v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
-                requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
-                log_event("Videó vázlat feltöltve a Facebookra.")
-            else:
+                log_event("Videó feltöltés megkísérlése a Facebookra...")
+                v_data = {
+                    'access_token': fb_token, 
+                    'description': post_text, 
+                    'published': 'false', 
+                    'unpublished_content_type': 'DRAFT'
+                }
+                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
+                if r_v.status_code == 200:
+                    log_event(f"✅ Videó vázlat SIKERESEN feltöltve! FB ID: {r_v.json().get('id')}")
+                    fb_success = True
+                else:
+                    log_event(f"⚠️ FB Videó feltöltési hiba: {r_v.text}")
+                    log_event("Visszaállás a képes vázlat (fallback) feltöltésére...")
+                    has_video = False
+
+            if not fb_success:
                 upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
-                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(upload_img, 'rb')})
-                mid = r_p.json().get('id')
-                if mid: 
-                    api_data['attached_media'] = json.dumps([{'media_fbid': mid}])
-                    requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=api_data)
-                log_event("Képes vázlat feltöltve a Facebookra.")
+                log_event(f"Képes vázlat feltöltésének megkísérlése ({upload_img})...")
+                p_data = {
+                    'access_token': fb_token, 
+                    'message': post_text, 
+                    'published': 'false', 
+                    'unpublished_content_type': 'DRAFT'
+                }
+                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data=p_data, files={'source': open(upload_img, 'rb')})
+                if r_p.status_code == 200:
+                    log_event(f"✅ Képes vázlat SIKERESEN feltöltve! FB ID: {r_p.json().get('id')}")
+                    fb_success = True
+                else:
+                    log_event(f"❌ FB Kép feltöltési hiba: {r_p.text}")
+
+            if fb_success:
+                self.send_morning_email(post_text, memory_data['links'])
+                log_event("Folyamat sikeresen lezárult.")
+            else:
+                log_event("❌ KRITIKUS: A Facebook feltöltés minden formája kudarcot vallott.")
             
-            self.send_morning_email(post_text, memory_data['links'])
-            log_event("Folyamat sikeresen lezárult.")
-            
+            # Takarítás
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
 
@@ -456,14 +482,12 @@ def master_morning_routine():
     except Exception as e:
         log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
-    # A posztgenerálás KÖTELEZŐEN elindul, hogy a marketing sose álljon le
     social_agent.run_night_generation()
 
 
 # --- FASTAPI LIFESPAN ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ESEMÉNYVEZÉRELT LÁNCREAKCIÓ MINDEN REGGEL 7:00-KOR
     scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
     scheduler.start(); yield; scheduler.shutdown()
 
@@ -472,7 +496,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V213 Online", "project": "Booksy"}
+def home(): return {"status": "V215 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -480,17 +504,15 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
 
-# Manuális teszteléshez megmaradt a gomb, ami CSAK a posztolást indítja (szinkron nélkül) a gyors teszteléshez
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V213 Agentic Video Test Started"}
+    return {"status": "V215 Agentic Video Test Started"}
 
-# ÚJ: Tesztgomb a teljes láncreakcióra (Sync + Poszt)
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V213 Full Cascade Test Started"}
+    return {"status": "V215 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
