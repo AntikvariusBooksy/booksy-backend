@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V207 (THE STABILIZED AGENTIC EDITION)
-# VERZIÓ: V207 - CLAUDE MODEL STRING REVERTED TO WORKING STATE
+# BOOKSY BRAIN - V208 (THE FINAL API SYNC EDITION)
+# VERZIÓ: V208 - GOOGLE IMAGEN 3 API ENDPOINT FIXED
 
 __import__('pysqlite3')
 import sys
@@ -29,7 +29,7 @@ load_dotenv()
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# VISSZAÁLLÍTVA A BIZONYÍTOTTAN MŰKÖDŐ STRINGRE!
+# BIZONYÍTOTTAN MŰKÖDŐ CLAUDE MODELL
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
 XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml"
@@ -343,7 +343,7 @@ class BooksySocialAgent:
             main_book = selected_books[0]
             log_event(f"Fő könyv kiválasztva: {main_book['title']}")
 
-            # STEP 1: Gemini elemzés
+            # STEP 1: Gemini elemzés (A sikeresen lefutott 2.5 flash API)
             log_event("Step 1: Gemini (2.5-flash) könyv-elemzés indítása...")
             analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. 
             Leírás: {main_book.get('text_preview','')}.
@@ -369,11 +369,11 @@ class BooksySocialAgent:
             final_img_prompt = c_res.content[0].text
             log_event(f"Claude prompt kész: {final_img_prompt[:50]}...")
 
-            # STEP 3: Gemini Image Generation
-            log_event("Step 3: Google Gemini Image képgenerálás (1920x1920)...")
+            # STEP 3: Gemini Image Generation (VÉGRE A JÓ MODELL NÉVVEL!)
+            log_event("Step 3: Google Imagen 3 képgenerálás (1920x1920)...")
             img_path = "social_img.jpg"
             img_response = gemini_client.models.generate_images(
-                model='gemini-2.5-flash-image',
+                model='imagen-3.0-generate-001',
                 prompt=final_img_prompt,
                 config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio='1:1')
             )
@@ -439,7 +439,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V207 Online", "project": "Booksy"}
+def home(): return {"status": "V208 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -450,7 +450,7 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V207 Agentic Test & Overlay Started"}
+    return {"status": "V208 Agentic Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
