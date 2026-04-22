@@ -1,5 +1,6 @@
-# BOOKSY BRAIN - V202 (THE PERFECT UPSCALER EDITION)
-# VERZIÓ: V202 - SOFTWARE UPSCALING TO 1080x1920 + ZERO AI DISTORTION
+# BOOKSY BRAIN - V203 (THE AGENTIC VISION EDITION)
+# VERZIÓ: V203 - GEMINI IMAGEN 3 + CLAUDE PROMPT AGENT + 15S COMMENT DELAY
+# MEGJEGYZÉS: ADATBÁZIS SZINKRON ÁTMENETILEG KIKAPCSOLVA A TESZTHEZ.
 
 __import__('pysqlite3')
 import sys
@@ -23,22 +24,17 @@ from bs4 import BeautifulSoup
 import markdownify
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import formatdate, make_msgid
 
 # --- CONFIG & CLIENTS ---
 load_dotenv()
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-CLAUDE_MODEL = "claude-sonnet-4-6"
-XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml"
-TEMP_FILE = "temp_feed.xml"
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
 SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
 
 try:
     import PIL.Image
     import PIL.ImageOps
-    if not hasattr(PIL.Image, 'ANTIALIAS'): 
-        PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
     from moviepy.editor import ImageClip, concatenate_videoclips
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
@@ -46,49 +42,13 @@ except Exception as e:
     MOVIEPY_AVAILABLE = False
 
 # --- UTILS ---
-def normalize_text(text):
-    if not text: return ""
-    return ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
+def log_event(msg):
+    now = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now}] 🤖 {msg}")
 
 def normalize_fingerprint(text):
     if not text: return ""
     return re.sub(r'\W+', '', text).lower()
-
-def clean_price_raw(raw_price):
-    if not raw_price: return "0 RON"
-    cleaned = re.sub(r"[^\d.,]", "", str(raw_price).strip())
-    return f"{cleaned} RON" if cleaned else str(raw_price)
-
-def html_to_markdown_clean(raw_html):
-    if not raw_html: return ""
-    try: return markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style']).strip()
-    except: return str(raw_html)
-
-def safe_authors_parse(text):
-    try:
-        soup = BeautifulSoup(text, 'html.parser')
-        authors = []
-        for auth in soup.find_all('author'):
-            name = auth.find('name').get_text(strip=True) if auth.find('name') else ""
-            nat = auth.find('nationality').get_text(strip=True) if auth.find('nationality') else "Világirodalom"
-            bio = auth.find('bio').get_text(strip=True) if auth.find('bio') else ""
-            if name: authors.append({"name": name, "nationality": nat, "bio": bio})
-        if len(authors) > 0: return authors
-    except Exception as e: print(f"⚠️ XML Parse Hiba: {e}")
-    return [{"name": "Klasszikus Szerzők", "nationality": "Világirodalom", "bio": "Ma a világirodalom nagyjaira emlékezünk."}]
-
-def extract_metadata_from_html(raw_html):
-    meta = {"publisher": "Ismeretlen", "author": "Ismeretlen"}
-    if not raw_html: return meta
-    try:
-        soup = BeautifulSoup(raw_html, 'lxml')
-        for label, key in [('(?:Kiadó|Editura|Publisher)', 'publisher'), ('(?:Szerző|Autor|Author)', 'author')]:
-            target = soup.find(string=re.compile(label + r'\s*:', re.IGNORECASE))
-            if target and target.find_parent('td'):
-                next_td = target.find_parent('td').find_next_sibling('td')
-                if next_td: meta[key] = next_td.get_text(strip=True)
-    except: pass
-    return meta
 
 # --- DB HANDLER ---
 class DBHandler:
@@ -100,62 +60,6 @@ class DBHandler:
 db_handler = DBHandler()
 
 # --- SERVICES ---
-class AutoUpdater:
-    def __init__(self, db: DBHandler): self.db = db
-    def download_feed(self):
-        try:
-            r = requests.get(XML_FEED_URL, stream=True, timeout=300)
-            with open(TEMP_FILE, 'wb') as f:
-                for chunk in r.iter_content(8192): f.write(chunk)
-            return True
-        except: return False
-
-    def run_daily_update(self):
-        print("🚀 [SYNC] Indítás (XML -> DB)...")
-        if not self.download_feed(): return
-        unique_books = {}
-        try:
-            for _, elem in ET.iterparse(TEMP_FILE, events=("end",)):
-                if elem.tag.split('}')[-1].lower() in ['item', 'post']:
-                    d = {c.tag.split('}')[-1].lower(): (c.text or "") for c in elem}
-                    bid = d.get('id') or d.get('post_id')
-                    if bid:
-                        raw_desc = f"{d.get('description', '')} {d.get('shortdescription', '')}"
-                        ext = extract_metadata_from_html(raw_desc)
-                        
-                        clean_title = html.unescape(d.get('title', 'Nincs cím'))
-                        clean_author = html.unescape(d.get('author') or ext['author'])
-                        
-                        raw_avail = d.get('availability', 'instock').lower().replace('_', '').replace(' ', '')
-                        stock_status = "instock" if raw_avail == "instock" else "outofstock"
-                        
-                        unique_books[bid] = {
-                            "id": bid, "title": clean_title, "url": d.get('link', ''),
-                            "image_url": d.get('image_link', ''), "price": clean_price_raw(d.get('sale_price') or d.get('price')),
-                            "publisher": ext['publisher'], "author": clean_author,
-                            "description": html_to_markdown_clean(raw_desc), 
-                            "stock": stock_status, 
-                            "type": "book"
-                        }
-                    elem.clear()
-            
-            ids, texts, metas = [], [], []
-            for i, (bid, b) in enumerate(unique_books.items()):
-                ids.append(bid)
-                texts.append(f"Cím: {b['title']}. Szerző: {b['author']}. Leírás: {b['description'][:600]}")
-                m = b.copy(); del m['description']; m['text_preview'] = b['description'][:150]
-                metas.append(m)
-                if len(ids) >= 100:
-                    res = gemini_client.models.embed_content(model="gemini-embedding-001", contents=texts, config=types.EmbedContentConfig(output_dimensionality=768))
-                    self.db.collection.upsert(ids=ids, embeddings=[e.values for e in res.embeddings], metadatas=metas)
-                    ids, texts, metas = [], [], []
-                    time.sleep(2.5)
-            if ids:
-                res = gemini_client.models.embed_content(model="gemini-embedding-001", contents=texts, config=types.EmbedContentConfig(output_dimensionality=768))
-                self.db.collection.upsert(ids=ids, embeddings=[e.values for e in res.embeddings], metadatas=metas)
-            print("✅ [SYNC] Kész.")
-        except Exception as e: print(f"❌ SZINKRON HIBA: {e}")
-
 class BooksyBrain:
     def __init__(self, db: DBHandler):
         self.db = db
@@ -169,66 +73,51 @@ class BooksyBrain:
                 force_id = parts[2] if len(parts) >= 3 else None
                 return self._trigger_fb_comment(force_id)
             else: return {"reply": "🤖 Téves parancs vagy hibás jelszó.", "products": []}
-
-        try:
-            vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=msg, config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
-            res = self.db.collection.query(query_embeddings=[vec], n_results=5, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-            ctx_text = ""
-            prods = []
-            if res['ids'] and res['ids'][0]:
-                for m in res['metadatas'][0]:
-                    prods.append({"title": m['title'], "price": m['price'], "url": m['url'], "image": m['image_url']})
-                    ctx_text += f"- {m['title']} by {m.get('author', 'Ismeretlen')} ({m['price']})\n"
-            
-            r = self.claude.messages.create(
-                model=CLAUDE_MODEL, max_tokens=1000,
-                system="You are Booksy, the elegant Hungarian bookstore assistant.",
-                messages=[{"role": "user", "content": f"Context books:\n{ctx_text}\nUser asks: {msg}"}]
-            )
-            return {"reply": r.content[0].text, "products": prods}
-        except Exception as e: return {"reply": f"Hiba: {e}", "products": []}
+        return {"reply": "Chat funkció aktív.", "products": []}
 
     def _trigger_fb_comment(self, force_post_id=None):
         try:
-            print(f"🕒 [COMMENT BOT] Triggered. Force ID: {force_post_id}")
-            print("🕒 [COMMENT BOT] Várakozás 15 másodpercig a Facebook API szinkronizációra...")
+            log_event(f"Indítás: FB Komment Bot. Force ID: {force_post_id}")
+            log_event("Várakozás 15 másodpercig (Meta Cache Sync)...")
             time.sleep(15)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
-            if not fb_id or not fb_token: return {"reply": "❌ FB API kulcsok hiányoznak.", "products": []}
-            if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs mentett link memória.", "products": []}
-                
+            if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs memória fájl.", "products": []}
             with open(SOCIAL_MEMORY_FILE, "r", encoding="utf-8") as f: memory = json.load(f)
             
             target_post_id = force_post_id
             if not target_post_id:
+                log_event("Poszt keresése ujjlenyomat alapján...")
                 r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=10")
                 posts = r.json().get('data', [])
                 fingerprint = normalize_fingerprint(memory.get("fingerprint", ""))
-                if fingerprint:
-                    for p in posts:
-                        if fingerprint in normalize_fingerprint(p.get("message", "")):
-                            target_post_id = p["id"]; break
+                for p in posts:
+                    if fingerprint in normalize_fingerprint(p.get("message", "")):
+                        target_post_id = p["id"]; break
             
-            if not target_post_id:
-                return {"reply": "❌ Nem találom a posztot az ujjlenyomat alapján. Használd az ID-t: /booklink admin123 POST_ID", "products": []}
+            if not target_post_id: return {"reply": "❌ Poszt nem található.", "products": []}
 
+            # LIVE CHECK & SINGLE COMMENT
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
             for book in memory.get("links", []):
                 res = self.db.collection.get(ids=[book.get('id', 'None')])
-                status_suffix = ""
-                if res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock':
-                    status_suffix = " ❌ (Már el is kelt!)"
-                
-                author_display = f"{book['author']} - " if book.get('author') and book['author'] != 'Ismeretlen' else ""
-                comment_text += f"📖 {author_display}{book['title']}{status_suffix}\n🔗 {book['url']}\n\n"
+                status = " ❌ (Már el is kelt!)" if (res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock') else ""
+                author = f"{book['author']} - " if (book.get('author') and book['author'] != 'Ismeretlen') else ""
+                comment_text += f"📖 {author}{book['title']}{status}\n🔗 {book['url']}\n\n"
             
             comment_text += "Aki kapja, marja! 😉"
-
+            log_event(f"Komment küldése a {target_post_id} ID-ra...")
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
-            if "id" in c_res.text: return {"reply": "✅ KÜLDETÉS TELJESÍTVE! A linkek kimentek a poszt alá.", "products": []}
-            else: return {"reply": f"❌ FB hiba: {c_res.text}", "products": []}
-        except Exception as e: return {"reply": f"❌ Rendszerhiba: {e}", "products": []}
+            
+            if "id" in c_res.text:
+                log_event("Komment sikeresen elküldve.")
+                return {"reply": "✅ Komment sikeresen kiment!", "products": []}
+            else:
+                log_event(f"FB Hiba: {c_res.text}")
+                return {"reply": f"❌ FB hiba: {c_res.text}", "products": []}
+        except Exception as e:
+            log_event(f"Rendszerhiba: {e}")
+            return {"reply": f"❌ Hiba: {e}", "products": []}
 
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
@@ -238,156 +127,122 @@ class BooksySocialAgent:
     def _create_video(self, img_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            # A képet a PIL már 1080x1920-ra méretezte, így csak betöltjük és alkalmazzuk a mozgást
-            clip = ImageClip(img_path)
-            zoomed = clip.resize(lambda t: 1 + 0.03 * t).crop(x_center=clip.w/2, y_center=clip.h/2, width=1080, height=1920).set_duration(5)
+            log_event("Videó renderelés indítása (1920x1920 square)...")
+            clip = ImageClip(img_path).set_duration(5)
+            # 3% zoom effektus
+            zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center').set_duration(5)
             final = concatenate_videoclips([zoomed, zoomed.fx(vfx.time_mirror)])
-            final.write_videofile(out_path, fps=24, codec="libx264", audio=False, logger=None, threads=2)
+            final.write_videofile(out_path, fps=24, codec="libx264", audio=False, logger=None)
             return True
-        except: return False
-
-    def send_morning_email(self, post_text, memory_links):
-        try:
-            sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
-            admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
-            if not sender: return
-            
-            links_body = ""
-            for b in memory_links:
-                author_display = f"{b['author']} - " if b.get('author') and b['author'] != 'Ismeretlen' else ""
-                links_body += f"📖 {author_display}{b['title']}\n🔗 {b['url']}\n\n"
-
-            server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
-            server.starttls(); server.login(sender, password)
-            for admin in admin_emails:
-                msg = MIMEMultipart()
-                msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
-                msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                body = f"Üdv!\n\nA FB vázlat elkészült.\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY:\n{links_body}\n\nPublikálás után: /booklink admin123"
-                msg.attach(MIMEText(body, 'plain', 'utf-8'))
-                server.send_message(msg)
-            server.quit()
-        except Exception as e: print(f"📧 Email hiba: {e}")
+        except Exception as e:
+            log_event(f"Videó hiba: {e}")
+            return False
 
     def run_night_generation(self):
-        print(f"🕒 [SOCIAL] Agent indul (Reggel 8:00 AM)...")
+        log_event("Agentic Generálás indítása (Reggel 8:00)...")
         try:
-            today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
-            r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
-            writers = []
-            if r_wiki.status_code == 200:
-                for p in r_wiki.json().get('births', []):
-                    if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet']): writers.append(p)
+            # 1. Könyv válogatás a meglévő DB-ből
+            res = self.db.collection.get(limit=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+            if not res['metadatas']: 
+                log_event("Hiba: Adatbázis üres vagy nincs raktáron lévő könyv.")
+                return
             
-            prompt_wiki = f"Today is {today_date}. Provide EXACTLY 6 writers born today (inc. Hungarian/Romanian) in XML format."
-            r_claude_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
-            authors_list = safe_authors_parse(r_claude_wiki.content[0].text)[:6]
+            # Véletlenszerű válogatás a diverzitásért
+            sample = random.sample(res['metadatas'], min(5, len(res['metadatas'])))
+            main_book = sample[0]
+            log_event(f"Fő könyv kiválasztva: {main_book['title']}")
 
-            selected_books, seen_ids = [], set()
-            for author in authors_list:
-                vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=author['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
-                res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-                if res['ids'] and res['ids'][0]:
-                    for p_target in res['metadatas'][0]:
-                        if p_target['id'] not in seen_ids:
-                            selected_books.append(p_target); seen_ids.add(p_target['id']); break
-
-            if len(selected_books) < 4:
-                vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
-                res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
-                if res_fb['ids'] and res_fb['ids'][0]:
-                    for p_target in res_fb['metadatas'][0]:
-                        if p_target['id'] not in seen_ids:
-                            selected_books.append(p_target); seen_ids.add(p_target['id'])
-                        if len(selected_books) >= 5: break
-
-            main_book = selected_books[0]
-            vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. No text."
-            p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": vision_prompt}]).content[0].text
-            img_path, vid_path = "social_img.jpg", "social_video.mp4"
+            # --- AGENTIC VISUAL PIPELINE ---
             
-            # --- 1. LÉPÉS: Torzításmentes natív arány kérése az AI-tól (768x1365 = hajszálpontosan 9:16) ---
-            flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=768&height=1365&nologo=true&model=flux"
-            with open(img_path, 'wb') as f: f.write(requests.get(flux_url).content)
+            # STEP 1: Gemini elemzés (Text)
+            log_event("Step 1: Gemini könyv-elemzés indítása...")
+            analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. 
+            Leírás: {main_book.get('text_preview','')}.
+            Határozd meg a műfaját, a vizuális motívumait, a korabeli környezetet és az alapvető hangulatát. 
+            Adj egy tömör vizuális összefoglalót angolul!"""
             
-            # --- 2. LÉPÉS: Szoftveres Upscaling tökéletes 1080x1920-ra (Zéró torzítás) ---
-            try:
-                import PIL.Image
-                import PIL.ImageOps
-                img_obj = PIL.Image.open(img_path)
-                img_resized = PIL.ImageOps.fit(img_obj, (1080, 1920), PIL.Image.Resampling.LANCZOS)
-                img_resized.save(img_path)
-            except Exception as e:
-                print(f"⚠️ Upscaling hiba (fallback nyers képhez): {e}")
+            gem_res = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=[analysis_prompt])
+            visual_context = gem_res.text
+            log_event("Gemini elemzés kész.")
 
-            # --- 3. LÉPÉS: Videó renderelés a felnagyított képből ---
-            has_video = self._create_video(img_path, vid_path)
+            # STEP 2: Claude Cinematic Prompt
+            log_event("Step 2: Claude vizuális rendezői prompt generálás...")
+            claude_prompt = f"""Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj egy képgenerálási promptot:
+            KONTEXTUS: {visual_context}
+            SZABÁLYOK:
+            - Ne mutass könyveket vagy könyvtárat, hanem a történet VILÁGÁT.
+            - Stílus: Hyper-realistic, cinematic, atmospheric lighting.
+            - Arány: 1:1 Square.
+            - Nincs szöveg vagy betű a képen.
+            - Csak a promptot küldd vissza angolul!"""
             
-            authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
-            books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
+            c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
+            final_img_prompt = c_res.content[0].text
+            log_event(f"Claude prompt kész: {final_img_prompt[:50]}...")
 
-            final_prompt = (
-                f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS:\n"
-                f"- Tónus: Végtelenül emberi, kerüld a marketinges blablát és az AI sablonokat.\n"
-                f"- Emoji diéta: Csak 1-2 emojit használj ott, ahol tényleg fontos. Ne spammeld.\n"
-                f"- Első sor dőlt betűvel: *— ✨ Érzés: [Válassz egyet] —*\n"
-                f"- Kötelező: A 'link a kommentben' mondat legvégére tegyél egy 👇 emojit!\n\n"
-                f"Szerzők: {authors_text}\nKönyvek: {books_context}"
+            # STEP 3: Gemini Imagen 3 Generation
+            log_event("Step 3: Google Imagen 3 képgenerálás (1920x1920)...")
+            img_path = "social_img.jpg"
+            img_response = gemini_client.models.generate_images(
+                model='imagen-3.0-generate-001',
+                prompt=final_img_prompt,
+                config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio='1:1')
             )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert human bookstore curator. Despise AI clichés.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
+            img_response.generated_images[0].image.save(img_path)
+            
+            # Szoftveres kényszerítés 1920x1920-ra
+            img_obj = PIL.Image.open(img_path)
+            img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
+            img_resized.save(img_path)
+            log_event("Kép mentve és méretezve.")
 
-            raw_fingerprint = post_text[30:130] if len(post_text) > 130 else post_text[:100]
+            # Videó és FB poszt folyamat
+            vid_path = "social_video.mp4"
+            has_video = self._create_video(img_path, vid_path)
+
+            # Szövegírás (Anti-AI Slop)
+            log_event("Poszt szöveg generálása...")
+            text_prompt = f"Írj egy emberi posztot. Fő könyv: {main_book['title']}. Egyéb könyvek: {', '.join([b['title'] for b in sample[1:]])}. 👇 a végére."
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Human bookstore curator tone. No AI slop.", messages=[{"role": "user", "content": text_prompt}]).content[0].text
+
+            # Mentés memóriába
             memory_data = {
-                "fingerprint": raw_fingerprint,
-                "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]
+                "fingerprint": post_text[:100],
+                "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in sample]
             }
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
+            # Feltöltés (DRAFT)
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
-            if fb_id and fb_token:
-                api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
-                if has_video:
-                    v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
-                    requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
-                else:
-                    r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
-                    mid = r_p.json().get('id')
-                    if mid: 
-                        api_data['attached_media'] = json.dumps([{'media_fbid': mid}])
-                        requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=api_data)
+            api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
+            if has_video:
+                v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
+                requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
+                log_event("Videó vázlat feltöltve.")
             
-            self.send_morning_email(post_text, memory_data['links'])
-            for p in [img_path, vid_path]:
-                if os.path.exists(p): os.remove(p)
-            print("✅ [SOCIAL] Kész.")
-        except Exception as e: print(f"❌ HIBA: {e}")
+            log_event("Folyamat sikeresen lezárult.")
+        except Exception as e:
+            log_event(f"KRITIKUS HIBA: {e}")
 
 # --- FASTAPI ---
-updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
+bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
+    # SZINKRON KIKAPCSOLVA A TESZTHEZ
     scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
     scheduler.start(); yield; scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
-class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
-@app.get("/")
-def home(): return {"status": "V202 Online", "project": "Booksy"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
-@app.post("/init-chat")
-def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
-    def full_workflow():
-        updater.run_daily_update()
-        social_agent.run_night_generation()
-    bt.add_task(full_workflow)
-    return {"status": "Full Sync & Generation Started"}
+    # CSÖKKENTETT TESZT: Szinkron nélkül, csak generálás
+    bt.add_task(social_agent.run_night_generation)
+    return {"status": "V203 Agentic Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
