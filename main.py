@@ -1,6 +1,5 @@
-# BOOKSY BRAIN - V206 (THE FULLY RESTORED AGENTIC EDITION)
-# VERZIÓ: V206 - WIKI/EMAIL RESTORED + GEMINI 2.5 FLASH API + CINEMATIC OVERLAY
-# MEGJEGYZÉS: ADATBÁZIS SZINKRON ÁTMENETILEG KIKAPCSOLVA A TESZTHEZ.
+# BOOKSY BRAIN - V207 (THE STABILIZED AGENTIC EDITION)
+# VERZIÓ: V207 - CLAUDE MODEL STRING REVERTED TO WORKING STATE
 
 __import__('pysqlite3')
 import sys
@@ -29,7 +28,10 @@ from email.mime.multipart import MIMEMultipart
 load_dotenv()
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
+
+# VISSZAÁLLÍTVA A BIZONYÍTOTTAN MŰKÖDŐ STRINGRE!
+CLAUDE_MODEL = "claude-sonnet-4-6"
+
 XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml"
 TEMP_FILE = "temp_feed.xml"
 SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
@@ -306,7 +308,7 @@ class BooksySocialAgent:
     def run_night_generation(self):
         log_event("Agentic Generálás indítása (Tesztüzem - Wiki integrációval)...")
         try:
-            # --- WIKIPEDIA LOGIKA (VISSZAÁLLÍTVA) ---
+            # --- WIKIPEDIA LOGIKA ---
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
             r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
             writers = []
@@ -327,7 +329,7 @@ class BooksySocialAgent:
                         if p_target['id'] not in seen_ids:
                             selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
-            # --- FALLBACK LOGIKA (VISSZAÁLLÍTVA) ---
+            # --- FALLBACK LOGIKA ---
             if len(selected_books) < 4:
                 log_event("Nincs elég születésnapos találat, népszerű könyvek betöltése...")
                 vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
@@ -341,7 +343,7 @@ class BooksySocialAgent:
             main_book = selected_books[0]
             log_event(f"Fő könyv kiválasztva: {main_book['title']}")
 
-            # STEP 1: Gemini elemzés (2.5-flash MODERN VERZIÓ)
+            # STEP 1: Gemini elemzés
             log_event("Step 1: Gemini (2.5-flash) könyv-elemzés indítása...")
             analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. 
             Leírás: {main_book.get('text_preview','')}.
@@ -416,7 +418,7 @@ class BooksySocialAgent:
                 requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
                 log_event("Videó vázlat feltöltve a Facebookra.")
             
-            # --- EMAIL KÜLDÉS (VISSZAÁLLÍTVA) ---
+            # --- EMAIL KÜLDÉS ---
             self.send_morning_email(post_text, memory_data['links'])
             
             log_event("Folyamat sikeresen lezárult.")
@@ -437,7 +439,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V206 Online", "project": "Booksy"}
+def home(): return {"status": "V207 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -448,7 +450,7 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V206 Agentic Test & Overlay Started"}
+    return {"status": "V207 Agentic Test & Overlay Started"}
 
 if __name__ == "__main__":
     import uvicorn
