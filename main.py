@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V200 (THE MILESTONE EDITION)
-# VERZIÓ: V200 - ZERO-DISTORTION REELS + UNICODE FIX + SMART AUTHOR FORMATTING
+# BOOKSY BRAIN - V202 (THE PERFECT UPSCALER EDITION)
+# VERZIÓ: V202 - SOFTWARE UPSCALING TO 1080x1920 + ZERO AI DISTORTION
 
 __import__('pysqlite3')
 import sys
@@ -36,6 +36,7 @@ SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
 
 try:
     import PIL.Image
+    import PIL.ImageOps
     if not hasattr(PIL.Image, 'ANTIALIAS'): 
         PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
     from moviepy.editor import ImageClip, concatenate_videoclips
@@ -122,11 +123,9 @@ class AutoUpdater:
                         raw_desc = f"{d.get('description', '')} {d.get('shortdescription', '')}"
                         ext = extract_metadata_from_html(raw_desc)
                         
-                        # --- UNICODE DEKÓDOLÁS ---
                         clean_title = html.unescape(d.get('title', 'Nincs cím'))
                         clean_author = html.unescape(d.get('author') or ext['author'])
                         
-                        # --- RUGALMAS STOCK ELLENŐRZÉS ---
                         raw_avail = d.get('availability', 'instock').lower().replace('_', '').replace(' ', '')
                         stock_status = "instock" if raw_avail == "instock" else "outofstock"
                         
@@ -192,6 +191,9 @@ class BooksyBrain:
     def _trigger_fb_comment(self, force_post_id=None):
         try:
             print(f"🕒 [COMMENT BOT] Triggered. Force ID: {force_post_id}")
+            print("🕒 [COMMENT BOT] Várakozás 15 másodpercig a Facebook API szinkronizációra...")
+            time.sleep(15)
+
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if not fb_id or not fb_token: return {"reply": "❌ FB API kulcsok hiányoznak.", "products": []}
             if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs mentett link memória.", "products": []}
@@ -209,9 +211,8 @@ class BooksyBrain:
                             target_post_id = p["id"]; break
             
             if not target_post_id:
-                return {"reply": "❌ Nem találom a posztot ujjlenyomat alapján. Használd az ID-t: /booklink admin123 POST_ID", "products": []}
+                return {"reply": "❌ Nem találom a posztot az ujjlenyomat alapján. Használd az ID-t: /booklink admin123 POST_ID", "products": []}
 
-            # --- LIVE CHECK & SMART FORMATTING ---
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
             for book in memory.get("links", []):
                 res = self.db.collection.get(ids=[book.get('id', 'None')])
@@ -219,9 +220,7 @@ class BooksyBrain:
                 if res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock':
                     status_suffix = " ❌ (Már el is kelt!)"
                 
-                # Ha a szerző ismeretlen, eltüntetjük, csak a cím jelenik meg
                 author_display = f"{book['author']} - " if book.get('author') and book['author'] != 'Ismeretlen' else ""
-                
                 comment_text += f"📖 {author_display}{book['title']}{status_suffix}\n🔗 {book['url']}\n\n"
             
             comment_text += "Aki kapja, marja! 😉"
@@ -239,8 +238,9 @@ class BooksySocialAgent:
     def _create_video(self, img_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            clip = ImageClip(img_path).resize(width=1080)
-            zoomed = clip.resize(lambda t: 1 + 0.03 * t).crop(x_center=clip.w/2, y_center=clip.h/2, width=clip.w, height=clip.h).set_duration(5)
+            # A képet a PIL már 1080x1920-ra méretezte, így csak betöltjük és alkalmazzuk a mozgást
+            clip = ImageClip(img_path)
+            zoomed = clip.resize(lambda t: 1 + 0.03 * t).crop(x_center=clip.w/2, y_center=clip.h/2, width=1080, height=1920).set_duration(5)
             final = concatenate_videoclips([zoomed, zoomed.fx(vfx.time_mirror)])
             final.write_videofile(out_path, fps=24, codec="libx264", audio=False, logger=None, threads=2)
             return True
@@ -252,7 +252,6 @@ class BooksySocialAgent:
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
             
-            # --- TISZTA FORMÁZÁS AZ EMAILBEN (SMART FORMATTING) ---
             links_body = ""
             for b in memory_links:
                 author_display = f"{b['author']} - " if b.get('author') and b['author'] != 'Ismeretlen' else ""
@@ -264,7 +263,7 @@ class BooksySocialAgent:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
                 msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY (MÁSOLHATÓ):\n{links_body}\n\nPublikálás után: /booklink admin123"
+                body = f"Üdv!\n\nA FB vázlat elkészült.\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY:\n{links_body}\n\nPublikálás után: /booklink admin123"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
@@ -274,14 +273,13 @@ class BooksySocialAgent:
         print(f"🕒 [SOCIAL] Agent indul (Reggel 8:00 AM)...")
         try:
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
-            # Wiki births
             r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
             writers = []
             if r_wiki.status_code == 200:
                 for p in r_wiki.json().get('births', []):
                     if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet']): writers.append(p)
             
-            prompt_wiki = f"Today is {today_date}. Provide EXACTLY 6 writers born today (inc. Hungarian/Romanian) in XML format <authors><author><name>...</name><nationality>...</nationality><bio>...</bio></author></authors>."
+            prompt_wiki = f"Today is {today_date}. Provide EXACTLY 6 writers born today (inc. Hungarian/Romanian) in XML format."
             r_claude_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
             authors_list = safe_authors_parse(r_claude_wiki.content[0].text)[:6]
 
@@ -304,28 +302,39 @@ class BooksySocialAgent:
                         if len(selected_books) >= 5: break
 
             main_book = selected_books[0]
-            vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. Vertical 9:16."
+            vision_prompt = f"Atmospheric cinematic image prompt for '{main_book['title']}' by {main_book['author']}. Core setting mood. No text."
             p_img = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=200, messages=[{"role": "user", "content": vision_prompt}]).content[0].text
             img_path, vid_path = "social_img.jpg", "social_video.mp4"
             
-            # --- ZERO-DISTORTION 9:16 (FLUX MODEL KÉNYSZERÍTÉSE) ---
-            flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=1080&height=1920&nologo=true&model=flux"
+            # --- 1. LÉPÉS: Torzításmentes natív arány kérése az AI-tól (768x1365 = hajszálpontosan 9:16) ---
+            flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p_img)}?width=768&height=1365&nologo=true&model=flux"
             with open(img_path, 'wb') as f: f.write(requests.get(flux_url).content)
+            
+            # --- 2. LÉPÉS: Szoftveres Upscaling tökéletes 1080x1920-ra (Zéró torzítás) ---
+            try:
+                import PIL.Image
+                import PIL.ImageOps
+                img_obj = PIL.Image.open(img_path)
+                img_resized = PIL.ImageOps.fit(img_obj, (1080, 1920), PIL.Image.Resampling.LANCZOS)
+                img_resized.save(img_path)
+            except Exception as e:
+                print(f"⚠️ Upscaling hiba (fallback nyers képhez): {e}")
+
+            # --- 3. LÉPÉS: Videó renderelés a felnagyított képből ---
             has_video = self._create_video(img_path, vid_path)
             
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
             books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
 
-            # --- ANTI-AI SLOP SYSTEM PROMPT ---
             final_prompt = (
-                f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS ÉS SZABÁLYOK:\n"
-                f"- Tónus: Végtelenül emberi, természetes, mintha egy barátodnak ajánlanád. Kerüld az AI-szagú szavakat és a gépies lelkesedést.\n"
-                f"- Emoji diéta: Csak 1-2 emojit használj, ott ahol tényleg fontos. Ne spammeld.\n"
+                f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS:\n"
+                f"- Tónus: Végtelenül emberi, kerüld a marketinges blablát és az AI sablonokat.\n"
+                f"- Emoji diéta: Csak 1-2 emojit használj ott, ahol tényleg fontos. Ne spammeld.\n"
                 f"- Első sor dőlt betűvel: *— ✨ Érzés: [Válassz egyet] —*\n"
-                f"- Kötelező: A 'link a kommentben' mondat legvégére tegyél egy lefelé mutató ujjat (👇)!\n\n"
+                f"- Kötelező: A 'link a kommentben' mondat legvégére tegyél egy 👇 emojit!\n\n"
                 f"Szerzők: {authors_text}\nKönyvek: {books_context}"
             )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert human bookstore curator. You despise AI clichés and formal corporate tone.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1500, system="You are an expert human bookstore curator. Despise AI clichés.", messages=[{"role": "user", "content": final_prompt}]).content[0].text
 
             raw_fingerprint = post_text[30:130] if len(post_text) > 130 else post_text[:100]
             memory_data = {
@@ -358,7 +367,6 @@ updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent =
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # SZIGORÚ SORREND: 3:00 Szinkronizáció, 8:00 Poszt generálás
     scheduler.add_job(updater.run_daily_update, CronTrigger(hour=3, minute=0, timezone=LOCAL_TZ))
     scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
     scheduler.start(); yield; scheduler.shutdown()
@@ -367,13 +375,12 @@ app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origi
 class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 @app.get("/")
-def home(): return {"status": "V200 Online", "project": "Booksy"}
+def home(): return {"status": "V202 Online", "project": "Booksy"}
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
 
-# --- TEST ENDPOINT ---
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     def full_workflow():
