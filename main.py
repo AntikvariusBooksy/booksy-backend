@@ -1,6 +1,5 @@
-# BOOKSY BRAIN - V204 (THE CINEMATIC TYPOGRAPHY EDITION)
-# VERZIÓ: V204 - GEMINI 1.5 FLASH FIX + CINEMATIC TEXT OVERLAY + INIT-CHAT FIX
-# MEGJEGYZÉS: ADATBÁZIS SZINKRON ÁTMENETILEG KIKAPCSOLVA A TESZTHEZ.
+# BOOKSY BRAIN - V205
+# VERZIÓ: V205 - GEMINI 2.5 FLASH API FIX + CINEMATIC TEXT OVERLAY
 
 __import__('pysqlite3')
 import sys
@@ -131,31 +130,27 @@ class BooksySocialAgent:
             img = PIL.Image.open(img_path).convert("RGBA")
             width, height = img.size
 
-            # Automatikus betűtípus letöltés (Montserrat Bold)
             font_path = "Montserrat-Bold.ttf"
             if not os.path.exists(font_path):
                 font_url = "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Bold.ttf"
                 r = requests.get(font_url)
                 with open(font_path, 'wb') as f: f.write(r.content)
 
-            # Sötét, félig átlátszó sáv alulra
             overlay = PIL.Image.new('RGBA', img.size, (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
-            bar_height = int(height * 0.15) # Alsó 15%
-            draw.rectangle([(0, height - bar_height), (width, height)], fill=(0, 0, 0, 180)) # 180 = ~70% opacity
+            bar_height = int(height * 0.15) 
+            draw.rectangle([(0, height - bar_height), (width, height)], fill=(0, 0, 0, 180)) 
             
             img = PIL.Image.alpha_composite(img, overlay)
             draw_text = ImageDraw.Draw(img)
 
-            # Betűméretek betöltése
             try:
-                font_title = ImageFont.truetype(font_path, int(width * 0.035)) # ~67px at 1920
-                font_author = ImageFont.truetype(font_path, int(width * 0.022)) # ~42px at 1920
+                font_title = ImageFont.truetype(font_path, int(width * 0.035)) 
+                font_author = ImageFont.truetype(font_path, int(width * 0.022)) 
             except:
                 font_title = ImageFont.load_default()
                 font_author = ImageFont.load_default()
 
-            # Szöveg formázása és pozicionálása
             title_text = title[:65] + "..." if len(title) > 65 else title
             author_text = f"Szerző: {author}" if author and author != "Ismeretlen" else ""
 
@@ -163,16 +158,14 @@ class BooksySocialAgent:
             y_title = height - bar_height + int(bar_height * 0.2)
             y_author = height - bar_height + int(bar_height * 0.6)
 
-            # Feliratok rárajzolása
             draw_text.text((x_margin, y_title), title_text, font=font_title, fill=(255, 255, 255, 255))
             if author_text:
                 draw_text.text((x_margin, y_author), author_text, font=font_author, fill=(200, 200, 200, 255))
 
-            # Mentés
             img.convert("RGB").save(img_path)
             log_event("Feliratozás sikeres.")
         except Exception as e:
-            log_event(f"Hiba a feliratozásnál (a kép felirat nélkül marad): {e}")
+            log_event(f"Hiba a feliratozásnál: {e}")
 
     def _create_video(self, img_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
@@ -199,14 +192,14 @@ class BooksySocialAgent:
             main_book = sample[0]
             log_event(f"Fő könyv kiválasztva: {main_book['title']}")
 
-            # STEP 1: Gemini elemzés (Text - 1.5-flash STABIL VERZIÓ)
-            log_event("Step 1: Gemini (1.5-flash) könyv-elemzés indítása...")
+            # STEP 1: Gemini elemzés (2.5-flash MODERN VERZIÓ)
+            log_event("Step 1: Gemini (2.5-flash) könyv-elemzés indítása...")
             analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. 
             Leírás: {main_book.get('text_preview','')}.
             Határozd meg a műfaját, a vizuális motívumait, a korabeli környezetet és az alapvető hangulatát. 
             Adj egy tömör vizuális összefoglalót angolul!"""
             
-            gem_res = gemini_client.models.generate_content(model="gemini-1.5-flash", contents=[analysis_prompt])
+            gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
             visual_context = gem_res.text
             log_event("Gemini elemzés kész.")
 
@@ -225,17 +218,17 @@ class BooksySocialAgent:
             final_img_prompt = c_res.content[0].text
             log_event(f"Claude prompt kész: {final_img_prompt[:50]}...")
 
-            # STEP 3: Gemini Imagen 3 Generation
-            log_event("Step 3: Google Imagen 3 képgenerálás (1920x1920)...")
+            # STEP 3: Gemini 2.5 Flash Image Generation
+            log_event("Step 3: Google Gemini 2.5 Flash Image képgenerálás (1920x1920)...")
             img_path = "social_img.jpg"
             img_response = gemini_client.models.generate_images(
-                model='imagen-3.0-generate-001',
+                model='gemini-2.5-flash-image',
                 prompt=final_img_prompt,
                 config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio='1:1')
             )
             img_response.generated_images[0].image.save(img_path)
             
-            # Szoftveres kényszerítés pontosan 1920x1920-ra
+            # Szoftveres kényszerítés 1920x1920-ra
             img_obj = PIL.Image.open(img_path)
             img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
             img_resized.save(img_path)
@@ -243,7 +236,7 @@ class BooksySocialAgent:
             # --- ÚJ FUNKCIÓ: Szoftveres Cinematic Felirat ---
             self._add_cinematic_text(img_path, main_book['title'], main_book.get('author', ''))
 
-            # Videó és FB poszt folyamat
+            # Videó és FB poszt
             vid_path = "social_video.mp4"
             has_video = self._create_video(img_path, vid_path)
 
@@ -282,7 +275,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V204 Online", "project": "Booksy"}
+def home(): return {"status": "V205 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -293,7 +286,7 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V204 Agentic Test & Overlay Started"}
+    return {"status": "V205 Agentic Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
