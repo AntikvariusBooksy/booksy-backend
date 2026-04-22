@@ -1,11 +1,12 @@
-# BOOKSY BRAIN - V212 (THE INDUSTRIAL STUDIO EDITION)
-# VERZIÓ: V212 - FIXED CANVAS COMPOSITING + SEPARATE TRANSPARENT TEXT OVERLAY LAYER
+# BOOKSY BRAIN - V213 (THE CASCADE & STAMPING EDITION)
+# VERZIÓ: V213 - EVENT-DRIVEN SYNC -> POST CASCADE + FRAME-BY-FRAME TEXT STAMPING
 
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 import os, time, requests, hashlib, re, json, random, unicodedata, html, urllib.parse, gc, chromadb, pytz, smtplib
+import numpy as np  # KÖTELEZŐ a frame-by-frame videó módosításhoz
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, Request
@@ -107,9 +108,11 @@ db_handler = DBHandler()
 # --- SERVICES ---
 class AutoUpdater:
     def __init__(self, db: DBHandler): self.db = db
+    
     def download_feed(self):
         try:
             r = requests.get(XML_FEED_URL, stream=True, timeout=300)
+            if r.status_code != 200: return False
             with open(TEMP_FILE, 'wb') as f:
                 for chunk in r.iter_content(8192): f.write(chunk)
             return True
@@ -117,7 +120,10 @@ class AutoUpdater:
 
     def run_daily_update(self):
         log_event("🚀 [SYNC] Indítás (XML -> DB)...")
-        if not self.download_feed(): return
+        if not self.download_feed(): 
+            log_event("❌ SZINKRON HIBA: Nem sikerült letölteni az XML Feed-et.")
+            return False
+            
         unique_books = {}
         try:
             for _, elem in ET.iterparse(TEMP_FILE, events=("end",)):
@@ -159,7 +165,10 @@ class AutoUpdater:
                 res = gemini_client.models.embed_content(model="gemini-embedding-001", contents=texts, config=types.EmbedContentConfig(output_dimensionality=768))
                 self.db.collection.upsert(ids=ids, embeddings=[e.values for e in res.embeddings], metadatas=metas)
             log_event("✅ [SYNC] Kész.")
-        except Exception as e: log_event(f"❌ SZINKRON HIBA: {e}")
+            return True
+        except Exception as e: 
+            log_event(f"❌ SZINKRON HIBA (Feldolgozás): {e}")
+            return False
 
 class BooksyBrain:
     def __init__(self, db: DBHandler):
@@ -174,7 +183,7 @@ class BooksyBrain:
                 force_id = parts[2] if len(parts) >= 3 else None
                 return self._trigger_fb_comment(force_id)
             else: return {"reply": "🤖 Téves parancs vagy hibás jelszó.", "products": []}
-        return {"reply": "Chat funkció aktív. Jelenleg a Social Agent tesztüzeme fut.", "products": []}
+        return {"reply": "Chat funkció aktív. Jelenleg a Social Agent fut.", "products": []}
 
     def _trigger_fb_comment(self, force_post_id=None):
         try:
@@ -260,7 +269,6 @@ class BooksySocialAgent:
                 r = requests.get(font_url)
                 with open(font_path, 'wb') as f: f.write(r.content)
 
-            # Teljesen átlátszó réteg a feliratnak
             overlay = PIL.Image.new('RGBA', (width, height), (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
             bar_height = int(height * 0.15) 
@@ -280,14 +288,12 @@ class BooksySocialAgent:
             y_title = height - bar_height + int(bar_height * 0.2)
             y_author = height - bar_height + int(bar_height * 0.6)
 
-            # Felirat felrajzolása az átlátszó fóliára
             draw.text((x_margin, y_title), title_text, font=font_title, fill=(255, 255, 255, 255))
             if author_text:
                 draw.text((x_margin, y_author), author_text, font=font_author, fill=(200, 200, 200, 255))
 
             overlay.save(overlay_path, "PNG")
             
-            # FB képgaléria Fallback réteg (kép + felirat összelapítva)
             combined = PIL.Image.alpha_composite(img, overlay)
             combined.convert("RGB").save(fallback_path, "JPEG")
             
@@ -300,25 +306,26 @@ class BooksySocialAgent:
     def _create_video(self, raw_img_path, overlay_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            log_event("Videó renderelés indítása (Kőbe vésett ablak + Statikus Felirat)...")
-            # Háttér: Tiszta kép, felirat nélkül
+            log_event("Videó renderelés indítása (Frame-by-Frame Stamping)...")
+            
             clip = ImageClip(raw_img_path).set_duration(5)
-            
-            # Háttér zoomolása
             zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center')
-            
-            # Kőbe vésett ablak (1920x1920) - Garantálja a stabil bitrátát!
             fixed_bg = CompositeVideoClip([zoomed], size=(1920, 1920)).set_duration(5)
             bg_loop = concatenate_videoclips([fixed_bg, fixed_bg.fx(vfx.time_mirror)])
             
-            # Mozdulatlan felirat fólia ráhelyezése
             if os.path.exists(overlay_path):
-                overlay_clip = ImageClip(overlay_path).set_duration(bg_loop.duration).set_position('center')
-                final_video = CompositeVideoClip([bg_loop, overlay_clip], size=(1920, 1920))
+                overlay_img = PIL.Image.open(overlay_path).convert("RGBA")
+                
+                # IPARI VÍZJELEZÉS: Fizikai rábélyegzés minden egyes képkockára
+                def stamp_overlay(frame_array):
+                    pil_frame = PIL.Image.fromarray(frame_array).convert("RGBA")
+                    pil_frame.alpha_composite(overlay_img)
+                    return np.array(pil_frame.convert("RGB"))
+                
+                final_video = bg_loop.fl_image(stamp_overlay)
             else:
                 final_video = bg_loop
 
-            # Standard H264 YUV420P - Nincs több csíkos zűrzavar
             final_video.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
             return True
         except Exception as e:
@@ -326,14 +333,13 @@ class BooksySocialAgent:
             return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (Tesztüzem)...")
+        log_event("Agentic Generálás indítása...")
         raw_img_path = "social_raw.jpg"
         overlay_path = "social_overlay.png"
         fallback_img_path = "social_fallback.jpg"
         vid_path = "social_video.mp4"
         
         try:
-            # --- WIKIPEDIA LOGIKA ---
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
             r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
             writers = []
@@ -354,7 +360,6 @@ class BooksySocialAgent:
                         if p_target['id'] not in seen_ids:
                             selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
-            # --- FALLBACK LOGIKA ---
             if len(selected_books) < 4:
                 vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
@@ -367,20 +372,17 @@ class BooksySocialAgent:
             main_book = selected_books[0]
             log_event(f"Fő könyv kiválasztva: {main_book['title']}")
 
-            # STEP 1: Gemini elemzés
             log_event("Step 1: Gemini (2.5-flash) könyv-elemzés indítása...")
             analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Leírás: {main_book.get('text_preview','')}. Határozd meg a műfaját, a vizuális motívumait, a korabeli környezetet és az alapvető hangulatát. Adj egy tömör vizuális összefoglalót angolul!"""
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
             log_event("Gemini elemzés kész.")
 
-            # STEP 2: Claude Cinematic Prompt
             log_event("Step 2: Claude vizuális rendezői prompt generálás...")
             claude_prompt = f"""Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj egy képgenerálási promptot: KONTEXTUS: {gem_res.text} SZABÁLYOK: Ne mutass könyveket. Stílus: Hyper-realistic, cinematic. Arány: 1:1 Square. Nincs szöveg. Csak a promptot küldd!"""
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
             log_event(f"Claude prompt kész.")
 
-            # STEP 3: Flux API képgenerálás
             log_event("Step 3: Flux API képgenerálás (1920x1920)...")
             flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_img_prompt)}?width=1920&height=1920&nologo=true&model=flux"
             r_img = requests.get(flux_url, timeout=90)
@@ -389,12 +391,10 @@ class BooksySocialAgent:
             else:
                 raise Exception(f"Flux generálási hiba HTTP {r_img.status_code}")
             
-            # Szoftveres méretgarancia
             img_obj = PIL.Image.open(raw_img_path)
             img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
             img_resized.save(raw_img_path)
             
-            # --- RÉTEGEK LÉTREHOZÁSA ÉS RENDERELÉS ---
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
@@ -421,7 +421,6 @@ class BooksySocialAgent:
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
             
-            # FB FELTÖLTÉS (Atombiztos fallback logikával)
             if has_video:
                 v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
                 requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
@@ -438,20 +437,34 @@ class BooksySocialAgent:
             self.send_morning_email(post_text, memory_data['links'])
             log_event("Folyamat sikeresen lezárult.")
             
-            # Szerver takarítás
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
 
         except Exception as e:
             log_event(f"KRITIKUS HIBA: {e}")
 
-# --- FASTAPI ---
+
+# --- MASTER CASCADE ROUTINE ---
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
+def master_morning_routine():
+    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
+    try:
+        sync_success = updater.run_daily_update()
+        if not sync_success:
+            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Posztolás indítása a korábbi adatokkal.")
+    except Exception as e:
+        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    
+    # A posztgenerálás KÖTELEZŐEN elindul, hogy a marketing sose álljon le
+    social_agent.run_night_generation()
+
+
+# --- FASTAPI LIFESPAN ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # SZINKRON KIKAPCSOLVA A TESZTHEZ
-    scheduler.add_job(social_agent.run_night_generation, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
+    # ESEMÉNYVEZÉRELT LÁNCREAKCIÓ MINDEN REGGEL 7:00-KOR
+    scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
     scheduler.start(); yield; scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan); app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
@@ -459,7 +472,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V212 Online", "project": "Booksy"}
+def home(): return {"status": "V213 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -467,10 +480,17 @@ def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req
 @app.post("/init-chat")
 def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
 
+# Manuális teszteléshez megmaradt a gomb, ami CSAK a posztolást indítja (szinkron nélkül) a gyors teszteléshez
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V212 Agentic Final Test Started"}
+    return {"status": "V213 Agentic Video Test Started"}
+
+# ÚJ: Tesztgomb a teljes láncreakcióra (Sync + Poszt)
+@app.post("/test-cascade")
+def test_cascade(bt: BackgroundTasks):
+    bt.add_task(master_morning_routine)
+    return {"status": "V213 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
