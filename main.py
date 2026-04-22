@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V211 (THE CRISP VIDEO EDITION)
-# VERZIÓ: V211 - MOVIEPY PIXEL FORMAT FIX (yuv420p) + SUBTITLE VISIBILITY FIX
+# BOOKSY BRAIN - V212 (THE INDUSTRIAL STUDIO EDITION)
+# VERZIÓ: V212 - FIXED CANVAS COMPOSITING + SEPARATE TRANSPARENT TEXT OVERLAY LAYER
 
 __import__('pysqlite3')
 import sys
@@ -40,7 +40,7 @@ try:
         PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
     import PIL.ImageOps
     from PIL import ImageDraw, ImageFont
-    from moviepy.editor import ImageClip, concatenate_videoclips
+    from moviepy.editor import ImageClip, concatenate_videoclips, CompositeVideoClip
     import moviepy.video.fx.all as vfx
     MOVIEPY_AVAILABLE = True
 except Exception as e:
@@ -248,10 +248,10 @@ class BooksySocialAgent:
             log_event("Értesítő e-mail sikeresen elküldve.")
         except Exception as e: log_event(f"📧 Email hiba: {e}")
 
-    def _add_cinematic_text(self, img_path, title, author):
+    def _prepare_visual_layers(self, raw_img_path, overlay_path, fallback_path, title, author):
         try:
-            log_event("Filmes felirat ráégetése a képre...")
-            img = PIL.Image.open(img_path).convert("RGBA")
+            log_event("Vizuális rétegek (Overlay és Fallback) generálása...")
+            img = PIL.Image.open(raw_img_path).convert("RGBA")
             width, height = img.size
 
             font_path = "Montserrat-Bold.ttf"
@@ -260,14 +260,12 @@ class BooksySocialAgent:
                 r = requests.get(font_url)
                 with open(font_path, 'wb') as f: f.write(r.content)
 
-            overlay = PIL.Image.new('RGBA', img.size, (0,0,0,0))
+            # Teljesen átlátszó réteg a feliratnak
+            overlay = PIL.Image.new('RGBA', (width, height), (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
             bar_height = int(height * 0.15) 
             draw.rectangle([(0, height - bar_height), (width, height)], fill=(0, 0, 0, 180)) 
             
-            img = PIL.Image.alpha_composite(img, overlay)
-            draw_text = ImageDraw.Draw(img)
-
             try:
                 font_title = ImageFont.truetype(font_path, int(width * 0.035)) 
                 font_author = ImageFont.truetype(font_path, int(width * 0.022)) 
@@ -282,32 +280,58 @@ class BooksySocialAgent:
             y_title = height - bar_height + int(bar_height * 0.2)
             y_author = height - bar_height + int(bar_height * 0.6)
 
-            draw_text.text((x_margin, y_title), title_text, font=font_title, fill=(255, 255, 255, 255))
+            # Felirat felrajzolása az átlátszó fóliára
+            draw.text((x_margin, y_title), title_text, font=font_title, fill=(255, 255, 255, 255))
             if author_text:
-                draw_text.text((x_margin, y_author), author_text, font=font_author, fill=(200, 200, 200, 255))
+                draw.text((x_margin, y_author), author_text, font=font_author, fill=(200, 200, 200, 255))
 
-            img.convert("RGB").save(img_path)
-            log_event("Feliratozás sikeres.")
+            overlay.save(overlay_path, "PNG")
+            
+            # FB képgaléria Fallback réteg (kép + felirat összelapítva)
+            combined = PIL.Image.alpha_composite(img, overlay)
+            combined.convert("RGB").save(fallback_path, "JPEG")
+            
+            log_event("Rétegek sikeresen mentve.")
+            return True
         except Exception as e:
-            log_event(f"Hiba a feliratozásnál: {e}")
+            log_event(f"Hiba a vizuális rétegek készítésénél: {e}")
+            return False
 
-    def _create_video(self, img_path, out_path):
+    def _create_video(self, raw_img_path, overlay_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            log_event("Videó renderelés indítása (1920x1920 square, zajmentesítéssel)...")
-            clip = ImageClip(img_path).set_duration(5)
-            zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center').set_duration(5)
-            final = concatenate_videoclips([zoomed, zoomed.fx(vfx.time_mirror)])
+            log_event("Videó renderelés indítása (Kőbe vésett ablak + Statikus Felirat)...")
+            # Háttér: Tiszta kép, felirat nélkül
+            clip = ImageClip(raw_img_path).set_duration(5)
             
-            # --- ÚJ: -pix_fmt yuv420p HOZZÁADVA A ZAJMENTES VIDEÓÉRT ---
-            final.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
+            # Háttér zoomolása
+            zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center')
+            
+            # Kőbe vésett ablak (1920x1920) - Garantálja a stabil bitrátát!
+            fixed_bg = CompositeVideoClip([zoomed], size=(1920, 1920)).set_duration(5)
+            bg_loop = concatenate_videoclips([fixed_bg, fixed_bg.fx(vfx.time_mirror)])
+            
+            # Mozdulatlan felirat fólia ráhelyezése
+            if os.path.exists(overlay_path):
+                overlay_clip = ImageClip(overlay_path).set_duration(bg_loop.duration).set_position('center')
+                final_video = CompositeVideoClip([bg_loop, overlay_clip], size=(1920, 1920))
+            else:
+                final_video = bg_loop
+
+            # Standard H264 YUV420P - Nincs több csíkos zűrzavar
+            final_video.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
             return True
         except Exception as e:
             log_event(f"Videó hiba: {e}")
             return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (Tesztüzem - Wiki integrációval)...")
+        log_event("Agentic Generálás indítása (Tesztüzem)...")
+        raw_img_path = "social_raw.jpg"
+        overlay_path = "social_overlay.png"
+        fallback_img_path = "social_fallback.jpg"
+        vid_path = "social_video.mp4"
+        
         try:
             # --- WIKIPEDIA LOGIKA ---
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
@@ -332,7 +356,6 @@ class BooksySocialAgent:
 
             # --- FALLBACK LOGIKA ---
             if len(selected_books) < 4:
-                log_event("Nincs elég születésnapos találat, népszerű könyvek betöltése...")
                 vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 if res_fb['ids'] and res_fb['ids'][0]:
@@ -346,50 +369,34 @@ class BooksySocialAgent:
 
             # STEP 1: Gemini elemzés
             log_event("Step 1: Gemini (2.5-flash) könyv-elemzés indítása...")
-            analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. 
-            Leírás: {main_book.get('text_preview','')}.
-            Határozd meg a műfaját, a vizuális motívumait, a korabeli környezetet és az alapvető hangulatát. 
-            Adj egy tömör vizuális összefoglalót angolul!"""
-            
+            analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Leírás: {main_book.get('text_preview','')}. Határozd meg a műfaját, a vizuális motívumait, a korabeli környezetet és az alapvető hangulatát. Adj egy tömör vizuális összefoglalót angolul!"""
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
-            visual_context = gem_res.text
             log_event("Gemini elemzés kész.")
 
             # STEP 2: Claude Cinematic Prompt
             log_event("Step 2: Claude vizuális rendezői prompt generálás...")
-            claude_prompt = f"""Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj egy képgenerálási promptot:
-            KONTEXTUS: {visual_context}
-            SZABÁLYOK:
-            - Ne mutass könyveket vagy könyvtárat, hanem a történet VILÁGÁT.
-            - Stílus: Hyper-realistic, cinematic, atmospheric lighting.
-            - Arány: 1:1 Square.
-            - Nincs szöveg vagy betű a képen.
-            - Csak a promptot küldd vissza angolul!"""
-            
+            claude_prompt = f"""Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj egy képgenerálási promptot: KONTEXTUS: {gem_res.text} SZABÁLYOK: Ne mutass könyveket. Stílus: Hyper-realistic, cinematic. Arány: 1:1 Square. Nincs szöveg. Csak a promptot küldd!"""
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
-            log_event(f"Claude prompt kész: {final_img_prompt[:50]}...")
+            log_event(f"Claude prompt kész.")
 
             # STEP 3: Flux API képgenerálás
             log_event("Step 3: Flux API képgenerálás (1920x1920)...")
-            img_path = "social_img.jpg"
             flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_img_prompt)}?width=1920&height=1920&nologo=true&model=flux"
             r_img = requests.get(flux_url, timeout=90)
             if r_img.status_code == 200:
-                with open(img_path, 'wb') as f: f.write(r_img.content)
+                with open(raw_img_path, 'wb') as f: f.write(r_img.content)
             else:
                 raise Exception(f"Flux generálási hiba HTTP {r_img.status_code}")
             
-            img_obj = PIL.Image.open(img_path)
+            # Szoftveres méretgarancia
+            img_obj = PIL.Image.open(raw_img_path)
             img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
-            img_resized.save(img_path)
+            img_resized.save(raw_img_path)
             
-            # --- Szoftveres Cinematic Felirat ráégetése a letöltött képre ---
-            self._add_cinematic_text(img_path, main_book['title'], main_book.get('author', ''))
-
-            # --- Videó renderelés a MÁR FELIRATOZOTT KÉPBŐL ---
-            vid_path = "social_video.mp4"
-            has_video = self._create_video(img_path, vid_path)
+            # --- RÉTEGEK LÉTREHOZÁSA ÉS RENDERELÉS ---
+            self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
+            has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
             log_event("Poszt szöveg generálása (Anti-AI Slop)...")
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
@@ -414,21 +421,27 @@ class BooksySocialAgent:
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
             
-            # FB FELTÖLTÉS
+            # FB FELTÖLTÉS (Atombiztos fallback logikával)
             if has_video:
                 v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
                 requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
                 log_event("Videó vázlat feltöltve a Facebookra.")
             else:
-                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
+                upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
+                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(upload_img, 'rb')})
                 mid = r_p.json().get('id')
                 if mid: 
                     api_data['attached_media'] = json.dumps([{'media_fbid': mid}])
                     requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=api_data)
-                log_event("Kép vázlat feltöltve a Facebookra (Videó hiba miatti fallback).")
+                log_event("Képes vázlat feltöltve a Facebookra.")
             
             self.send_morning_email(post_text, memory_data['links'])
             log_event("Folyamat sikeresen lezárult.")
+            
+            # Szerver takarítás
+            for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
+                if os.path.exists(p): os.remove(p)
+
         except Exception as e:
             log_event(f"KRITIKUS HIBA: {e}")
 
@@ -446,7 +459,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V211 Online", "project": "Booksy"}
+def home(): return {"status": "V212 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -457,7 +470,7 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V211 Agentic Test Started"}
+    return {"status": "V212 Agentic Final Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
