@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V209 (THE UNBLOCKED AGENTIC EDITION)
-# VERZIÓ: V209 - GOOGLE IMAGEN REPLACED WITH FLUX API (BYPASSING PRIVATE PREVIEW LOCK)
+# BOOKSY BRAIN - V210 (THE FULL INTEGRITY EDITION)
+# VERZIÓ: V210 - MOVIEPY ANTIALIAS PATCH RESTORED + FB IMAGE FALLBACK RESTORED
 
 __import__('pysqlite3')
 import sys
@@ -36,6 +36,9 @@ SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
 
 try:
     import PIL.Image
+    # KÖTELEZŐ MOVIEPY JAVÍTÁS (VISSZAÁLLÍTVA)
+    if not hasattr(PIL.Image, 'ANTIALIAS'): 
+        PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
     import PIL.ImageOps
     from PIL import ImageDraw, ImageFont
     from moviepy.editor import ImageClip, concatenate_videoclips
@@ -196,7 +199,6 @@ class BooksyBrain:
             
             if not target_post_id: return {"reply": "❌ Poszt nem található.", "products": []}
 
-            # LIVE CHECK & SINGLE COMMENT
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
             for book in memory.get("links", []):
                 res = self.db.collection.get(ids=[book.get('id', 'None')])
@@ -367,7 +369,7 @@ class BooksySocialAgent:
             final_img_prompt = c_res.content[0].text
             log_event(f"Claude prompt kész: {final_img_prompt[:50]}...")
 
-            # STEP 3: Flux Image Generation (Bypassing Google Private Preview Lock)
+            # STEP 3: Flux Image Generation
             log_event("Step 3: Flux API képgenerálás (1920x1920)...")
             img_path = "social_img.jpg"
             flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_img_prompt)}?width=1920&height=1920&nologo=true&model=flux"
@@ -377,7 +379,6 @@ class BooksySocialAgent:
             else:
                 raise Exception(f"Flux generálási hiba HTTP {r_img.status_code}")
             
-            # Szoftveres kényszerítés 1920x1920-ra (ha az API mégis kisebbet küldene)
             img_obj = PIL.Image.open(img_path)
             img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
             img_resized.save(img_path)
@@ -411,14 +412,21 @@ class BooksySocialAgent:
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
+            
+            # FB FELTÖLTÉS (VISSZAÁLLÍTOTT FALLBACK ÁGGAL)
             if has_video:
                 v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
                 requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
                 log_event("Videó vázlat feltöltve a Facebookra.")
+            else:
+                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(img_path, 'rb')})
+                mid = r_p.json().get('id')
+                if mid: 
+                    api_data['attached_media'] = json.dumps([{'media_fbid': mid}])
+                    requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=api_data)
+                log_event("Kép vázlat feltöltve a Facebookra (Videó hiba miatti fallback).")
             
-            # --- EMAIL KÜLDÉS ---
             self.send_morning_email(post_text, memory_data['links'])
-            
             log_event("Folyamat sikeresen lezárult.")
         except Exception as e:
             log_event(f"KRITIKUS HIBA: {e}")
@@ -437,7 +445,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V209 Online", "project": "Booksy"}
+def home(): return {"status": "V210 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -448,7 +456,7 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V209 Agentic Test & Overlay Started"}
+    return {"status": "V210 Agentic Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
