@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V208 (THE FINAL API SYNC EDITION)
-# VERZIÓ: V208 - GOOGLE IMAGEN 3 API ENDPOINT FIXED
+# BOOKSY BRAIN - V209 (THE UNBLOCKED AGENTIC EDITION)
+# VERZIÓ: V209 - GOOGLE IMAGEN REPLACED WITH FLUX API (BYPASSING PRIVATE PREVIEW LOCK)
 
 __import__('pysqlite3')
 import sys
@@ -29,9 +29,7 @@ load_dotenv()
 LOCAL_TZ = pytz.timezone('Europe/Bucharest')
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# BIZONYÍTOTTAN MŰKÖDŐ CLAUDE MODELL
 CLAUDE_MODEL = "claude-sonnet-4-6"
-
 XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml"
 TEMP_FILE = "temp_feed.xml"
 SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
@@ -343,7 +341,7 @@ class BooksySocialAgent:
             main_book = selected_books[0]
             log_event(f"Fő könyv kiválasztva: {main_book['title']}")
 
-            # STEP 1: Gemini elemzés (A sikeresen lefutott 2.5 flash API)
+            # STEP 1: Gemini elemzés
             log_event("Step 1: Gemini (2.5-flash) könyv-elemzés indítása...")
             analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. 
             Leírás: {main_book.get('text_preview','')}.
@@ -369,17 +367,17 @@ class BooksySocialAgent:
             final_img_prompt = c_res.content[0].text
             log_event(f"Claude prompt kész: {final_img_prompt[:50]}...")
 
-            # STEP 3: Gemini Image Generation (VÉGRE A JÓ MODELL NÉVVEL!)
-            log_event("Step 3: Google Imagen 3 képgenerálás (1920x1920)...")
+            # STEP 3: Flux Image Generation (Bypassing Google Private Preview Lock)
+            log_event("Step 3: Flux API képgenerálás (1920x1920)...")
             img_path = "social_img.jpg"
-            img_response = gemini_client.models.generate_images(
-                model='imagen-3.0-generate-001',
-                prompt=final_img_prompt,
-                config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio='1:1')
-            )
-            img_response.generated_images[0].image.save(img_path)
+            flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_img_prompt)}?width=1920&height=1920&nologo=true&model=flux"
+            r_img = requests.get(flux_url, timeout=90)
+            if r_img.status_code == 200:
+                with open(img_path, 'wb') as f: f.write(r_img.content)
+            else:
+                raise Exception(f"Flux generálási hiba HTTP {r_img.status_code}")
             
-            # Szoftveres kényszerítés 1920x1920-ra
+            # Szoftveres kényszerítés 1920x1920-ra (ha az API mégis kisebbet küldene)
             img_obj = PIL.Image.open(img_path)
             img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
             img_resized.save(img_path)
@@ -439,7 +437,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V208 Online", "project": "Booksy"}
+def home(): return {"status": "V209 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -450,7 +448,7 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V208 Agentic Test Started"}
+    return {"status": "V209 Agentic Test & Overlay Started"}
 
 if __name__ == "__main__":
     import uvicorn
