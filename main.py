@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V210 (THE FULL INTEGRITY EDITION)
-# VERZIÓ: V210 - MOVIEPY ANTIALIAS PATCH RESTORED + FB IMAGE FALLBACK RESTORED
+# BOOKSY BRAIN - V211 (THE CRISP VIDEO EDITION)
+# VERZIÓ: V211 - MOVIEPY PIXEL FORMAT FIX (yuv420p) + SUBTITLE VISIBILITY FIX
 
 __import__('pysqlite3')
 import sys
@@ -36,7 +36,6 @@ SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
 
 try:
     import PIL.Image
-    # KÖTELEZŐ MOVIEPY JAVÍTÁS (VISSZAÁLLÍTVA)
     if not hasattr(PIL.Image, 'ANTIALIAS'): 
         PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
     import PIL.ImageOps
@@ -295,11 +294,13 @@ class BooksySocialAgent:
     def _create_video(self, img_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            log_event("Videó renderelés indítása (1920x1920 square)...")
+            log_event("Videó renderelés indítása (1920x1920 square, zajmentesítéssel)...")
             clip = ImageClip(img_path).set_duration(5)
             zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center').set_duration(5)
             final = concatenate_videoclips([zoomed, zoomed.fx(vfx.time_mirror)])
-            final.write_videofile(out_path, fps=24, codec="libx264", audio=False, logger=None)
+            
+            # --- ÚJ: -pix_fmt yuv420p HOZZÁADVA A ZAJMENTES VIDEÓÉRT ---
+            final.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
             return True
         except Exception as e:
             log_event(f"Videó hiba: {e}")
@@ -369,7 +370,7 @@ class BooksySocialAgent:
             final_img_prompt = c_res.content[0].text
             log_event(f"Claude prompt kész: {final_img_prompt[:50]}...")
 
-            # STEP 3: Flux Image Generation
+            # STEP 3: Flux API képgenerálás
             log_event("Step 3: Flux API képgenerálás (1920x1920)...")
             img_path = "social_img.jpg"
             flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_img_prompt)}?width=1920&height=1920&nologo=true&model=flux"
@@ -383,10 +384,10 @@ class BooksySocialAgent:
             img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
             img_resized.save(img_path)
             
-            # --- Szoftveres Cinematic Felirat ---
+            # --- Szoftveres Cinematic Felirat ráégetése a letöltött képre ---
             self._add_cinematic_text(img_path, main_book['title'], main_book.get('author', ''))
 
-            # Videó és FB poszt
+            # --- Videó renderelés a MÁR FELIRATOZOTT KÉPBŐL ---
             vid_path = "social_video.mp4"
             has_video = self._create_video(img_path, vid_path)
 
@@ -413,7 +414,7 @@ class BooksySocialAgent:
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
             
-            # FB FELTÖLTÉS (VISSZAÁLLÍTOTT FALLBACK ÁGGAL)
+            # FB FELTÖLTÉS
             if has_video:
                 v_data = api_data.copy(); v_data['description'] = v_data.pop('message')
                 requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
@@ -445,7 +446,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V210 Online", "project": "Booksy"}
+def home(): return {"status": "V211 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -456,7 +457,7 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V210 Agentic Test Started"}
+    return {"status": "V211 Agentic Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
