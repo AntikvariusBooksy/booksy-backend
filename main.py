@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V222 (THE SNIPER LOGIC EDITION)
-# VERZIÓ: V222 - MEDIA ID ATTACHMENT LOOKUP FOR COMMENTS + /FEED ENDPOINT
+# BOOKSY BRAIN - V223 (THE DIRECT MEDIA TARGETING EDITION)
+# VERZIÓ: V223 - DIRECT MEDIA ID COMMENTING, 100% INTEGRITY PRESERVED
 
 __import__('pysqlite3')
 import sys
@@ -195,45 +195,29 @@ class BooksyBrain:
             
             if not memory.get("links") or len(memory["links"]) == 0:
                 return {"reply": "❌ Memória fájl hibás, nincs könyv.", "products": []}
-            
+
+            # 1. KÖZVETLEN SZÍVENSZÚRÁS PROTOKOLL: Elsődlegesen a mentett Media ID-t használjuk
             target_post_id = force_post_id
-            if not target_post_id:
-                # 1. Lekérjük a teljes publikus hírfolyamot csatolmányokkal együtt
-                log_event("Poszt keresése Media ID és Cím alapján a hírfolyamban (/feed)...")
-                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/feed?access_token={fb_token}&limit=15&fields=id,message,attachments")
+            media_id = memory.get("media_id")
+            
+            if not target_post_id and media_id:
+                log_event(f"Közvetlen Media ID célzás a memóriából ({media_id})...")
+                target_post_id = media_id
+            
+            # 2. BIZTONSÁGI FALLBACK: Ha valamiért nincs Media ID, cím alapján keressük a hírfolyamban
+            if not target_post_id: 
+                search_title = normalize_fingerprint(memory["links"][0].get("title", ""))
+                log_event(f"Nincs Media ID, poszt keresése cím alapján ({search_title})...")
+                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/feed?access_token={fb_token}&limit=10&fields=id,message")
                 posts = r.json().get('data', [])
                 
-                media_id = memory.get("media_id")
-                search_title = normalize_fingerprint(memory["links"][0].get("title", "")) if memory.get("links") else ""
-                
                 for p in posts:
-                    found = False
-                    
-                    # 2. Elsődleges keresés: Megváltoztathatatlan Media ID (ha létezik a memóriában)
-                    if media_id:
-                        atts = p.get('attachments', {}).get('data', [])
-                        for att in atts:
-                            if str(att.get('target', {}).get('id')) == str(media_id):
-                                found = True
-                                break
-                            # Videók gyakran subattachmentként jelennek meg
-                            for sub in att.get('subattachments', {}).get('data', []):
-                                if str(sub.get('target', {}).get('id')) == str(media_id):
-                                    found = True
-                                    break
-                    
-                    # 3. Biztonsági másodlagos keresés: Ha a Media API nem adta vissza a csatolmányt, cím alapján (message is safe here)
-                    if not found and search_title:
-                        msg = normalize_fingerprint(p.get("message", ""))
-                        if search_title in msg:
-                            found = True
-                    
-                    if found:
-                        target_post_id = p["id"]
-                        break
+                    msg = normalize_fingerprint(p.get("message", ""))
+                    if search_title and search_title in msg:
+                        target_post_id = p["id"]; break
             
             if not target_post_id: 
-                err_msg = "❌ Poszt nem található a nyilvános hírfolyamban. Biztosan publikáltad már Business Suite-ból?"
+                err_msg = "❌ Célpont (Media/Poszt ID) nem található a kommenteléshez."
                 log_event(err_msg)
                 return {"reply": err_msg, "products": []}
 
@@ -245,11 +229,11 @@ class BooksyBrain:
                 comment_text += f"📖 {author}{book['title']}{status}\n🔗 {book['url']}\n\n"
             
             comment_text += "Aki kapja, marja! 😉"
-            log_event(f"Komment küldése a publikus {target_post_id} ID-ra...")
+            log_event(f"Komment küldése a(z) {target_post_id} azonosítóra...")
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
             
             if "id" in c_res.text:
-                log_event("✅ Komment sikeresen elküldve a nyilvános poszt alá.")
+                log_event("✅ Komment sikeresen elküldve közvetlenül a Media/Poszt alá.")
                 return {"reply": "✅ Komment sikeresen kiment!", "products": []}
             else:
                 log_event(f"FB Hiba: {c_res.text}")
@@ -526,7 +510,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V222 Online", "project": "Booksy"}
+def home(): return {"status": "V223 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -537,12 +521,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V222 Agentic Video Test Started"}
+    return {"status": "V223 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V222 Full Cascade Test Started"}
+    return {"status": "V223 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
