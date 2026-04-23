@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V218 (THE MASTER DRAFT EDITION)
-# VERZIÓ: V218 - TWO-STEP META DRAFT PUBLISHING + DIRECT GSTATIC FONT CDN
+# BOOKSY BRAIN - V219 (THE BULLETPROOF TYPOGRAPHY EDITION)
+# VERZIÓ: V219 - FIXED FONT URL TO RAW GITHUB BINARY TO PREVENT 404 & ENSURE BIG TEXT
 
 __import__('pysqlite3')
 import sys
@@ -273,12 +273,12 @@ class BooksySocialAgent:
             font_path = "Montserrat-Bold.ttf"
             if not os.path.exists(font_path):
                 try:
-                    # KÖZVETLEN GSTATIC CDN LINK (Atombiztos TTF forrás, nincs HTML maszkolás)
-                    font_url = "https://fonts.gstatic.com/s/montserrat/v25/JTUSjIg1_i6t8kCHKm459Wlhyw.ttf"
+                    # KÖZVETLEN NYERS GITHUB BINÁRIS LINK (ATOMBBIZTOS, NINCS HTML, NINCS 404)
+                    font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat-Bold.ttf"
                     r = requests.get(font_url, timeout=15)
                     r.raise_for_status()
                     with open(font_path, 'wb') as f: f.write(r.content)
-                    log_event("✅ Montserrat TTF sikeresen letöltve a Google CDN-ről.")
+                    log_event("✅ Montserrat TTF sikeresen letöltve a nyers Github-ról.")
                 except Exception as fe:
                     log_event(f"❌ KRITIKUS Hiba a betűtípus letöltésénél: {fe}")
 
@@ -450,7 +450,6 @@ class BooksySocialAgent:
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             fb_success = False
 
-            # --- KÉTLÉPCSŐS META DRAFT PROTOKOLL ---
             if has_video:
                 log_event("Kétlépcsős Videó Feltöltés - Lépés 1: Fájl feltöltése a Médiatárba...")
                 r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(vid_path, 'rb')})
@@ -544,7 +543,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V218 Online", "project": "Booksy"}
+def home(): return {"status": "V219 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -555,12 +554,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V218 Agentic Video Test Started"}
+    return {"status": "V219 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V218 Full Cascade Test Started"}
+    return {"status": "V219 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
