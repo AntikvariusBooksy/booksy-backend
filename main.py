@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V215 (THE STRICT HANDSHAKE EDITION)
-# VERZIÓ: V215 - STRICT FACEBOOK API RESPONSE VALIDATION & TRUE FALLBACK CASCADE
+# BOOKSY BRAIN - V217 (THE ECONOMIC TESTING EDITION)
+# VERZIÓ: V217 - XML FEED & DB SYNC TEMPORARILY DISABLED FOR TESTING
 
 __import__('pysqlite3')
 import sys
@@ -188,24 +188,32 @@ class BooksyBrain:
     def _trigger_fb_comment(self, force_post_id=None):
         try:
             log_event(f"Indítás: FB Komment Bot. Force ID: {force_post_id}")
-            log_event("Várakozás 15 másodpercig (Meta Cache Sync)...")
-            time.sleep(15)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs memória fájl.", "products": []}
             with open(SOCIAL_MEMORY_FILE, "r", encoding="utf-8") as f: memory = json.load(f)
             
+            if not memory.get("links") or len(memory["links"]) == 0:
+                return {"reply": "❌ Memória fájl hibás, nincs könyv.", "products": []}
+
+            # PRECÍZIÓS KERESÉS A PUBLIKUS POSZTOK KÖZÖTT A FŐ KÖNYV CÍME ALAPJÁN
+            search_title = normalize_fingerprint(memory["links"][0].get("title", ""))
+            
             target_post_id = force_post_id
             if not target_post_id:
-                log_event("Poszt keresése ujjlenyomat alapján...")
-                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=10")
+                log_event(f"Poszt keresése cím alapján ({search_title})...")
+                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=10&fields=id,message")
                 posts = r.json().get('data', [])
-                fingerprint = normalize_fingerprint(memory.get("fingerprint", ""))
+                
                 for p in posts:
-                    if fingerprint in normalize_fingerprint(p.get("message", "")):
+                    msg = normalize_fingerprint(p.get("message", ""))
+                    if search_title and search_title in msg:
                         target_post_id = p["id"]; break
             
-            if not target_post_id: return {"reply": "❌ Poszt nem található.", "products": []}
+            if not target_post_id: 
+                err_msg = "❌ Poszt nem található a nyilvános hírfolyamban. Biztosan publikáltad már Business Suite-ból?"
+                log_event(err_msg)
+                return {"reply": err_msg, "products": []}
 
             comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
             for book in memory.get("links", []):
@@ -215,15 +223,15 @@ class BooksyBrain:
                 comment_text += f"📖 {author}{book['title']}{status}\n🔗 {book['url']}\n\n"
             
             comment_text += "Aki kapja, marja! 😉"
-            log_event(f"Komment küldése a {target_post_id} ID-ra...")
+            log_event(f"Komment küldése a publikus {target_post_id} ID-ra...")
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
             
             if "id" in c_res.text:
-                log_event("Komment sikeresen elküldve.")
+                log_event("✅ Komment sikeresen elküldve a nyilvános poszt alá.")
                 return {"reply": "✅ Komment sikeresen kiment!", "products": []}
             else:
                 log_event(f"FB Hiba: {c_res.text}")
-                return {"reply": f"❌ FB hiba: {c_res.text}", "products": []}
+                return {"reply": f"❌ FB hiba a kommentelésnél: {c_res.text}", "products": []}
         except Exception as e:
             log_event(f"Rendszerhiba: {e}")
             return {"reply": f"❌ Hiba: {e}", "products": []}
@@ -250,7 +258,7 @@ class BooksySocialAgent:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
                 msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY (MÁSOLHATÓ):\n{links_body}\n\nPublikálás után: /booklink admin123"
+                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nMiután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot a kommenthez!\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY (MÁSOLHATÓ):\n{links_body}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
@@ -259,45 +267,64 @@ class BooksySocialAgent:
 
     def _prepare_visual_layers(self, raw_img_path, overlay_path, fallback_path, title, author):
         try:
-            log_event("Vizuális rétegek (Overlay és Fallback) generálása...")
+            log_event("Vizuális rétegek (Overlay és Fallback) generálása Bounding Box algoritmussal...")
             img = PIL.Image.open(raw_img_path).convert("RGBA")
             width, height = img.size
 
             font_path = "Montserrat-Bold.ttf"
             if not os.path.exists(font_path):
-                font_url = "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Bold.ttf"
-                r = requests.get(font_url)
-                with open(font_path, 'wb') as f: f.write(r.content)
+                try:
+                    font_url = "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Bold.ttf"
+                    r = requests.get(font_url, timeout=10)
+                    with open(font_path, 'wb') as f: f.write(r.content)
+                except Exception as fe:
+                    log_event(f"Hiba a betűtípus letöltésénél: {fe}")
 
             overlay = PIL.Image.new('RGBA', (width, height), (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
+            
             bar_height = int(height * 0.15) 
-            draw.rectangle([(0, height - bar_height), (width, height)], fill=(0, 0, 0, 180)) 
+            bar_y = height - bar_height
+            draw.rectangle([(0, bar_y), (width, height)], fill=(0, 0, 0, 180)) 
+            
+            author_text = f"{author} - " if author and author != "Ismeretlen" else ""
+            full_text = f"{author_text}{title}"
+
+            target_width = int(width * 0.80)
+            target_height = int(bar_height * 0.60)
+            
+            font_size = 10
+            best_font = ImageFont.load_default()
             
             try:
-                font_title = ImageFont.truetype(font_path, int(width * 0.035)) 
-                font_author = ImageFont.truetype(font_path, int(width * 0.022)) 
-            except:
-                font_title = ImageFont.load_default()
-                font_author = ImageFont.load_default()
+                while True:
+                    test_font = ImageFont.truetype(font_path, font_size + 1)
+                    bbox = test_font.getbbox(full_text)
+                    text_w = bbox[2] - bbox[0]
+                    text_h = bbox[3] - bbox[1]
+                    
+                    if text_w > target_width or text_h > target_height:
+                        break
+                    font_size += 1
+                    best_font = test_font
+            except Exception as e:
+                log_event(f"Betűtípus méretezési hiba (fallback alkalmazása): {e}")
+                
+            bbox = best_font.getbbox(full_text)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            
+            x_center = (width - text_w) / 2
+            y_center = bar_y + (bar_height - text_h) / 2 - bbox[1]
 
-            title_text = title[:65] + "..." if len(title) > 65 else title
-            author_text = f"Szerző: {author}" if author and author != "Ismeretlen" else ""
-
-            x_margin = int(width * 0.05)
-            y_title = height - bar_height + int(bar_height * 0.2)
-            y_author = height - bar_height + int(bar_height * 0.6)
-
-            draw.text((x_margin, y_title), title_text, font=font_title, fill=(255, 255, 255, 255))
-            if author_text:
-                draw.text((x_margin, y_author), author_text, font=font_author, fill=(200, 200, 200, 255))
+            draw.text((x_center, y_center), full_text, font=best_font, fill=(255, 255, 255, 255))
 
             overlay.save(overlay_path, "PNG")
             
             combined = PIL.Image.alpha_composite(img, overlay)
             combined.convert("RGB").save(fallback_path, "JPEG")
             
-            log_event("Rétegek sikeresen mentve.")
+            log_event("Rétegek és tipográfia sikeresen mentve.")
             return True
         except Exception as e:
             log_event(f"Hiba a vizuális rétegek készítésénél: {e}")
@@ -419,18 +446,14 @@ class BooksySocialAgent:
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
+            api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
             
             fb_success = False
 
-            # --- KŐKEMÉNY KÉZFOGÁS (STRICT HANDSHAKE) FELTÖLTÉS ---
             if has_video:
                 log_event("Videó feltöltés megkísérlése a Facebookra...")
-                v_data = {
-                    'access_token': fb_token, 
-                    'description': post_text, 
-                    'published': 'false', 
-                    'unpublished_content_type': 'DRAFT'
-                }
+                v_data = api_data.copy()
+                v_data['description'] = v_data.pop('message')
                 r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
                 if r_v.status_code == 200:
                     log_event(f"✅ Videó vázlat SIKERESEN feltöltve! FB ID: {r_v.json().get('id')}")
@@ -443,12 +466,7 @@ class BooksySocialAgent:
             if not fb_success:
                 upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
                 log_event(f"Képes vázlat feltöltésének megkísérlése ({upload_img})...")
-                p_data = {
-                    'access_token': fb_token, 
-                    'message': post_text, 
-                    'published': 'false', 
-                    'unpublished_content_type': 'DRAFT'
-                }
+                p_data = api_data.copy()
                 r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data=p_data, files={'source': open(upload_img, 'rb')})
                 if r_p.status_code == 200:
                     log_event(f"✅ Képes vázlat SIKERESEN feltöltve! FB ID: {r_p.json().get('id')}")
@@ -462,7 +480,6 @@ class BooksySocialAgent:
             else:
                 log_event("❌ KRITIKUS: A Facebook feltöltés minden formája kudarcot vallott.")
             
-            # Takarítás
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
 
@@ -474,13 +491,15 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
-    try:
-        sync_success = updater.run_daily_update()
-        if not sync_success:
-            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Posztolás indítása a korábbi adatokkal.")
-    except Exception as e:
-        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync (KIKAPCSOLVA A TESZTHEZ) -> Social Post")
+    
+    # --- ÁTMENETILEG KIKOMMENTEZVE A GAZDASÁGOS TESZTELÉSHEZ ---
+    # try:
+    #     sync_success = updater.run_daily_update()
+    #     if not sync_success:
+    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Posztolás indítása a korábbi adatokkal.")
+    # except Exception as e:
+    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
     social_agent.run_night_generation()
 
@@ -496,7 +515,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V215 Online", "project": "Booksy"}
+def home(): return {"status": "V217 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -507,12 +526,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V215 Agentic Video Test Started"}
+    return {"status": "V217 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V215 Full Cascade Test Started"}
+    return {"status": "V217 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
