@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V217 (THE ECONOMIC TESTING EDITION)
-# VERZIÓ: V217 - XML FEED & DB SYNC TEMPORARILY DISABLED FOR TESTING
+# BOOKSY BRAIN - V218 (THE MASTER DRAFT EDITION)
+# VERZIÓ: V218 - TWO-STEP META DRAFT PUBLISHING + DIRECT GSTATIC FONT CDN
 
 __import__('pysqlite3')
 import sys
@@ -196,7 +196,6 @@ class BooksyBrain:
             if not memory.get("links") or len(memory["links"]) == 0:
                 return {"reply": "❌ Memória fájl hibás, nincs könyv.", "products": []}
 
-            # PRECÍZIÓS KERESÉS A PUBLIKUS POSZTOK KÖZÖTT A FŐ KÖNYV CÍME ALAPJÁN
             search_title = normalize_fingerprint(memory["links"][0].get("title", ""))
             
             target_post_id = force_post_id
@@ -274,11 +273,14 @@ class BooksySocialAgent:
             font_path = "Montserrat-Bold.ttf"
             if not os.path.exists(font_path):
                 try:
-                    font_url = "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Bold.ttf"
-                    r = requests.get(font_url, timeout=10)
+                    # KÖZVETLEN GSTATIC CDN LINK (Atombiztos TTF forrás, nincs HTML maszkolás)
+                    font_url = "https://fonts.gstatic.com/s/montserrat/v25/JTUSjIg1_i6t8kCHKm459Wlhyw.ttf"
+                    r = requests.get(font_url, timeout=15)
+                    r.raise_for_status()
                     with open(font_path, 'wb') as f: f.write(r.content)
+                    log_event("✅ Montserrat TTF sikeresen letöltve a Google CDN-ről.")
                 except Exception as fe:
-                    log_event(f"Hiba a betűtípus letöltésénél: {fe}")
+                    log_event(f"❌ KRITIKUS Hiba a betűtípus letöltésénél: {fe}")
 
             overlay = PIL.Image.new('RGBA', (width, height), (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
@@ -405,7 +407,7 @@ class BooksySocialAgent:
             log_event("Gemini elemzés kész.")
 
             log_event("Step 2: Claude vizuális rendezői prompt generálás...")
-            claude_prompt = f"""Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj egy képgenerálási promptot: KONTEXTUS: {gem_res.text} SZABÁLYOK: Ne mutass könyveket. Stílus: Hyper-realistic, cinematic. Arány: 1:1 Square. Nincs szöveg. Csak a promptot küldd!"""
+            claude_prompt = f"""Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj képgenerálási promptot. KONTEXTUS: {gem_res.text} SZABÁLYOK: Ne mutass könyveket. Stílus: Hyper-realistic, cinematic. Arány: 1:1 Square. Nincs szöveg. Csak a promptot küldd!"""
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
             log_event(f"Claude prompt kész.")
@@ -446,33 +448,60 @@ class BooksySocialAgent:
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
-            api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
-            
             fb_success = False
 
+            # --- KÉTLÉPCSŐS META DRAFT PROTOKOLL ---
             if has_video:
-                log_event("Videó feltöltés megkísérlése a Facebookra...")
-                v_data = api_data.copy()
-                v_data['description'] = v_data.pop('message')
-                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
+                log_event("Kétlépcsős Videó Feltöltés - Lépés 1: Fájl feltöltése a Médiatárba...")
+                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(vid_path, 'rb')})
                 if r_v.status_code == 200:
-                    log_event(f"✅ Videó vázlat SIKERESEN feltöltve! FB ID: {r_v.json().get('id')}")
-                    fb_success = True
+                    vid_id = r_v.json().get('id')
+                    log_event(f"Videó sikeresen feltöltve a Médiatárba (ID: {vid_id}). Lépés 2: Vázlat generálása a Hírfolyamba...")
+                    r_draft = requests.post(
+                        f"https://graph.facebook.com/v19.0/{fb_id}/feed",
+                        data={
+                            'access_token': fb_token,
+                            'message': post_text,
+                            'published': 'false',
+                            'unpublished_content_type': 'DRAFT',
+                            'attached_media': json.dumps([{'media_fbid': vid_id}])
+                        }
+                    )
+                    if r_draft.status_code == 200:
+                        log_event(f"✅ Videós Vázlat (Draft) SIKERESEN létrehozva a Business Suite-ban! (Poszt ID: {r_draft.json().get('id')})")
+                        fb_success = True
+                    else:
+                        log_event(f"⚠️ Hiba a vázlat létrehozásánál (Feed API): {r_draft.text}")
                 else:
-                    log_event(f"⚠️ FB Videó feltöltési hiba: {r_v.text}")
+                    log_event(f"⚠️ Hiba a videó feltöltésénél (Video API): {r_v.text}")
+                
+                if not fb_success:
                     log_event("Visszaállás a képes vázlat (fallback) feltöltésére...")
-                    has_video = False
 
             if not fb_success:
                 upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
-                log_event(f"Képes vázlat feltöltésének megkísérlése ({upload_img})...")
-                p_data = api_data.copy()
-                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data=p_data, files={'source': open(upload_img, 'rb')})
+                log_event(f"Kétlépcsős Kép Feltöltés (Fallback) - Lépés 1: Kép a Médiatárba ({upload_img})...")
+                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'false', 'no_story': 'true'}, files={'source': open(upload_img, 'rb')})
                 if r_p.status_code == 200:
-                    log_event(f"✅ Képes vázlat SIKERESEN feltöltve! FB ID: {r_p.json().get('id')}")
-                    fb_success = True
+                    photo_id = r_p.json().get('id')
+                    log_event(f"Kép sikeresen feltöltve (ID: {photo_id}). Lépés 2: Vázlat generálása...")
+                    r_draft_p = requests.post(
+                        f"https://graph.facebook.com/v19.0/{fb_id}/feed",
+                        data={
+                            'access_token': fb_token,
+                            'message': post_text,
+                            'published': 'false',
+                            'unpublished_content_type': 'DRAFT',
+                            'attached_media': json.dumps([{'media_fbid': photo_id}])
+                        }
+                    )
+                    if r_draft_p.status_code == 200:
+                        log_event(f"✅ Képes Vázlat (Fallback) SIKERESEN létrehozva! (Poszt ID: {r_draft_p.json().get('id')})")
+                        fb_success = True
+                    else:
+                        log_event(f"❌ Hiba a képes vázlat létrehozásánál: {r_draft_p.text}")
                 else:
-                    log_event(f"❌ FB Kép feltöltési hiba: {r_p.text}")
+                    log_event(f"❌ Hiba a kép feltöltésénél: {r_p.text}")
 
             if fb_success:
                 self.send_morning_email(post_text, memory_data['links'])
@@ -515,7 +544,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V217 Online", "project": "Booksy"}
+def home(): return {"status": "V218 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -526,12 +555,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V217 Agentic Video Test Started"}
+    return {"status": "V218 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V217 Full Cascade Test Started"}
+    return {"status": "V218 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
