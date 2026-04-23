@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V220 (THE META TRICK & OS TYPOGRAPHY EDITION)
-# VERZIÓ: V220 - NO_STORY VIDEO UPLOAD FIX + LOCAL OS FONT FALLBACK
+# BOOKSY BRAIN - V221 (THE ROLLBACK EDITION)
+# VERZIÓ: V221 - REVERTED TO ORIGINAL WORKING FB VIDEO UPLOAD + LOCAL TTF FONT
 
 __import__('pysqlite3')
 import sys
@@ -95,19 +95,6 @@ def extract_metadata_from_html(raw_html):
                 if next_td: meta[key] = next_td.get_text(strip=True)
     except: pass
     return meta
-
-def get_system_font_path():
-    # Lokális Linux OS fontok keresése a Railway konténerben
-    system_fonts = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"
-    ]
-    for f in system_fonts:
-        if os.path.exists(f):
-            return f
-    return None
 
 # --- DB HANDLER ---
 class DBHandler:
@@ -283,21 +270,15 @@ class BooksySocialAgent:
             img = PIL.Image.open(raw_img_path).convert("RGBA")
             width, height = img.size
 
-            font_path = get_system_font_path()
-            if font_path:
-                log_event(f"✅ Helyi rendszer betűtípus megtalálva: {font_path}")
+            # KÖTELEZŐ: Manuálisan feltöltött lokális TTF használata!
+            font_path = "Montserrat-Bold.ttf"
+            use_bbox = False
+            best_font = ImageFont.load_default()
+
+            if os.path.exists(font_path):
+                use_bbox = True
             else:
-                log_event("⚠️ Rendszer betűtípus nem található, stabil hálózati letöltés megkísérlése...")
-                font_path = "Fallback-Bold.ttf"
-                try:
-                    # Kőkemény vészhelyzeti Apache Roboto CDN link (ritkán hal meg)
-                    font_url = "https://raw.githubusercontent.com/google/fonts/main/apache/roboto/Roboto-Bold.ttf"
-                    r = requests.get(font_url, timeout=15)
-                    r.raise_for_status()
-                    with open(font_path, 'wb') as f: f.write(r.content)
-                except Exception as fe:
-                    log_event(f"❌ KRITIKUS Hiba a vészhelyzeti letöltésnél: {fe}")
-                    font_path = None
+                log_event("❌ FIGYELEM: A 'Montserrat-Bold.ttf' nem található a gyökérkönyvtárban! Kérlek töltsd fel a Git-be. Alapértelmezett apró betű aktív.")
 
             overlay = PIL.Image.new('RGBA', (width, height), (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
@@ -309,13 +290,11 @@ class BooksySocialAgent:
             author_text = f"{author} - " if author and author != "Ismeretlen" else ""
             full_text = f"{author_text}{title}"
 
-            target_width = int(width * 0.80)
-            target_height = int(bar_height * 0.60)
-            
-            best_font = ImageFont.load_default()
-            
-            if font_path:
+            if use_bbox:
+                target_width = int(width * 0.80)
+                target_height = int(bar_height * 0.60)
                 font_size = 10
+                
                 try:
                     while True:
                         test_font = ImageFont.truetype(font_path, font_size + 1)
@@ -329,8 +308,6 @@ class BooksySocialAgent:
                         best_font = test_font
                 except Exception as e:
                     log_event(f"Betűtípus méretezési hiba: {e}")
-            else:
-                log_event("⚠️ Csak alapértelmezett betűtípus érhető el. Bounding box kikapcsolva.")
                 
             bbox = best_font.getbbox(full_text)
             text_w = bbox[2] - bbox[0]
@@ -468,71 +445,31 @@ class BooksySocialAgent:
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
-            fb_success = False
-
-            # --- KÉTLÉPCSŐS META DRAFT PROTOKOLL (TE TRÜKKÖD: PUBLISHED=TRUE + NO_STORY=TRUE) ---
+            
+            # --- VISSZAÁLLÍTOTT EREDETI VIDEÓ FELTÖLTÉS (MŰKÖDŐ VERZIÓBÓL) ---
+            api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
+            
             if has_video:
-                log_event("Kétlépcsős Videó Feltöltés - Lépés 1: Fájl feltöltése a Médiatárba (no_story=true)...")
-                v_data = {
-                    'access_token': fb_token, 
-                    'published': 'true', 
-                    'no_story': 'true'
-                }
+                log_event("Videó vázlat feltöltése a bevált, eredeti protokollal...")
+                v_data = api_data.copy()
+                v_data['description'] = v_data.pop('message')
                 r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
                 if r_v.status_code == 200:
-                    vid_id = r_v.json().get('id')
-                    log_event(f"Videó sikeresen feltöltve a Médiatárba (ID: {vid_id}). Lépés 2: Vázlat generálása a Hírfolyamba...")
-                    r_draft = requests.post(
-                        f"https://graph.facebook.com/v19.0/{fb_id}/feed",
-                        data={
-                            'access_token': fb_token,
-                            'message': post_text,
-                            'published': 'false',
-                            'unpublished_content_type': 'DRAFT',
-                            'attached_media': json.dumps([{'media_fbid': vid_id}])
-                        }
-                    )
-                    if r_draft.status_code == 200:
-                        log_event(f"✅ Videós Vázlat (Draft) SIKERESEN létrehozva a Business Suite-ban! (Poszt ID: {r_draft.json().get('id')})")
-                        fb_success = True
-                    else:
-                        log_event(f"⚠️ Hiba a vázlat létrehozásánál (Feed API): {r_draft.text}")
+                    log_event("✅ Videó vázlat SIKERESEN feltöltve a Facebookra!")
                 else:
-                    log_event(f"⚠️ Hiba a videó feltöltésénél (Video API): {r_v.text}")
-                
-                if not fb_success:
-                    log_event("Visszaállás a képes vázlat (fallback) feltöltésére...")
-
-            if not fb_success:
-                upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
-                log_event(f"Kétlépcsős Kép Feltöltés (Fallback) - Lépés 1: Kép a Médiatárba ({upload_img})...")
-                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'true', 'no_story': 'true'}, files={'source': open(upload_img, 'rb')})
-                if r_p.status_code == 200:
-                    photo_id = r_p.json().get('id')
-                    log_event(f"Kép sikeresen feltöltve (ID: {photo_id}). Lépés 2: Vázlat generálása...")
-                    r_draft_p = requests.post(
-                        f"https://graph.facebook.com/v19.0/{fb_id}/feed",
-                        data={
-                            'access_token': fb_token,
-                            'message': post_text,
-                            'published': 'false',
-                            'unpublished_content_type': 'DRAFT',
-                            'attached_media': json.dumps([{'media_fbid': photo_id}])
-                        }
-                    )
-                    if r_draft_p.status_code == 200:
-                        log_event(f"✅ Képes Vázlat (Fallback) SIKERESEN létrehozva! (Poszt ID: {r_draft_p.json().get('id')})")
-                        fb_success = True
-                    else:
-                        log_event(f"❌ Hiba a képes vázlat létrehozásánál: {r_draft_p.text}")
-                else:
-                    log_event(f"❌ Hiba a kép feltöltésénél: {r_p.text}")
-
-            if fb_success:
-                self.send_morning_email(post_text, memory_data['links'])
-                log_event("Folyamat sikeresen lezárult.")
+                    log_event(f"⚠️ FB Videó hiba: {r_v.text}")
             else:
-                log_event("❌ KRITIKUS: A Facebook feltöltés minden formája kudarcot vallott.")
+                # Képes fallback, ha a videó renderelés megszakadt
+                upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
+                log_event("Videó hiányában a képes vázlat kerül feltöltésre...")
+                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
+                if r_p.status_code == 200:
+                    log_event("✅ Képes vázlat SIKERESEN feltöltve a Facebookra!")
+                else:
+                    log_event(f"❌ FB Kép hiba: {r_p.text}")
+            
+            self.send_morning_email(post_text, memory_data['links'])
+            log_event("Folyamat sikeresen lezárult.")
             
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
@@ -540,21 +477,11 @@ class BooksySocialAgent:
         except Exception as e:
             log_event(f"KRITIKUS HIBA: {e}")
 
-
 # --- MASTER CASCADE ROUTINE ---
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
     log_event("🌅 Master Láncreakció Indítása: DB Sync (KIKAPCSOLVA A TESZTHEZ) -> Social Post")
-    
-    # --- ÁTMENETILEG KIKOMMENTEZVE A GAZDASÁGOS TESZTELÉSHEZ ---
-    # try:
-    #     sync_success = updater.run_daily_update()
-    #     if not sync_success:
-    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Posztolás indítása a korábbi adatokkal.")
-    # except Exception as e:
-    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
-    
     social_agent.run_night_generation()
 
 
@@ -569,7 +496,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V220 Online", "project": "Booksy"}
+def home(): return {"status": "V221 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -580,13 +507,13 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V220 Agentic Video Test Started"}
+    return {"status": "V221 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V220 Full Cascade Test Started"}
+    return {"status": "V221 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080) 
+    uvicorn.run(app, host="0.0.0.0", port=8080)
