@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V221 (THE ROLLBACK EDITION)
-# VERZIÓ: V221 - REVERTED TO ORIGINAL WORKING FB VIDEO UPLOAD + LOCAL TTF FONT
+# BOOKSY BRAIN - V222 (THE SNIPER LOGIC EDITION)
+# VERZIÓ: V222 - MEDIA ID ATTACHMENT LOOKUP FOR COMMENTS + /FEED ENDPOINT
 
 __import__('pysqlite3')
 import sys
@@ -195,19 +195,42 @@ class BooksyBrain:
             
             if not memory.get("links") or len(memory["links"]) == 0:
                 return {"reply": "❌ Memória fájl hibás, nincs könyv.", "products": []}
-
-            search_title = normalize_fingerprint(memory["links"][0].get("title", ""))
             
             target_post_id = force_post_id
             if not target_post_id:
-                log_event(f"Poszt keresése cím alapján ({search_title})...")
-                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=10&fields=id,message")
+                # 1. Lekérjük a teljes publikus hírfolyamot csatolmányokkal együtt
+                log_event("Poszt keresése Media ID és Cím alapján a hírfolyamban (/feed)...")
+                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/feed?access_token={fb_token}&limit=15&fields=id,message,attachments")
                 posts = r.json().get('data', [])
                 
+                media_id = memory.get("media_id")
+                search_title = normalize_fingerprint(memory["links"][0].get("title", "")) if memory.get("links") else ""
+                
                 for p in posts:
-                    msg = normalize_fingerprint(p.get("message", ""))
-                    if search_title and search_title in msg:
-                        target_post_id = p["id"]; break
+                    found = False
+                    
+                    # 2. Elsődleges keresés: Megváltoztathatatlan Media ID (ha létezik a memóriában)
+                    if media_id:
+                        atts = p.get('attachments', {}).get('data', [])
+                        for att in atts:
+                            if str(att.get('target', {}).get('id')) == str(media_id):
+                                found = True
+                                break
+                            # Videók gyakran subattachmentként jelennek meg
+                            for sub in att.get('subattachments', {}).get('data', []):
+                                if str(sub.get('target', {}).get('id')) == str(media_id):
+                                    found = True
+                                    break
+                    
+                    # 3. Biztonsági másodlagos keresés: Ha a Media API nem adta vissza a csatolmányt, cím alapján (message is safe here)
+                    if not found and search_title:
+                        msg = normalize_fingerprint(p.get("message", ""))
+                        if search_title in msg:
+                            found = True
+                    
+                    if found:
+                        target_post_id = p["id"]
+                        break
             
             if not target_post_id: 
                 err_msg = "❌ Poszt nem található a nyilvános hírfolyamban. Biztosan publikáltad már Business Suite-ból?"
@@ -442,7 +465,6 @@ class BooksySocialAgent:
                 "fingerprint": post_text[:100],
                 "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]
             }
-            with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
@@ -455,7 +477,9 @@ class BooksySocialAgent:
                 v_data['description'] = v_data.pop('message')
                 r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
                 if r_v.status_code == 200:
-                    log_event("✅ Videó vázlat SIKERESEN feltöltve a Facebookra!")
+                    vid_id = str(r_v.json().get('id'))
+                    memory_data['media_id'] = vid_id
+                    log_event(f"✅ Videó vázlat SIKERESEN feltöltve a Facebookra! (Media ID: {vid_id})")
                 else:
                     log_event(f"⚠️ FB Videó hiba: {r_v.text}")
             else:
@@ -464,10 +488,16 @@ class BooksySocialAgent:
                 log_event("Videó hiányában a képes vázlat kerül feltöltésre...")
                 r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
                 if r_p.status_code == 200:
-                    log_event("✅ Képes vázlat SIKERESEN feltöltve a Facebookra!")
+                    photo_id = str(r_p.json().get('id'))
+                    memory_data['media_id'] = photo_id
+                    log_event(f"✅ Képes vázlat SIKERESEN feltöltve a Facebookra! (Media ID: {photo_id})")
                 else:
                     log_event(f"❌ FB Kép hiba: {r_p.text}")
             
+            # Memória mentése a frissen szerzett Media ID-val együtt
+            with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: 
+                json.dump(memory_data, f, ensure_ascii=False)
+                
             self.send_morning_email(post_text, memory_data['links'])
             log_event("Folyamat sikeresen lezárult.")
             
@@ -496,7 +526,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V221 Online", "project": "Booksy"}
+def home(): return {"status": "V222 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -507,12 +537,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V221 Agentic Video Test Started"}
+    return {"status": "V222 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V221 Full Cascade Test Started"}
+    return {"status": "V222 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
