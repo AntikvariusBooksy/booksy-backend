@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V224 (THE REVERSE RADAR EDITION)
-# VERZIÓ: V224 - REVERSE ATTACHMENT LOOKUP FOR COMMENTS ON FEED/REELS, EVERYTHING ELSE 100% UNTOUCHED
+# BOOKSY BRAIN - V225 (THE OMNI-RADAR EDITION)
+# VERZIÓ: V225 - DEEP ATTACHMENT URL SEARCH ACROSS PUBLISHED_POSTS, FEED, AND POSTS
 
 __import__('pysqlite3')
 import sys
@@ -202,38 +202,58 @@ class BooksyBrain:
                 media_id = memory.get("media_id")
                 search_title = normalize_fingerprint(memory["links"][0].get("title", "")) if memory.get("links") else ""
                 
-                log_event("Fordított Meta-Radar: Publikus poszt/Reels keresése a hírfolyamban...")
-                # Létfontosságú: /feed végpont, plusz message, description és attachments kikérése
-                r = requests.get(f"https://graph.facebook.com/v19.0/{fb_id}/feed?access_token={fb_token}&limit=15&fields=id,message,description,attachments")
-                posts = r.json().get('data', [])
+                log_event("Omni-Radar: Publikus poszt/Reels keresése az összes végponton...")
                 
-                for p in posts:
-                    found = False
-                    
-                    # 1. Keresés megváltoztathatatlan Media ID (Csatolmány) alapján
-                    if media_id:
-                        atts = p.get('attachments', {}).get('data', [])
-                        for att in atts:
-                            if str(att.get('target', {}).get('id')) == str(media_id):
-                                found = True
-                                break
-                            # Videók esetenként subattachment-ben jelennek meg
-                            for sub in att.get('subattachments', {}).get('data', []):
-                                if str(sub.get('target', {}).get('id')) == str(media_id):
+                # A 3 legerősebb Meta végpont a posztok megtalálására (A description mező törölve a biztonságért)
+                endpoints = [
+                    f"https://graph.facebook.com/v19.0/{fb_id}/published_posts?access_token={fb_token}&limit=15&fields=id,message,attachments",
+                    f"https://graph.facebook.com/v19.0/{fb_id}/feed?access_token={fb_token}&limit=15&fields=id,message,attachments",
+                    f"https://graph.facebook.com/v19.0/{fb_id}/posts?access_token={fb_token}&limit=15&fields=id,message,attachments"
+                ]
+                
+                found = False
+                for ep in endpoints:
+                    if found: break
+                    try:
+                        r = requests.get(ep)
+                        if r.status_code != 200: continue
+                        posts = r.json().get('data', [])
+                        
+                        for p in posts:
+                            # 1. Keresés mély URL röntgennel a Media ID alapján
+                            if media_id:
+                                atts = p.get('attachments', {}).get('data', [])
+                                for att in atts:
+                                    target = att.get('target', {})
+                                    # Szöveggé alakítjuk az URL-eket, hogy megkeressük bennük az ID-t
+                                    target_id = str(target.get('id', ''))
+                                    target_url = str(target.get('url', ''))
+                                    att_url = str(att.get('url', ''))
+                                    
+                                    if target_id == str(media_id) or str(media_id) in target_url or str(media_id) in att_url:
+                                        found = True
+                                        break
+                                    
+                                    # Mélyebb rétegek (subattachments - sokszor itt van a videó elrejtve)
+                                    for sub in att.get('subattachments', {}).get('data', []):
+                                        sub_target = sub.get('target', {})
+                                        if str(sub_target.get('id', '')) == str(media_id) or str(media_id) in str(sub_target.get('url', '')) or str(media_id) in str(sub.get('url', '')):
+                                            found = True
+                                            break
+                            
+                            # 2. Biztonsági keresés: Cím alapján (Ha az API törölte volna a csatolmányt)
+                            if not found and search_title:
+                                msg = normalize_fingerprint(p.get("message", ""))
+                                if search_title in msg:
                                     found = True
-                                    break
-                    
-                    # 2. Biztonsági keresés Cím alapján a posztban (message) VAGY Reels leírásban (description)
-                    if not found and search_title:
-                        msg = normalize_fingerprint(p.get("message", ""))
-                        desc = normalize_fingerprint(p.get("description", ""))
-                        if search_title in msg or search_title in desc:
-                            found = True
-                    
-                    if found:
-                        target_post_id = p["id"]
-                        log_event(f"Találat! Poszt azonosítója (Mozivászon): {target_post_id}")
-                        break
+                            
+                            if found:
+                                target_post_id = p["id"]
+                                ep_name = ep.split('?')[0].split('/')[-1]
+                                log_event(f"✅ Találat a '{ep_name}' végponton! Poszt azonosítója: {target_post_id}")
+                                break
+                    except Exception as loop_e:
+                        log_event(f"Hiba a végpont ellenőrzésénél: {loop_e}")
             
             if not target_post_id: 
                 err_msg = "❌ Célpont poszt (vagy Reels) nem található a publikus hírfolyamban. Biztosan közzétetted a vázlatot?"
@@ -248,7 +268,7 @@ class BooksyBrain:
                 comment_text += f"📖 {author}{book['title']}{status}\n🔗 {book['url']}\n\n"
             
             comment_text += "Aki kapja, marja! 😉"
-            log_event(f"Komment küldése a megtalált Publikus Poszt ID-ra ({target_post_id})...")
+            log_event(f"Komment küldése a(z) {target_post_id} azonosítóra...")
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
             
             if "id" in c_res.text:
@@ -296,6 +316,7 @@ class BooksySocialAgent:
             img = PIL.Image.open(raw_img_path).convert("RGBA")
             width, height = img.size
 
+            # KÖTELEZŐ: Manuálisan feltöltött lokális TTF használata!
             font_path = "Montserrat-Bold.ttf"
             use_bbox = False
             best_font = ImageFont.load_default()
@@ -526,7 +547,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V224 Online", "project": "Booksy"}
+def home(): return {"status": "V225 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -537,12 +558,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V224 Agentic Video Test Started"}
+    return {"status": "V225 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V224 Full Cascade Test Started"}
+    return {"status": "V225 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
