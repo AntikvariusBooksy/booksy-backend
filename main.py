@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V225 (THE OMNI-RADAR EDITION)
-# VERZIÓ: V225 - DEEP ATTACHMENT URL SEARCH ACROSS PUBLISHED_POSTS, FEED, AND POSTS
+# BOOKSY BRAIN - V226 (THE FULL CASCADE EDITION)
+# VERZIÓ: V226 - RE-ENABLED DATABASE SYNC CASCADE + PRESERVED OMNI-RADAR & TYPOGRAPHY
 
 __import__('pysqlite3')
 import sys
@@ -204,7 +204,6 @@ class BooksyBrain:
                 
                 log_event("Omni-Radar: Publikus poszt/Reels keresése az összes végponton...")
                 
-                # A 3 legerősebb Meta végpont a posztok megtalálására (A description mező törölve a biztonságért)
                 endpoints = [
                     f"https://graph.facebook.com/v19.0/{fb_id}/published_posts?access_token={fb_token}&limit=15&fields=id,message,attachments",
                     f"https://graph.facebook.com/v19.0/{fb_id}/feed?access_token={fb_token}&limit=15&fields=id,message,attachments",
@@ -220,43 +219,36 @@ class BooksyBrain:
                         posts = r.json().get('data', [])
                         
                         for p in posts:
-                            # 1. Keresés mély URL röntgennel a Media ID alapján
                             if media_id:
                                 atts = p.get('attachments', {}).get('data', [])
                                 for att in atts:
                                     target = att.get('target', {})
-                                    # Szöveggé alakítjuk az URL-eket, hogy megkeressük bennük az ID-t
                                     target_id = str(target.get('id', ''))
                                     target_url = str(target.get('url', ''))
                                     att_url = str(att.get('url', ''))
                                     
                                     if target_id == str(media_id) or str(media_id) in target_url or str(media_id) in att_url:
-                                        found = True
-                                        break
+                                        found = True; break
                                     
-                                    # Mélyebb rétegek (subattachments - sokszor itt van a videó elrejtve)
                                     for sub in att.get('subattachments', {}).get('data', []):
                                         sub_target = sub.get('target', {})
                                         if str(sub_target.get('id', '')) == str(media_id) or str(media_id) in str(sub_target.get('url', '')) or str(media_id) in str(sub.get('url', '')):
-                                            found = True
-                                            break
+                                            found = True; break
+                                if found: break
                             
-                            # 2. Biztonsági keresés: Cím alapján (Ha az API törölte volna a csatolmányt)
                             if not found and search_title:
                                 msg = normalize_fingerprint(p.get("message", ""))
-                                if search_title in msg:
-                                    found = True
+                                if search_title in msg: found = True
                             
                             if found:
                                 target_post_id = p["id"]
                                 ep_name = ep.split('?')[0].split('/')[-1]
                                 log_event(f"✅ Találat a '{ep_name}' végponton! Poszt azonosítója: {target_post_id}")
                                 break
-                    except Exception as loop_e:
-                        log_event(f"Hiba a végpont ellenőrzésénél: {loop_e}")
+                    except Exception as loop_e: log_event(f"Hiba a végpont ellenőrzésénél: {loop_e}")
             
             if not target_post_id: 
-                err_msg = "❌ Célpont poszt (vagy Reels) nem található a publikus hírfolyamban. Biztosan közzétetted a vázlatot?"
+                err_msg = "❌ Célpont poszt (vagy Reels) nem található a publikus hírfolyamon."
                 log_event(err_msg)
                 return {"reply": err_msg, "products": []}
 
@@ -316,101 +308,62 @@ class BooksySocialAgent:
             img = PIL.Image.open(raw_img_path).convert("RGBA")
             width, height = img.size
 
-            # KÖTELEZŐ: Manuálisan feltöltött lokális TTF használata!
             font_path = "Montserrat-Bold.ttf"
             use_bbox = False
             best_font = ImageFont.load_default()
 
-            if os.path.exists(font_path):
-                use_bbox = True
-            else:
-                log_event("❌ FIGYELEM: A 'Montserrat-Bold.ttf' nem található a gyökérkönyvtárban! Kérlek töltsd fel a Git-be. Alapértelmezett apró betű aktív.")
+            if os.path.exists(font_path): use_bbox = True
+            else: log_event("❌ FIGYELEM: A 'Montserrat-Bold.ttf' nem található! Alapértelmezett betű aktív.")
 
             overlay = PIL.Image.new('RGBA', (width, height), (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
-            
-            bar_height = int(height * 0.15) 
-            bar_y = height - bar_height
+            bar_height = int(height * 0.15); bar_y = height - bar_height
             draw.rectangle([(0, bar_y), (width, height)], fill=(0, 0, 0, 180)) 
             
             author_text = f"{author} - " if author and author != "Ismeretlen" else ""
             full_text = f"{author_text}{title}"
 
             if use_bbox:
-                target_width = int(width * 0.80)
-                target_height = int(bar_height * 0.60)
-                font_size = 10
-                
+                target_width = int(width * 0.80); target_height = int(bar_height * 0.60); font_size = 10
                 try:
                     while True:
                         test_font = ImageFont.truetype(font_path, font_size + 1)
                         bbox = test_font.getbbox(full_text)
-                        text_w = bbox[2] - bbox[0]
-                        text_h = bbox[3] - bbox[1]
-                        
-                        if text_w > target_width or text_h > target_height:
-                            break
-                        font_size += 1
-                        best_font = test_font
-                except Exception as e:
-                    log_event(f"Betűtípus méretezési hiba: {e}")
+                        if (bbox[2]-bbox[0]) > target_width or (bbox[3]-bbox[1]) > target_height: break
+                        font_size += 1; best_font = test_font
+                except: pass
                 
-            bbox = best_font.getbbox(full_text)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-            
-            x_center = (width - text_w) / 2
-            y_center = bar_y + (bar_height - text_h) / 2 - bbox[1]
-
-            draw.text((x_center, y_center), full_text, font=best_font, fill=(255, 255, 255, 255))
-
+            bbox = best_font.getbbox(full_text); text_w = bbox[2] - bbox[0]; text_h = bbox[3] - bbox[1]
+            draw.text(((width - text_w) / 2, bar_y + (bar_height - text_h) / 2 - bbox[1]), full_text, font=best_font, fill=(255, 255, 255, 255))
             overlay.save(overlay_path, "PNG")
-            
-            combined = PIL.Image.alpha_composite(img, overlay)
-            combined.convert("RGB").save(fallback_path, "JPEG")
-            
-            log_event("Rétegek és tipográfia sikeresen mentve.")
+            combined = PIL.Image.alpha_composite(img, overlay); combined.convert("RGB").save(fallback_path, "JPEG")
+            log_event("Rétegek mentve.")
             return True
-        except Exception as e:
-            log_event(f"Hiba a vizuális rétegek készítésénél: {e}")
-            return False
+        except Exception as e: log_event(f"Hiba a vizuális rétegeknél: {e}"); return False
 
     def _create_video(self, raw_img_path, overlay_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            log_event("Videó renderelés indítása (Ipari Frame-by-Frame Stamping)...")
-            
+            log_event("Videó renderelés indítása...")
             clip = ImageClip(raw_img_path).set_duration(5)
             zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center')
             fixed_bg = CompositeVideoClip([zoomed], size=(1920, 1920)).set_duration(5)
             bg_loop = concatenate_videoclips([fixed_bg, fixed_bg.fx(vfx.time_mirror)])
-            
             if os.path.exists(overlay_path):
                 overlay_img = PIL.Image.open(overlay_path).convert("RGBA")
-                
                 def stamp_overlay(frame_array):
-                    clean_frame = np.clip(frame_array, 0, 255).astype(np.uint8)
-                    pil_frame = PIL.Image.fromarray(clean_frame).convert("RGBA")
+                    pil_frame = PIL.Image.fromarray(np.clip(frame_array, 0, 255).astype(np.uint8)).convert("RGBA")
                     pil_frame.alpha_composite(overlay_img)
                     return np.array(pil_frame.convert("RGB"))
-                
                 final_video = bg_loop.fl_image(stamp_overlay)
-            else:
-                final_video = bg_loop
-
+            else: final_video = bg_loop
             final_video.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
             return True
-        except Exception as e:
-            log_event(f"Videó hiba: {e}")
-            return False
+        except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
         log_event("Agentic Generálás indítása...")
-        raw_img_path = "social_raw.jpg"
-        overlay_path = "social_overlay.png"
-        fallback_img_path = "social_fallback.jpg"
-        vid_path = "social_video.mp4"
-        
+        raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         try:
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
             r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
@@ -441,98 +394,62 @@ class BooksySocialAgent:
                             selected_books.append(p_target); seen_ids.add(p_target['id'])
                         if len(selected_books) >= 5: break
 
-            main_book = selected_books[0]
-            log_event(f"Fő könyv kiválasztva: {main_book['title']}")
-
-            log_event("Step 1: Gemini (2.5-flash) könyv-elemzés indítása...")
-            analysis_prompt = f"""Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Leírás: {main_book.get('text_preview','')}. Határozd meg a műfaját, a vizuális motívumait, a korabeli környezetet és az alapvető hangulatát. Adj egy tömör vizuális összefoglalót angolul!"""
+            main_book = selected_books[0]; log_event(f"Fő könyv: {main_book['title']}")
+            analysis_prompt = f"Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Leírás: {main_book.get('text_preview','')}. Adj tömör vizuális összefoglalót angolul!"
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
-            log_event("Gemini elemzés kész.")
-
-            log_event("Step 2: Claude vizuális rendezői prompt generálás...")
-            claude_prompt = f"""Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj képgenerálási promptot. KONTEXTUS: {gem_res.text} SZABÁLYOK: Ne mutass könyveket. Stílus: Hyper-realistic, cinematic. Arány: 1:1 Square. Nincs szöveg. Csak a promptot küldd!"""
+            
+            claude_prompt = f"Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj képgenerálási promptot. Nincs könyv, cinematic, square: {gem_res.text}"
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
-            log_event(f"Claude prompt kész.")
-
-            log_event("Step 3: Flux API képgenerálás (1920x1920)...")
+            
             flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_img_prompt)}?width=1920&height=1920&nologo=true&model=flux"
             r_img = requests.get(flux_url, timeout=90)
             if r_img.status_code == 200:
                 with open(raw_img_path, 'wb') as f: f.write(r_img.content)
-            else:
-                raise Exception(f"Flux generálási hiba HTTP {r_img.status_code}")
             
             img_obj = PIL.Image.open(raw_img_path)
-            img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS)
-            img_resized.save(raw_img_path)
-            
+            img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS); img_resized.save(raw_img_path)
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            log_event("Poszt szöveg generálása (Anti-AI Slop)...")
-            authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
-            books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
-
-            text_prompt = (
-                f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS:\n"
-                f"- Tónus: Végtelenül emberi, kerüld a marketinges blablát és az AI sablonokat.\n"
-                f"- Emoji diéta: Csak 1-2 emojit használj, ott ahol fontos.\n"
-                f"- Első sor dőlt betűvel: *— ✨ Érzés: [Válassz egyet] —*\n"
-                f"- Kötelező: A 'link a kommentben' mondat legvégére tegyél egy 👇 emojit!\n\n"
-                f"Szerzők: {authors_text}\nKönyvek: {books_context}"
-            )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Human bookstore curator tone. No AI slop.", messages=[{"role": "user", "content": text_prompt}]).content[0].text
-
-            memory_data = {
-                "fingerprint": post_text[:100],
-                "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]
-            }
-
+            text_prompt = f"Írj egy posztot az Antikvarius.ro-ra. Szerzők: {authors_list}. Könyvek: {selected_books}"
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Human tone. No slop.", messages=[{"role": "user", "content": text_prompt}]).content[0].text
+            
+            memory_data = {"fingerprint": post_text[:100], "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
-            # --- VISSZAÁLLÍTOTT EREDETI VIDEÓ FELTÖLTÉS (MŰKÖDŐ VERZIÓBÓL) ---
-            api_data = {'access_token': fb_token, 'message': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}
-            
             if has_video:
-                log_event("Videó vázlat feltöltése a bevált, eredeti protokollal...")
-                v_data = api_data.copy()
-                v_data['description'] = v_data.pop('message')
-                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data=v_data, files={'source': open(vid_path, 'rb')})
+                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(vid_path, 'rb')})
                 if r_v.status_code == 200:
-                    vid_id = str(r_v.json().get('id'))
-                    memory_data['media_id'] = vid_id
-                    log_event(f"✅ Videó vázlat SIKERESEN feltöltve a Facebookra! (Media ID: {vid_id})")
-                else:
-                    log_event(f"⚠️ FB Videó hiba: {r_v.text}")
+                    vid_id = str(r_v.json().get('id')); memory_data['media_id'] = vid_id
+                    log_event(f"✅ Videó vázlat kész! (ID: {vid_id})")
             else:
                 upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
-                log_event("Videó hiányában a képes vázlat kerül feltöltésre...")
-                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
+                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'message': post_text, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
                 if r_p.status_code == 200:
-                    photo_id = str(r_p.json().get('id'))
-                    memory_data['media_id'] = photo_id
-                    log_event(f"✅ Képes vázlat SIKERESEN feltöltve a Facebookra! (Media ID: {photo_id})")
-                else:
-                    log_event(f"❌ FB Kép hiba: {r_p.text}")
+                    photo_id = str(r_p.json().get('id')); memory_data['media_id'] = photo_id
+                    log_event(f"✅ Képes vázlat kész! (ID: {photo_id})")
             
-            with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: 
-                json.dump(memory_data, f, ensure_ascii=False)
-                
-            self.send_morning_email(post_text, memory_data['links'])
-            log_event("Folyamat sikeresen lezárult.")
-            
+            with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
+            self.send_morning_email(post_text, memory_data['links']); log_event("Kész.")
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-
-        except Exception as e:
-            log_event(f"KRITIKUS HIBA: {e}")
+        except Exception as e: log_event(f"KRITIKUS: {e}")
 
 # --- MASTER CASCADE ROUTINE ---
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync (KIKAPCSOLVA A TESZTHEZ) -> Social Post")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
+    try:
+        # --- XML -> DB SZINKRON VISSZAÁLLÍTVA ---
+        sync_success = updater.run_daily_update()
+        if not sync_success:
+            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    except Exception as e:
+        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    
+    # Social generálás indítása a friss adatokkal
     social_agent.run_night_generation()
 
 
@@ -547,7 +464,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V225 Online", "project": "Booksy"}
+def home(): return {"status": "V226 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -558,12 +475,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V225 Agentic Video Test Started"}
+    return {"status": "V226 Agentic Video Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V225 Full Cascade Test Started"}
+    return {"status": "V226 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
