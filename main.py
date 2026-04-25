@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V226 (THE FULL CASCADE EDITION)
-# VERZIÓ: V226 - RE-ENABLED DATABASE SYNC CASCADE + PRESERVED OMNI-RADAR & TYPOGRAPHY
+# BOOKSY BRAIN - V227 (THE TROJAN DALL-E EDITION)
+# VERZIÓ: V227 - DALL-E 3 (NO FACES) + DUAL VERIFICATION + TROJAN HORSE COMMENTING + SYNC SUSPENDED
 
 __import__('pysqlite3')
 import sys
@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 import anthropic 
+from openai import OpenAI
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from typing import List, Optional, Dict, Any
@@ -252,23 +253,35 @@ class BooksyBrain:
                 log_event(err_msg)
                 return {"reply": err_msg, "products": []}
 
-            comment_text = "📚 A mai válogatásunk kincseit itt éred el:\n\n"
-            for book in memory.get("links", []):
-                res = self.db.collection.get(ids=[book.get('id', 'None')])
-                status = " ❌ (Már el is kelt!)" if (res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock') else ""
-                author = f"{book['author']} - " if (book.get('author') and book['author'] != 'Ismeretlen') else ""
-                comment_text += f"📖 {author}{book['title']}{status}\n🔗 {book['url']}\n\n"
+            # --- TRÓJAI FALÓ (BAIT & SWITCH) PROTOKOLL ---
+            clean_hook_text = "📚 A mai válogatásunk kincseit és a szerzőket a válaszban találjátok! Aki kapja, marja! 😉👇"
+            log_event(f"Trójai Faló 1. Lépés: Tiszta horog küldése a(z) {target_post_id} azonosítóra...")
+            c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': clean_hook_text})
             
-            comment_text += "Aki kapja, marja! 😉"
-            log_event(f"Komment küldése a(z) {target_post_id} azonosítóra...")
-            c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': comment_text})
-            
-            if "id" in c_res.text:
-                log_event("✅ Komment sikeresen rögzítve a poszthoz/Reels-hez.")
-                return {"reply": "✅ Komment sikeresen kiment!", "products": []}
+            c_data = c_res.json()
+            if "id" in c_data:
+                parent_comment_id = c_data["id"]
+                log_event(f"✅ Horog sikeresen beakadt (ID: {parent_comment_id}). Trójai Faló 2. Lépés: Linkes rakomány küldése válaszként...")
+                
+                payload_text = ""
+                for book in memory.get("links", []):
+                    res = self.db.collection.get(ids=[book.get('id', 'None')])
+                    status = " ❌ (Már el is kelt!)" if (res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock') else ""
+                    author = f"{book['author']} - " if (book.get('author') and book['author'] != 'Ismeretlen') else ""
+                    payload_text += f"📖 {author}{book['title']}{status}\n🔗 {book['url']}\n\n"
+                
+                r_res = requests.post(f"https://graph.facebook.com/v19.0/{parent_comment_id}/comments", data={'access_token': fb_token, 'message': payload_text})
+                
+                if "id" in r_res.json():
+                    log_event("✅ Rakomány (Válasz) sikeresen rögzítve a horgon.")
+                    return {"reply": "✅ Komment (Trójai Faló) sikeresen kiment!", "products": []}
+                else:
+                    log_event(f"FB Hiba a válasznál: {r_res.text}")
+                    return {"reply": f"❌ FB hiba a válasz-kommentelésnél: {r_res.text}", "products": []}
             else:
-                log_event(f"FB Hiba: {c_res.text}")
-                return {"reply": f"❌ FB hiba a kommentelésnél: {c_res.text}", "products": []}
+                log_event(f"FB Hiba a főkommentnél: {c_res.text}")
+                return {"reply": f"❌ FB hiba a főkommentelésnél: {c_res.text}", "products": []}
+
         except Exception as e:
             log_event(f"Rendszerhiba: {e}")
             return {"reply": f"❌ Hiba: {e}", "products": []}
@@ -395,25 +408,52 @@ class BooksySocialAgent:
                         if len(selected_books) >= 5: break
 
             main_book = selected_books[0]; log_event(f"Fő könyv: {main_book['title']}")
-            analysis_prompt = f"Elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Leírás: {main_book.get('text_preview','')}. Adj tömör vizuális összefoglalót angolul!"
+            
+            # --- DUAL VERIFICATION PROTOCOL ---
+            log_event("Step 1: Gemini (2.5-flash) kutatás és cselekmény-elemzés...")
+            analysis_prompt = f"Keress rá a neten és elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Alapadat: {main_book.get('text_preview','')}. Tárd fel a pontos, valós cselekményt, kulcsjeleneteket és vizuális motívumokat az internetes tudásod alapján! Adj egy tömör, pontos vizuális összefoglalót angolul."
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
             
-            claude_prompt = f"Te egy filmes látványtervező vagy. Az alábbi elemzés alapján írj képgenerálási promptot. Nincs könyv, cinematic, square: {gem_res.text}"
+            log_event("Step 2: Claude vizuális keresztellenőrzés és prompt generálás...")
+            claude_prompt = f"Te egy filmes látványtervező vagy. Vesd össze a következő Gemini elemzést a saját irodalmi tudásoddal, és írj egy DALL-E 3 képgenerálási promptot. Elemzés: {gem_res.text} SZIGORÚ SZABÁLYOK: Szigorúan tilos emberi arcokat, alakokat vagy felismerhető személyeket generálni! Csak titokzatos antikváriumi enteriőr, könyvgerincek, fények és árnyékok sziluettek engedélyezettek. Stílus: Hyper-realistic, cinematic. Nincs szöveg a képen. Csak a promptot küldd!"
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
             
-            flux_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_img_prompt)}?width=1920&height=1920&nologo=true&model=flux"
-            r_img = requests.get(flux_url, timeout=90)
+            # --- DALL-E 3 INTEGRATION ---
+            log_event("Step 3: DALL-E 3 API képgenerálás (1024x1024 HD -> 1920x1920)...")
+            openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            img_res = openai_client.images.generate(
+                model="dall-e-3",
+                prompt=final_img_prompt,
+                size="1024x1024",
+                quality="hd",
+                n=1
+            )
+            img_url = img_res.data[0].url
+            r_img = requests.get(img_url, timeout=90)
             if r_img.status_code == 200:
                 with open(raw_img_path, 'wb') as f: f.write(r_img.content)
+            else:
+                raise Exception(f"DALL-E letöltési hiba HTTP {r_img.status_code}")
             
             img_obj = PIL.Image.open(raw_img_path)
             img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS); img_resized.save(raw_img_path)
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            text_prompt = f"Írj egy posztot az Antikvarius.ro-ra. Szerzők: {authors_list}. Könyvek: {selected_books}"
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Human tone. No slop.", messages=[{"role": "user", "content": text_prompt}]).content[0].text
+            log_event("Poszt szöveg generálása (CopySEO Ketrec)...")
+            authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
+            books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
+
+            text_prompt = (
+                f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS ÉS SZABÁLYOK (SZIGORÚ!):\n"
+                f"1. Tónus: Végtelenül emberi, kerüld a marketinges blablát.\n"
+                f"2. Hook - Story - CTA felépítés.\n"
+                f"3. ZÉRÓ LINK: Szigorúan TILOS bármilyen URL-t, 'http' vagy 'https' hivatkozást beleírni a poszt szövegébe!\n"
+                f"4. A poszt legvégére kötelezően, pontosan ezt a mondatot írd: 'A mai válogatásunkat és a könyvek linkjeit keressétek az első kommentben! 👇'\n\n"
+                f"Szerzők: {authors_text}\nKönyvek: {books_context}"
+            )
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": text_prompt}]).content[0].text
             
             memory_data = {"fingerprint": post_text[:100], "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
@@ -440,16 +480,14 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
-    try:
-        # --- XML -> DB SZINKRON VISSZAÁLLÍTVA ---
-        sync_success = updater.run_daily_update()
-        if not sync_success:
-            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
-    except Exception as e:
-        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync (IDEIGLENESEN KIKAPCSOLVA) -> Social Post")
+    # try:
+    #     sync_success = updater.run_daily_update()
+    #     if not sync_success:
+    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    # except Exception as e:
+    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
-    # Social generálás indítása a friss adatokkal
     social_agent.run_night_generation()
 
 
@@ -464,7 +502,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V226 Online", "project": "Booksy"}
+def home(): return {"status": "V227 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -475,12 +513,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V226 Agentic Video Test Started"}
+    return {"status": "V227 Agentic DALL-E & Trojan Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V226 Full Cascade Test Started"}
+    return {"status": "V227 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
