@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V232 (THE MASTERPIECE EDITION)
-# VERZIÓ: V232 - ZERO-TOLERANCE GRAMMAR + 35MM REALISTIC VISUALS + FORCED MARKETING BRIDGE + TROJAN API
+# BOOKSY BRAIN - V233 (THE MASTERPIECE EDITION - CASCADE ACTIVE)
+# VERZIÓ: V233 - ZERO-TOLERANCE GRAMMAR + 35MM REALISTIC VISUALS + FORCED MARKETING BRIDGE + TROJAN API + DB SYNC ACTIVE
 
 __import__('pysqlite3')
 import sys
@@ -396,7 +396,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V232 Masterpiece)...")
+        log_event("Agentic Generálás indítása (V233 Masterpiece)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -573,13 +573,13 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync (IDEIGLENESEN KIKAPCSOLVA) -> Social Post")
-    # try:
-    #     sync_success = updater.run_daily_update()
-    #     if not sync_success:
-    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
-    # except Exception as e:
-    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
+    try:
+        sync_success = updater.run_daily_update()
+        if not sync_success:
+            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    except Exception as e:
+        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
     social_agent.run_night_generation()
 
@@ -595,7 +595,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V232 Online", "project": "Booksy"}
+def home(): return {"status": "V233 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -606,12 +606,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V232 Agentic Masterpiece Test Started"}
+    return {"status": "V233 Agentic Masterpiece Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V232 Full Cascade Test Started"}
+    return {"status": "V233 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
