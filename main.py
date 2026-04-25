@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V231 (THE ULTIMATE LITERARY MARKETING EDITION)
-# VERZIÓ: V231 - STRICT WRITERS + NLP TAGS + LITERARY BRIDGE + 1-SENTENCE PITCHES + 2-STEP LECTORING + HARDCODED CTA
+# BOOKSY BRAIN - V232 (THE MASTERPIECE EDITION)
+# VERZIÓ: V232 - ZERO-TOLERANCE GRAMMAR + 35MM REALISTIC VISUALS + FORCED MARKETING BRIDGE + TROJAN API
 
 __import__('pysqlite3')
 import sys
@@ -396,7 +396,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V231 Master Lexicon & Marketing)...")
+        log_event("Agentic Generálás indítása (V232 Masterpiece)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -446,22 +446,23 @@ class BooksySocialAgent:
             main_book = selected_books[0]; log_event(f"Vizuális Fókusz Könyv: {main_book['title']} by {main_book.get('author', '')}")
 
             # --- STEP 3: GENERATE MARKETING DESCRIPTIONS (CLAUDE) ---
-            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing)...")
+            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing + Grammatikai Szigor)...")
             for b in selected_books:
-                desc_prompt = f"Könyv: {b['title']} - {b['author']}. Rövid infó: {b.get('text_preview', '')}. Írj EGYETLEN, magával ragadó, zamatos magyar nyelvű marketing mondatot, ami meghozza a kedvet az olvasáshoz! Ne csak a tartalmat írd le, add el az élményt. Csak a mondatot add vissza!"
+                desc_prompt = f"Könyv: {b['title']} - {b['author']}. Rövid infó: {b.get('text_preview', '')}. Írj EGYETLEN, magával ragadó, zamatos magyar nyelvű marketing mondatot, ami meghozza a kedvet az olvasáshoz! Tökéletes nyelvhelyességgel, megfelelő ékezetekkel (ő, ű) és mondatzáró írásjellel. Ne csak a tartalmat írd le, add el az élményt. Csak a mondatot add vissza!"
                 b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=100, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
             
-            # --- STEP 4: VISUAL FOCUS (DEEP SCAN & REALISTIC DALL-E) ---
-            log_event("Step 4: A fókusz-könyv mélyelemzése (Gemini) és DALL-E 3 képgenerálás...")
+            # --- STEP 4: VISUAL FOCUS (DEEP SCAN & 35MM REALISTIC DALL-E) ---
+            log_event("Step 4: A fókusz-könyv mélyelemzése (Gemini) és 35mm-es DALL-E 3 képgenerálás...")
             analysis_prompt = f"Végezz alapos netes kutatást és elemezd ki ezt a KÖNYVET: '{main_book['title']}' írta {main_book.get('author','valaki')}. Alapadat: {main_book.get('text_preview','')}. Tárd fel a pontos, valós cselekményt, kulcsjeleneteket és vizuális motívumokat hallucináció nélkül! Adj egy tömör, pontos vizuális összefoglalót angolul."
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
             
             claude_prompt = (
-                f"Te egy filmes látványtervező vagy. Vesd össze a Gemini elemzését a saját irodalmi tudásoddal, és írj egy DALL-E 3 képgenerálási promptot. "
+                f"Te egy filmes látványtervező vagy. Vesd össze a Gemini elemzését a saját irodalmi tudásoddal, és írj egy DALL-E 3 képgenerálási promptot angolul. "
                 f"Elemzés: {gem_res.text} SZIGORÚ SZABÁLYOK: A promptnak 100%-ban meg kell felelnie az OpenAI biztonsági irányelveinek (G-rated). "
                 f"Nincs erőszak vagy felkavaró utalás. Emberek és arcok megengedettek a képen, DE ha embert ábrázolsz, annak SZIGORÚAN maximálisan "
                 f"élethűnek, fotorealisztikusnak és anatómiailag hibátlannak kell lennie! Hallucináció, elfolyó részletek vagy torzulás szigorúan tilos! "
-                f"Stílus: Hyper-realistic, cinematic. Nincs szöveg a képen. Csak a promptot küldd!"
+                f"Stílus: 35mm-es filmkocka, anamorfikus lencse, természetes szemcsézettség (film grain), mély árnyékok és organikus textúrák. "
+                f"Mintha egy 90-es évekbeli klasszikus kosztümös filmből vágták volna ki. Zéró 'műanyag' vagy tipikus AI hatás. Nincs szöveg a képen. Csak a promptot küldd!"
             )
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
@@ -479,7 +480,7 @@ class BooksySocialAgent:
                 log_event("✅ DALL-E 3 kép sikeresen legenerálva az elsődleges prompttal.")
             except Exception as dalle_err:
                 log_event(f"⚠️ DALL-E 3 Hiba: {dalle_err}. Biztonsági Fallback aktiválása...")
-                safe_prompt = "A beautiful, cinematic, hyper-realistic antique book on a dark wooden table lit by a single candle. Completely safe, no people, abstract and atmospheric."
+                safe_prompt = "A beautiful, cinematic, 35mm film frame of an antique book on a dark wooden table lit by a single candle. Deep shadows, film grain, organic textures, completely safe, no people, abstract and atmospheric."
                 img_res = openai_client.images.generate(
                     model="dall-e-3",
                     prompt=safe_prompt,
@@ -501,36 +502,43 @@ class BooksySocialAgent:
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            # --- STEP 5: POST TEXT DRAFTING (NLP, BRIDGE) ---
-            log_event("Step 5: Napi Lexikon poszt szöveg generálása (CopySEO Vázlat)...")
+            # --- STEP 5: POST TEXT DRAFTING (FORCED BRIDGE) ---
+            log_event("Step 5: Napi Lexikon poszt szöveg generálása (CopySEO Vázlat - Kötelező Híddal)...")
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
 
             draft_prompt = (
                 f"Írj egy posztot az Antikvarius.ro FB oldalára. Koncepció: Napi 'irodalmi naptár' és mini lexikon.\n"
                 f"SZIGORÚ SZERKEZETI SZABÁLYOK:\n"
-                f"1. A poszt LÉGELSŐ sora kötelezően egy Facebook NLP érzelem címke legyen pontosan így: [Érzés: inspirált 🌟] vagy hasonló (magyarosan).\n"
-                f"2. Készíts megemlékezést az alábbi 6, ma született íróról (mini lexikonként):\n{authors_text}\n\n"
-                f"3. IRODALMI HÍD (MARKETING ÁTVEZETÉS): A lexikon után írj egy kifinomult, de erőteljes átvezetőt (2-3 mondat). "
-                f"A narratíva: Bár ezeknek az óriásoknak a kötetei ma épp más szerencsés gyűjtők polcait díszítik nálunk, az irodalmi szomjunkat az "
-                f"ő szellemiségükben válogatott mai kincsekkel csillapítjuk. Külön emeld ki a válogatás első darabját: {main_book['title']} by {main_book.get('author', '')}.\n\n"
+                f"1. A poszt LÉGELSŐ sora kötelezően egy Facebook NLP érzelem címke legyen pontosan így: [Érzés: inspirált 🌟] vagy [Érzés: nosztalgikus 📚].\n"
+                f"2. MINI LEXIKON: Készíts megemlékezést az alábbi 6, ma született íróról:\n{authors_text}\n\n"
+                f"3. KÖTELEZŐ IRODALMI HÍD (MARKETING ÁTVEZETÉS): A lexikon után kötelezően írj egy kifinomult, de erőteljes átvezetőt (minimum 3-4 mondat). "
+                f"A narratíva: Magyarázd el az olvasónak, hogy bár a szülinapos írók ritka kincsek és a köteteik ma épp más szerencsés gyűjtők polcait díszítik nálunk, "
+                f"az ő szellemiségüket ma is megtalálják a polcainkon. Külön emeld ki a válogatás első darabját: '{main_book['title']}' by {main_book.get('author', '')}. "
+                f"Ez az átvezetés KÖTELEZŐ, nem maradhat ki!\n\n"
                 f"TOVÁBBI SZABÁLYOK:\n"
                 f"- Tónus: Zamatos, választékos, gyönyörű magyar nyelvezet. Úgy írj, mint egy szenvedélyes, művelt antikvárius.\n"
-                f"- ZÉRÓ LINK: Szigorúan TILOS bármilyen URL-t, 'http' vagy 'https' hivatkozást beleírni a poszt szövegébe!\n"
+                f"- ZÉRÓ LINK a posztban!\n"
             )
             draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
             
-            # --- STEP 6: 2-STEP LECTORING (SELF-CORRECTION) ---
-            log_event("Step 6: Kétlépcsős Lektorálás (Agentic Nyelvtani Ellenőrzés)...")
+            # --- STEP 6: 2-STEP LECTORING (ZERO TOLERANCE) ---
+            log_event("Step 6: Kétlépcsős Lektorálás (Zero-Tolerance Nyelvtani Ellenőrzés)...")
             lector_prompt = (
-                f"Az alábbi Facebook poszt vázlatot lektoráld! Végezz kőkemény nyelvtani és stilisztikai ellenőrzést. "
+                f"Az alábbi Facebook poszt vázlatot lektoráld! Végezz kőkemény, karakterenkénti nyelvtani és stilisztikai ellenőrzést. "
+                f"Különös figyelmet fordíts a mondatzáró írásjelekre (minden felsorolás és mondat végén legyen pont vagy megfelelő írásjel!), "
+                f"a kettős ékezetekre (ő, ű helyes használata) és a gépelési hibákra. "
                 f"Legyen tökéletesen magyaros, zamatos, választékos, mentes az anglicizmusoktól (tükörfordításoktól) és a fogalmazási hibáktól. "
-                f"Őrizd meg az NLP '[Érzés: ...]' címkét az elején. NE írj bevezetőt (pl. 'Itt a javított verzió:'), csak a tökéletes, végleges poszt szövegét add vissza!\n\n"
+                f"Őrizd meg az NLP '[Érzés: ...]' címkét a legelső sorban, és ellenőrizd a 'KÖTELEZŐ IRODALMI HÍD' jelenlétét. "
+                f"NE írj bevezetőt, csak a tökéletes, végleges poszt szövegét add vissza!\n\n"
                 f"VÁZLAT:\n{draft_text}"
             )
             post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
 
-            # --- STEP 7: INTEGRITY CHECK FOR CTA ---
-            log_event("Step 7: CTA Integritás-vizsgálat (Hardcoded)...")
+            # --- STEP 7: INTEGRITY CHECKS (HARDCODED CTA & NLP FALLBACK) ---
+            log_event("Step 7: Belső Python Integritás-vizsgálat (NLP & CTA)...")
+            if not re.search(r'\[Érzés:.*?\]', post_text):
+                post_text = "[Érzés: inspirált 🌟]\n\n" + post_text
+
             if "keressétek az első kommentben" not in post_text.lower():
                 post_text += "\n\nA mai válogatásunkat és a könyvek elérhetőségét keressétek az első kommentben! 👇"
 
@@ -587,7 +595,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V231 Online", "project": "Booksy"}
+def home(): return {"status": "V232 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -598,12 +606,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V231 Agentic Literary Marketing Test Started"}
+    return {"status": "V232 Agentic Masterpiece Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V231 Full Cascade Test Started"}
+    return {"status": "V232 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
