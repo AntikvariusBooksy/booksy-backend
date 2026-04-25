@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V230 (THE PERFECT LEXICON EDITION)
-# VERZIÓ: V230 - STRICT WRITER FILTER + NLP TAGS + SMART MARKETING TRANSITION + HARDCODED CTA + REALISTIC FACES
+# BOOKSY BRAIN - V231 (THE ULTIMATE LITERARY MARKETING EDITION)
+# VERZIÓ: V231 - STRICT WRITERS + NLP TAGS + LITERARY BRIDGE + 1-SENTENCE PITCHES + 2-STEP LECTORING + HARDCODED CTA
 
 __import__('pysqlite3')
 import sys
@@ -253,7 +253,7 @@ class BooksyBrain:
                 log_event(err_msg)
                 return {"reply": err_msg, "products": []}
 
-            # --- TRÓJAI FALÓ (BAIT & SWITCH) PROTOKOLL ---
+            # --- TRÓJAI FALÓ PROTOKOLL ---
             clean_hook_text = "📚 A mai válogatásunk kincseit és a könyvek elérhetőségét a válaszban találjátok! Aki kapja, marja! 😉👇"
             log_event(f"Trójai Faló 1. Lépés: Tiszta horog küldése a(z) {target_post_id} azonosítóra...")
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': clean_hook_text})
@@ -261,16 +261,18 @@ class BooksyBrain:
             c_data = c_res.json()
             if "id" in c_data:
                 parent_comment_id = c_data["id"]
-                log_event(f"✅ Horog sikeresen beakadt (ID: {parent_comment_id}). Trójai Faló 2. Lépés: Linkes rakomány küldése válaszként...")
+                log_event(f"✅ Horog beakadt (ID: {parent_comment_id}). Trójai Faló 2. Lépés: Linkes rakomány küldése válaszként...")
                 
                 payload_text = ""
                 for book in memory.get("links", []):
                     res = self.db.collection.get(ids=[book.get('id', 'None')])
                     status = " ❌ (Már el is kelt!)" if (res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock') else ""
                     author = f"{book['author']} - " if (book.get('author') and book['author'] != 'Ismeretlen') else ""
-                    payload_text += f"📖 {author}{book['title']}{status}\n🔗 {book['url']}\n\n"
+                    m_desc = book.get('marketing_desc', '')
+                    
+                    payload_text += f"📖 {author}{book['title']}{status}\n{m_desc}\n🔗 {book['url']}\n\n"
                 
-                r_res = requests.post(f"https://graph.facebook.com/v19.0/{parent_comment_id}/comments", data={'access_token': fb_token, 'message': payload_text})
+                r_res = requests.post(f"https://graph.facebook.com/v19.0/{parent_comment_id}/comments", data={'access_token': fb_token, 'message': payload_text.strip()})
                 
                 if "id" in r_res.json():
                     log_event("✅ Rakomány (Válasz) sikeresen rögzítve a horgon.")
@@ -319,7 +321,7 @@ class BooksySocialAgent:
             links_body = ""
             for b in memory_links:
                 author_display = f"{b['author']} - " if b.get('author') and b['author'] != 'Ismeretlen' else ""
-                links_body += f"📖 {author_display}{b['title']}\n🔗 {b['url']}\n\n"
+                links_body += f"📖 {author_display}{b['title']}\n{b.get('marketing_desc', '')}\n🔗 {b['url']}\n\n"
 
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
             server.starttls(); server.login(sender, password)
@@ -327,7 +329,7 @@ class BooksySocialAgent:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
                 msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nMiután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot a kommenthez!\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY (MÁSOLHATÓ):\n{links_body}"
+                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nMiután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot a kommenthez!\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY (MÁSOLHATÓ):\n{links_body.strip()}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
@@ -394,7 +396,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V230 Master Lexicon)...")
+        log_event("Agentic Generálás indítása (V231 Master Lexicon & Marketing)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -442,9 +444,15 @@ class BooksySocialAgent:
                         if len(selected_books) >= 5: break
 
             main_book = selected_books[0]; log_event(f"Vizuális Fókusz Könyv: {main_book['title']} by {main_book.get('author', '')}")
+
+            # --- STEP 3: GENERATE MARKETING DESCRIPTIONS (CLAUDE) ---
+            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing)...")
+            for b in selected_books:
+                desc_prompt = f"Könyv: {b['title']} - {b['author']}. Rövid infó: {b.get('text_preview', '')}. Írj EGYETLEN, magával ragadó, zamatos magyar nyelvű marketing mondatot, ami meghozza a kedvet az olvasáshoz! Ne csak a tartalmat írd le, add el az élményt. Csak a mondatot add vissza!"
+                b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=100, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
             
-            # --- STEP 3: VISUAL FOCUS (DEEP SCAN & REALISTIC DALL-E) ---
-            log_event("Step 3: A fókusz-könyv mélyelemzése (Gemini) és DALL-E 3 képgenerálás...")
+            # --- STEP 4: VISUAL FOCUS (DEEP SCAN & REALISTIC DALL-E) ---
+            log_event("Step 4: A fókusz-könyv mélyelemzése (Gemini) és DALL-E 3 képgenerálás...")
             analysis_prompt = f"Végezz alapos netes kutatást és elemezd ki ezt a KÖNYVET: '{main_book['title']}' írta {main_book.get('author','valaki')}. Alapadat: {main_book.get('text_preview','')}. Tárd fel a pontos, valós cselekményt, kulcsjeleneteket és vizuális motívumokat hallucináció nélkül! Adj egy tömör, pontos vizuális összefoglalót angolul."
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
             
@@ -493,33 +501,41 @@ class BooksySocialAgent:
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            # --- STEP 4: POST TEXT GENERATION (NLP & MARKETING TRANSITION) ---
-            log_event("Step 4: Napi Lexikon poszt szöveg generálása (CopySEO Ketrec, NLP & Átvezetés)...")
+            # --- STEP 5: POST TEXT DRAFTING (NLP, BRIDGE) ---
+            log_event("Step 5: Napi Lexikon poszt szöveg generálása (CopySEO Vázlat)...")
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
-            books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
 
-            text_prompt = (
+            draft_prompt = (
                 f"Írj egy posztot az Antikvarius.ro FB oldalára. Koncepció: Napi 'irodalmi naptár' és mini lexikon.\n"
                 f"SZIGORÚ SZERKEZETI SZABÁLYOK:\n"
-                f"1. A poszt LÉGELSŐ sora kötelezően egy Facebook NLP érzelem címke legyen (pl. [Érzi: inspiráltan 🌟] vagy hasonló).\n"
+                f"1. A poszt LÉGELSŐ sora kötelezően egy Facebook NLP érzelem címke legyen pontosan így: [Érzés: inspirált 🌟] vagy hasonló (magyarosan).\n"
                 f"2. Készíts megemlékezést az alábbi 6, ma született íróról (mini lexikonként):\n{authors_text}\n\n"
-                f"3. MARKETING ÁTVEZETÉS: A lexikon után KÖTELEZŐ egy logikus, emberi átvezetés! Írd bele konkrétan, hogy ezeknek a "
-                f"zseniknek a szellemisége él tovább a polcainkon, ahol ma olyan könyvek is várnak rátok, mint például: {books_context}. "
-                f"Külön emeld ki a legelső könyvet a listáról, hogy logikus legyen a poszthoz csatolt kép!\n\n"
+                f"3. IRODALMI HÍD (MARKETING ÁTVEZETÉS): A lexikon után írj egy kifinomult, de erőteljes átvezetőt (2-3 mondat). "
+                f"A narratíva: Bár ezeknek az óriásoknak a kötetei ma épp más szerencsés gyűjtők polcait díszítik nálunk, az irodalmi szomjunkat az "
+                f"ő szellemiségükben válogatott mai kincsekkel csillapítjuk. Külön emeld ki a válogatás első darabját: {main_book['title']} by {main_book.get('author', '')}.\n\n"
                 f"TOVÁBBI SZABÁLYOK:\n"
-                f"- Tónus: Végtelenül emberi, érdekes, irodalmi, kerüld a sablonos marketinges blablát.\n"
+                f"- Tónus: Zamatos, választékos, gyönyörű magyar nyelvezet. Úgy írj, mint egy szenvedélyes, művelt antikvárius.\n"
                 f"- ZÉRÓ LINK: Szigorúan TILOS bármilyen URL-t, 'http' vagy 'https' hivatkozást beleírni a poszt szövegébe!\n"
             )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": text_prompt}]).content[0].text
+            draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
             
-            # --- STEP 4.5: INTEGRITY CHECK FOR CTA ---
-            log_event("Step 4.5: CTA Integritás-vizsgálat...")
+            # --- STEP 6: 2-STEP LECTORING (SELF-CORRECTION) ---
+            log_event("Step 6: Kétlépcsős Lektorálás (Agentic Nyelvtani Ellenőrzés)...")
+            lector_prompt = (
+                f"Az alábbi Facebook poszt vázlatot lektoráld! Végezz kőkemény nyelvtani és stilisztikai ellenőrzést. "
+                f"Legyen tökéletesen magyaros, zamatos, választékos, mentes az anglicizmusoktól (tükörfordításoktól) és a fogalmazási hibáktól. "
+                f"Őrizd meg az NLP '[Érzés: ...]' címkét az elején. NE írj bevezetőt (pl. 'Itt a javított verzió:'), csak a tökéletes, végleges poszt szövegét add vissza!\n\n"
+                f"VÁZLAT:\n{draft_text}"
+            )
+            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
+
+            # --- STEP 7: INTEGRITY CHECK FOR CTA ---
+            log_event("Step 7: CTA Integritás-vizsgálat (Hardcoded)...")
             if "keressétek az első kommentben" not in post_text.lower():
-                log_event("⚠️ Claude kihagyta a CTA-t. Biztonsági protokoll: Automatikus hozzáfűzés.")
                 post_text += "\n\nA mai válogatásunkat és a könyvek elérhetőségét keressétek az első kommentben! 👇"
 
-            # --- STEP 5: PUBLISH & MEMORY ---
-            memory_data = {"fingerprint": post_text[:100], "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
+            # --- STEP 8: PUBLISH & MEMORY ---
+            memory_data = {"fingerprint": post_text[:100], "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]}
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
             if has_video:
@@ -571,7 +587,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V230 Online", "project": "Booksy"}
+def home(): return {"status": "V231 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -582,12 +598,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V230 Agentic Perfect Lexicon Test Started"}
+    return {"status": "V231 Agentic Literary Marketing Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V230 Full Cascade Test Started"}
+    return {"status": "V231 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
