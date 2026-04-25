@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V228 (THE FAILSAFE DALL-E & TROJAN EDITION)
-# VERZIÓ: V228 - DUAL VERIFICATION + DALL-E 3 FALLBACK + TROJAN COMMENTS + ERROR EMAILS
+# BOOKSY BRAIN - V229 (THE MASTER LEXICON & TROJAN EDITION)
+# VERZIÓ: V229 - WIKI+GEMINI AUTHORS + DEEP BOOK SCAN + DALL-E FALLBACK + TROJAN COMMENT + ERROR EMAIL
 
 __import__('pysqlite3')
 import sys
@@ -188,7 +188,7 @@ class BooksyBrain:
 
     def _trigger_fb_comment(self, force_post_id=None):
         try:
-            log_event(f"Indítás: FB Komment Bot. Force ID: {force_post_id}")
+            log_event(f"Indítás: FB Komment Bot (Trojan). Force ID: {force_post_id}")
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs memória fájl.", "products": []}
@@ -254,7 +254,7 @@ class BooksyBrain:
                 return {"reply": err_msg, "products": []}
 
             # --- TRÓJAI FALÓ (BAIT & SWITCH) PROTOKOLL ---
-            clean_hook_text = "📚 A mai válogatásunk kincseit és a szerzőket a válaszban találjátok! Aki kapja, marja! 😉👇"
+            clean_hook_text = "📚 A mai válogatásunk kincseit és a könyvek elérhetőségét a válaszban találjátok! Aki kapja, marja! 😉👇"
             log_event(f"Trójai Faló 1. Lépés: Tiszta horog küldése a(z) {target_post_id} azonosítóra...")
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': clean_hook_text})
             
@@ -394,21 +394,32 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása...")
+        log_event("Agentic Generálás indítása (V229 Master Lexicon)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
+            # --- STEP 1: WIKIPEDIA + GEMINI AUTHOR SELECTION ---
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
-            r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
-            writers = []
-            if r_wiki.status_code == 200:
-                for p in r_wiki.json().get('births', []):
-                    if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet']): writers.append(p)
+            log_event(f"Step 1: Élő API lekérdezés a mai napról ({today_date}) és Gemini Kereszttűz...")
             
-            prompt_wiki = f"Today is {today_date}. Provide EXACTLY 6 writers born today (inc. Hungarian/Romanian) in XML format <authors><author><name>...</name><nationality>...</nationality><bio>...</bio></author></authors>."
-            r_claude_wiki = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt_wiki}])
-            authors_list = safe_authors_parse(r_claude_wiki.content[0].text)[:6]
+            r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
+            wiki_text = "Nem található adat."
+            if r_wiki.status_code == 200:
+                births = [p.get('text', '') for p in r_wiki.json().get('births', []) if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet', 'novelist'])]
+                wiki_text = "\n".join(births[:30])
+            
+            author_prompt = (
+                f"Ma {today_date} van. Itt egy nyers lista a Wikipédiáról a mai napon született írókról: {wiki_text}\n"
+                f"Végezz élő internetes kutatást és ellenőrzést a tudásbázisodban! Válaszd ki a legrelevánsabb pontosan 6 írót.\n"
+                f"Prioritás: Ha a listában van magyar vagy román író, kötelezően vedd be! A többit töltsd fel világhírű klasszikusokkal.\n"
+                f"Készíts róluk egy 'mini lexikon' megemlékezést (1-2 mondat/író). SZIGORÚ KIMENET: Csak és kizárólag XML formátumot adj vissza, semmi mást!\n"
+                f"Formátum: <authors><author><name>Író Neve</name><nationality>Nemzetiség</nationality><bio>Rövid életrajz, stílus és legismertebb műve.</bio></author></authors>"
+            )
+            gem_authors_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[author_prompt])
+            authors_list = safe_authors_parse(gem_authors_res.text)[:6]
 
+            # --- STEP 2: INVENTORY CHECK (CHROMADB RADAR) ---
+            log_event("Step 2: Raktárkészlet ellenőrzése a kiválasztott írók alapján...")
             selected_books, seen_ids = [], set()
             for author in authors_list:
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=author['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
@@ -418,7 +429,8 @@ class BooksySocialAgent:
                         if p_target['id'] not in seen_ids:
                             selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
-            if len(selected_books) < 4:
+            if len(selected_books) < 3:
+                log_event("Figyelem: Kevesebb mint 3 könyv van a mai íróktól. Kiegészítés klasszikusokkal a kosár feltöltéséhez...")
                 vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 if res_fb['ids'] and res_fb['ids'][0]:
@@ -427,22 +439,18 @@ class BooksySocialAgent:
                             selected_books.append(p_target); seen_ids.add(p_target['id'])
                         if len(selected_books) >= 5: break
 
-            main_book = selected_books[0]; log_event(f"Fő könyv: {main_book['title']}")
+            main_book = selected_books[0]; log_event(f"Vizuális Fókusz Könyv: {main_book['title']}")
             
-            # --- DUAL VERIFICATION PROTOCOL ---
-            log_event("Step 1: Gemini (2.5-flash) kutatás és cselekmény-elemzés...")
-            analysis_prompt = f"Keress rá a neten és elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Alapadat: {main_book.get('text_preview','')}. Tárd fel a pontos, valós cselekményt, kulcsjeleneteket és vizuális motívumokat az internetes tudásod alapján! Adj egy tömör, pontos vizuális összefoglalót angolul."
+            # --- STEP 3: VISUAL FOCUS (DEEP SCAN & DALL-E) ---
+            log_event("Step 3: A fókusz-könyv mélyelemzése (Gemini) és DALL-E 3 képgenerálás...")
+            analysis_prompt = f"Végezz alapos netes kutatást és elemezd ki ezt a könyvet: '{main_book['title']}' írta {main_book.get('author','valaki')}. Alapadat: {main_book.get('text_preview','')}. Tárd fel a pontos, valós cselekményt, kulcsjeleneteket és vizuális motívumokat! Adj egy tömör, pontos vizuális összefoglalót angolul."
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
             
-            log_event("Step 2: Claude vizuális keresztellenőrzés és prompt generálás...")
-            claude_prompt = f"Te egy filmes látványtervező vagy. Vesd össze a következő Gemini elemzést a saját irodalmi tudásoddal, és írj egy DALL-E 3 képgenerálási promptot. Elemzés: {gem_res.text} SZIGORÚ SZABÁLYOK: A promptnak 100%-ban meg kell felelnie az OpenAI biztonsági irányelveinek (G-rated). Szigorúan tilos erőszakos, szexuális vagy felkavaró utalás! Szigorúan tilos emberi arcokat, alakokat vagy felismerhető személyeket generálni! Csak titokzatos antikváriumi enteriőr, könyvgerincek, fények és árnyékok sziluettek engedélyezettek. Stílus: Hyper-realistic, cinematic. Nincs szöveg a képen. Csak a promptot küldd!"
+            claude_prompt = f"Te egy filmes látványtervező vagy. Vesd össze a Gemini elemzését a saját irodalmi tudásoddal, és írj egy DALL-E 3 képgenerálási promptot. Elemzés: {gem_res.text} SZIGORÚ SZABÁLYOK: A promptnak 100%-ban meg kell felelnie az OpenAI biztonsági irányelveinek (G-rated). Szigorúan tilos erőszakos vagy felkavaró utalás! Szigorúan tilos emberi arcokat, alakokat vagy felismerhető személyeket generálni! Csak titokzatos antikváriumi enteriőr, könyvgerincek, fények és árnyékok sziluettek engedélyezettek. Stílus: Hyper-realistic, cinematic. Nincs szöveg a képen. Csak a promptot küldd!"
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
             
-            # --- DALL-E 3 INTEGRATION WITH FALLBACK ---
-            log_event("Step 3: DALL-E 3 API képgenerálás (1024x1024 HD -> 1920x1920)...")
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            
             try:
                 img_res = openai_client.images.generate(
                     model="dall-e-3",
@@ -477,20 +485,24 @@ class BooksySocialAgent:
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            log_event("Poszt szöveg generálása (CopySEO Ketrec)...")
+            # --- STEP 4: POST TEXT GENERATION (COPYSEO LEXICON) ---
+            log_event("Step 4: Napi Lexikon poszt szöveg generálása (CopySEO Ketrec)...")
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
             books_context = "\n".join([f"- {b['title']} by {b['author']}" for b in selected_books])
 
             text_prompt = (
-                f"Írj egy posztot az Antikvarius.ro FB oldalára. STÍLUS ÉS SZABÁLYOK (SZIGORÚ!):\n"
-                f"1. Tónus: Végtelenül emberi, kerüld a marketinges blablát.\n"
+                f"Írj egy posztot az Antikvarius.ro FB oldalára. Koncepció: Napi 'irodalmi naptár' és mini lexikon.\n"
+                f"Készíts megemlékezést az alábbi 6, ma született íróról (mini lexikonként):\n{authors_text}\n\n"
+                f"A poszt második felében vezesd át a szót profi, emberi marketinggel arra, hogy ezeknek a zseniknek és más klasszikusoknak a műveit ma is megtalálják a polcainkon (mint pl: {books_context}).\n\n"
+                f"STÍLUS ÉS SZABÁLYOK (SZIGORÚ!):\n"
+                f"1. Tónus: Végtelenül emberi, érdekes, irodalmi, kerüld a sablonos marketinges blablát.\n"
                 f"2. Hook - Story - CTA felépítés.\n"
                 f"3. ZÉRÓ LINK: Szigorúan TILOS bármilyen URL-t, 'http' vagy 'https' hivatkozást beleírni a poszt szövegébe!\n"
-                f"4. A poszt legvégére kötelezően, pontosan ezt a mondatot írd: 'A mai válogatásunkat és a könyvek linkjeit keressétek az első kommentben! 👇'\n\n"
-                f"Szerzők: {authors_text}\nKönyvek: {books_context}"
+                f"4. A poszt legvégére kötelezően, pontosan ezt a mondatot írd: 'A mai válogatásunkat és a könyvek elérhetőségét keressétek az első kommentben! 👇'\n"
             )
             post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": text_prompt}]).content[0].text
             
+            # --- STEP 5: PUBLISH & MEMORY ---
             memory_data = {"fingerprint": post_text[:100], "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url']} for b in selected_books]}
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
@@ -514,7 +526,6 @@ class BooksySocialAgent:
             log_event(f"❌ KRITIKUS RENDSZERHIBA: {e}")
             self.send_error_email(err_trace)
         finally:
-            # Biztonságos takarítás, még hiba esetén is
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
 
@@ -544,7 +555,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V228 Online", "project": "Booksy"}
+def home(): return {"status": "V229 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -555,12 +566,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V228 Agentic DALL-E Fallback Test Started"}
+    return {"status": "V229 Agentic Master Lexicon Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V228 Full Cascade Test Started"}
+    return {"status": "V229 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
