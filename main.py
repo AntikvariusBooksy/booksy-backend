@@ -1,11 +1,11 @@
-# BOOKSY BRAIN - V227 (THE TROJAN DALL-E EDITION)
-# VERZIÓ: V227 - DALL-E 3 (NO FACES) + DUAL VERIFICATION + TROJAN HORSE COMMENTING + SYNC SUSPENDED
+# BOOKSY BRAIN - V228 (THE FAILSAFE DALL-E & TROJAN EDITION)
+# VERZIÓ: V228 - DUAL VERIFICATION + DALL-E 3 FALLBACK + TROJAN COMMENTS + ERROR EMAILS
 
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
-import os, time, requests, hashlib, re, json, random, unicodedata, html, urllib.parse, gc, chromadb, pytz, smtplib
+import os, time, requests, hashlib, re, json, random, unicodedata, html, urllib.parse, gc, chromadb, pytz, smtplib, traceback
 import numpy as np
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
@@ -291,6 +291,25 @@ class BooksySocialAgent:
         self.db = db
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+    def send_error_email(self, error_details):
+        try:
+            sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
+            admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
+            if not sender or not admin_emails: return
+            
+            server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
+            server.starttls(); server.login(sender, password)
+            for admin in admin_emails:
+                msg = MIMEMultipart()
+                msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
+                msg['Subject'] = f"⚠️ KRITIKUS HIBA: Booksy Social Agent ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                body = f"Üdv!\n\nA napi Facebook vázlat generálása során váratlan hiba történt. A folyamat megszakadt.\n\nRészletek a fejlesztőnek:\n\n{error_details}"
+                msg.attach(MIMEText(body, 'plain', 'utf-8'))
+                server.send_message(msg)
+            server.quit()
+            log_event("⚠️ Hiba e-mail sikeresen elküldve az adminoknak.")
+        except Exception as e: log_event(f"📧 Hiba az error e-mail küldésénél: {e}")
+
     def send_morning_email(self, post_text, memory_links):
         try:
             sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
@@ -377,6 +396,7 @@ class BooksySocialAgent:
     def run_night_generation(self):
         log_event("Agentic Generálás indítása...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
+        
         try:
             today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
             r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
@@ -415,21 +435,37 @@ class BooksySocialAgent:
             gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
             
             log_event("Step 2: Claude vizuális keresztellenőrzés és prompt generálás...")
-            claude_prompt = f"Te egy filmes látványtervező vagy. Vesd össze a következő Gemini elemzést a saját irodalmi tudásoddal, és írj egy DALL-E 3 képgenerálási promptot. Elemzés: {gem_res.text} SZIGORÚ SZABÁLYOK: Szigorúan tilos emberi arcokat, alakokat vagy felismerhető személyeket generálni! Csak titokzatos antikváriumi enteriőr, könyvgerincek, fények és árnyékok sziluettek engedélyezettek. Stílus: Hyper-realistic, cinematic. Nincs szöveg a képen. Csak a promptot küldd!"
+            claude_prompt = f"Te egy filmes látványtervező vagy. Vesd össze a következő Gemini elemzést a saját irodalmi tudásoddal, és írj egy DALL-E 3 képgenerálási promptot. Elemzés: {gem_res.text} SZIGORÚ SZABÁLYOK: A promptnak 100%-ban meg kell felelnie az OpenAI biztonsági irányelveinek (G-rated). Szigorúan tilos erőszakos, szexuális vagy felkavaró utalás! Szigorúan tilos emberi arcokat, alakokat vagy felismerhető személyeket generálni! Csak titokzatos antikváriumi enteriőr, könyvgerincek, fények és árnyékok sziluettek engedélyezettek. Stílus: Hyper-realistic, cinematic. Nincs szöveg a képen. Csak a promptot küldd!"
             c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
             final_img_prompt = c_res.content[0].text
             
-            # --- DALL-E 3 INTEGRATION ---
+            # --- DALL-E 3 INTEGRATION WITH FALLBACK ---
             log_event("Step 3: DALL-E 3 API képgenerálás (1024x1024 HD -> 1920x1920)...")
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            img_res = openai_client.images.generate(
-                model="dall-e-3",
-                prompt=final_img_prompt,
-                size="1024x1024",
-                quality="hd",
-                n=1
-            )
-            img_url = img_res.data[0].url
+            
+            try:
+                img_res = openai_client.images.generate(
+                    model="dall-e-3",
+                    prompt=final_img_prompt,
+                    size="1024x1024",
+                    quality="hd",
+                    n=1
+                )
+                img_url = img_res.data[0].url
+                log_event("✅ DALL-E 3 kép sikeresen legenerálva az elsődleges prompttal.")
+            except Exception as dalle_err:
+                log_event(f"⚠️ DALL-E 3 Hiba (Valószínűleg Content Policy): {dalle_err}. Biztonsági Fallback aktiválása...")
+                safe_prompt = "A beautiful, cinematic, hyper-realistic antique book on a dark wooden table lit by a single candle. Completely safe, no people, abstract and atmospheric."
+                img_res = openai_client.images.generate(
+                    model="dall-e-3",
+                    prompt=safe_prompt,
+                    size="1024x1024",
+                    quality="standard",
+                    n=1
+                )
+                img_url = img_res.data[0].url
+                log_event("✅ DALL-E 3 kép sikeresen legenerálva a biztonsági fallback prompttal.")
+
             r_img = requests.get(img_url, timeout=90)
             if r_img.status_code == 200:
                 with open(raw_img_path, 'wb') as f: f.write(r_img.content)
@@ -472,9 +508,15 @@ class BooksySocialAgent:
             
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
             self.send_morning_email(post_text, memory_data['links']); log_event("Kész.")
+            
+        except Exception as e:
+            err_trace = traceback.format_exc()
+            log_event(f"❌ KRITIKUS RENDSZERHIBA: {e}")
+            self.send_error_email(err_trace)
+        finally:
+            # Biztonságos takarítás, még hiba esetén is
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
-        except Exception as e: log_event(f"KRITIKUS: {e}")
 
 # --- MASTER CASCADE ROUTINE ---
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
@@ -502,7 +544,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V227 Online", "project": "Booksy"}
+def home(): return {"status": "V228 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -513,12 +555,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V227 Agentic DALL-E & Trojan Test Started"}
+    return {"status": "V228 Agentic DALL-E Fallback Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V227 Full Cascade Test Started"}
+    return {"status": "V228 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
