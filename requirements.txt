@@ -5,6 +5,7 @@ requests
 python-dotenv
 anthropic
 google-genai
+openai
 chromadb
 pysqlite3-binary
 apscheduler
