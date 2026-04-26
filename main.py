@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V233 (THE MASTERPIECE EDITION - CASCADE ACTIVE)
-# VERZIÓ: V233 - ZERO-TOLERANCE GRAMMAR + 35MM REALISTIC VISUALS + FORCED MARKETING BRIDGE + TROJAN API + DB SYNC ACTIVE
+# BOOKSY BRAIN - V234 (THE PROMPT CHAINING EDITION)
+# VERZIÓ: V234 - CHAINED PROMPTS (LEXICON THEN BRIDGE) + ZERO-TOLERANCE GRAMMAR + 35MM VISUALS + SYNC SUSPENDED
 
 __import__('pysqlite3')
 import sys
@@ -396,7 +396,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V233 Masterpiece)...")
+        log_event("Agentic Generálás indítása (V234 Prompt Chaining)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -502,8 +502,8 @@ class BooksySocialAgent:
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            # --- STEP 5: POST TEXT DRAFTING (FORCED BRIDGE) ---
-            log_event("Step 5: Napi Lexikon poszt szöveg generálása (CopySEO Vázlat - Kötelező Híddal)...")
+            # --- STEP 5: POST TEXT DRAFTING (PURE LEXICON ONLY) ---
+            log_event("Step 5: Napi Lexikon vázlat generálása (Kizárólag Lexikon, nincs Bridge)...")
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
 
             draft_prompt = (
@@ -511,38 +511,53 @@ class BooksySocialAgent:
                 f"SZIGORÚ SZERKEZETI SZABÁLYOK:\n"
                 f"1. A poszt LÉGELSŐ sora kötelezően egy Facebook NLP érzelem címke legyen pontosan így: [Érzés: inspirált 🌟] vagy [Érzés: nosztalgikus 📚].\n"
                 f"2. MINI LEXIKON: Készíts megemlékezést az alábbi 6, ma született íróról:\n{authors_text}\n\n"
-                f"3. KÖTELEZŐ IRODALMI HÍD (MARKETING ÁTVEZETÉS): A lexikon után kötelezően írj egy kifinomult, de erőteljes átvezetőt (minimum 3-4 mondat). "
-                f"A narratíva: Magyarázd el az olvasónak, hogy bár a szülinapos írók ritka kincsek és a köteteik ma épp más szerencsés gyűjtők polcait díszítik nálunk, "
-                f"az ő szellemiségüket ma is megtalálják a polcainkon. Külön emeld ki a válogatás első darabját: '{main_book['title']}' by {main_book.get('author', '')}. "
-                f"Ez az átvezetés KÖTELEZŐ, nem maradhat ki!\n\n"
                 f"TOVÁBBI SZABÁLYOK:\n"
                 f"- Tónus: Zamatos, választékos, gyönyörű magyar nyelvezet. Úgy írj, mint egy szenvedélyes, művelt antikvárius.\n"
                 f"- ZÉRÓ LINK a posztban!\n"
+                f"- NE írj semmilyen befejezést, lezárást, CTA-t vagy marketing szöveget a végére! Csak a lexikont írd meg és állj meg."
             )
             draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
             
-            # --- STEP 6: 2-STEP LECTORING (ZERO TOLERANCE) ---
-            log_event("Step 6: Kétlépcsős Lektorálás (Zero-Tolerance Nyelvtani Ellenőrzés)...")
+            # --- STEP 6: 2-STEP LECTORING ON LEXICON (ZERO TOLERANCE) ---
+            log_event("Step 6: Kétlépcsős Lektorálás a Lexikonon (Zero-Tolerance Nyelvtani Ellenőrzés)...")
             lector_prompt = (
                 f"Az alábbi Facebook poszt vázlatot lektoráld! Végezz kőkemény, karakterenkénti nyelvtani és stilisztikai ellenőrzést. "
                 f"Különös figyelmet fordíts a mondatzáró írásjelekre (minden felsorolás és mondat végén legyen pont vagy megfelelő írásjel!), "
                 f"a kettős ékezetekre (ő, ű helyes használata) és a gépelési hibákra. "
                 f"Legyen tökéletesen magyaros, zamatos, választékos, mentes az anglicizmusoktól (tükörfordításoktól) és a fogalmazási hibáktól. "
-                f"Őrizd meg az NLP '[Érzés: ...]' címkét a legelső sorban, és ellenőrizd a 'KÖTELEZŐ IRODALMI HÍD' jelenlétét. "
-                f"NE írj bevezetőt, csak a tökéletes, végleges poszt szövegét add vissza!\n\n"
+                f"Őrizd meg az NLP '[Érzés: ...]' címkét a legelső sorban. "
+                f"NE írj bevezetőt, NE fűzz hozzá új lezárást, csak a tökéletes, végleges poszt szövegét add vissza!\n\n"
                 f"VÁZLAT:\n{draft_text}"
             )
-            post_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
+            lektored_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
 
-            # --- STEP 7: INTEGRITY CHECKS (HARDCODED CTA & NLP FALLBACK) ---
-            log_event("Step 7: Belső Python Integritás-vizsgálat (NLP & CTA)...")
+            # --- STEP 7: MARKETING BRIDGE GENERATION (NEW CHAIN) ---
+            log_event("Step 7: Független Marketing Híd generálása (Prompt Chaining)...")
+            bridge_prompt = (
+                f"Te egy profi antikvárius marketinges vagy. "
+                f"Készíts egy 3-4 mondatos, kifinomult marketing átvezetést, amely összeköti a ma született klasszikus írók szellemiségét a mi kínálatunkkal. "
+                f"A narratíva: Magyarázd el az olvasónak, hogy bár ezeknek az óriásoknak a ritka kötetei ma épp más szerencsés gyűjtők polcait díszítik nálunk, "
+                f"az irodalmi szomjunkat az ő szellemiségükben válogatott mai kincsekkel csillapítjuk. Külön emeld ki és ajánld a figyelmükbe ezt a konkrét könyvet: "
+                f"'{main_book['title']}' – írta {main_book.get('author', '')}. "
+                f"Tónus: Zamatos, választékos, emberi. NE használj linkeket, NE írj CTA-t (Call to Action), NE írj bevezetőt, CSAK és kizárólag a 3-4 mondatos átvezetőt add vissza tökéletes magyarsággal!"
+            )
+            bridge_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, system="Professional CopySEO tone.", messages=[{"role": "user", "content": bridge_prompt}]).content[0].text.strip()
+
+            # --- STEP 8: ASSEMBLY & INTEGRITY CHECKS (HARDCODED CTA & NLP FALLBACK) ---
+            log_event("Step 8: Belső Python Összeszerelés és Integritás-vizsgálat (NLP, Bridge, CTA)...")
+            post_text = lektored_lexicon
+            
             if not re.search(r'\[Érzés:.*?\]', post_text):
                 post_text = "[Érzés: inspirált 🌟]\n\n" + post_text
 
+            # Append the beautifully chained bridge
+            post_text += "\n\n" + bridge_text
+
+            # Append the strict CTA
             if "keressétek az első kommentben" not in post_text.lower():
                 post_text += "\n\nA mai válogatásunkat és a könyvek elérhetőségét keressétek az első kommentben! 👇"
 
-            # --- STEP 8: PUBLISH & MEMORY ---
+            # --- STEP 9: PUBLISH & MEMORY ---
             memory_data = {"fingerprint": post_text[:100], "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]}
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
@@ -573,13 +588,13 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
-    try:
-        sync_success = updater.run_daily_update()
-        if not sync_success:
-            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
-    except Exception as e:
-        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync (IDEIGLENESEN KIKAPCSOLVA) -> Social Post")
+    # try:
+    #     sync_success = updater.run_daily_update()
+    #     if not sync_success:
+    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    # except Exception as e:
+    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
     social_agent.run_night_generation()
 
@@ -595,7 +610,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V233 Online", "project": "Booksy"}
+def home(): return {"status": "V234 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -606,12 +621,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V233 Agentic Masterpiece Test Started"}
+    return {"status": "V234 Prompt Chaining Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V233 Full Cascade Test Started"}
+    return {"status": "V234 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
