@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V234 (THE PROMPT CHAINING EDITION)
-# VERZIÓ: V234 - CHAINED PROMPTS (LEXICON THEN BRIDGE) + ZERO-TOLERANCE GRAMMAR + 35MM VISUALS + SYNC SUSPENDED
+# BOOKSY BRAIN - V235 (THE ULTIMATE MASTERPIECE EDITION)
+# VERZIÓ: V235 - DYNAMIC HOOK COMMENT + CHAINED PROMPTS + 35MM VISUALS + SYNC ACTIVE
 
 __import__('pysqlite3')
 import sys
@@ -254,8 +254,8 @@ class BooksyBrain:
                 return {"reply": err_msg, "products": []}
 
             # --- TRÓJAI FALÓ PROTOKOLL ---
-            clean_hook_text = "📚 A mai válogatásunk kincseit és a könyvek elérhetőségét a válaszban találjátok! Aki kapja, marja! 😉👇"
-            log_event(f"Trójai Faló 1. Lépés: Tiszta horog küldése a(z) {target_post_id} azonosítóra...")
+            clean_hook_text = memory.get("hook_text", "📚 A mai válogatásunk kincseit és a könyvek elérhetőségét a válaszban találjátok! 👇")
+            log_event(f"Trójai Faló 1. Lépés: Dinamikus horog küldése a(z) {target_post_id} azonosítóra...")
             c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': clean_hook_text})
             
             c_data = c_res.json()
@@ -312,7 +312,7 @@ class BooksySocialAgent:
             log_event("⚠️ Hiba e-mail sikeresen elküldve az adminoknak.")
         except Exception as e: log_event(f"📧 Hiba az error e-mail küldésénél: {e}")
 
-    def send_morning_email(self, post_text, memory_links):
+    def send_morning_email(self, post_text, memory_links, hook_text=""):
         try:
             sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
@@ -329,7 +329,7 @@ class BooksySocialAgent:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
                 msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nMiután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot a kommenthez!\n\nSZÖVEG:\n{post_text}\n\nKOMMENTBE MEGY (MÁSOLHATÓ):\n{links_body.strip()}"
+                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nMiután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot a kommenthez!\n\nSZÖVEG:\n{post_text}\n\nFŐKOMMENT (HOROG):\n{hook_text}\n\nVÁLASZ KOMMENTEK (MÁSOLHATÓ):\n{links_body.strip()}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
@@ -396,7 +396,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V234 Prompt Chaining)...")
+        log_event("Agentic Generálás indítása (V235 Masterpiece)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -543,22 +543,35 @@ class BooksySocialAgent:
             )
             bridge_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, system="Professional CopySEO tone.", messages=[{"role": "user", "content": bridge_prompt}]).content[0].text.strip()
 
-            # --- STEP 8: ASSEMBLY & INTEGRITY CHECKS (HARDCODED CTA & NLP FALLBACK) ---
+            # --- STEP 8: ASSEMBLY & INTEGRITY CHECKS ---
             log_event("Step 8: Belső Python Összeszerelés és Integritás-vizsgálat (NLP, Bridge, CTA)...")
             post_text = lektored_lexicon
             
             if not re.search(r'\[Érzés:.*?\]', post_text):
                 post_text = "[Érzés: inspirált 🌟]\n\n" + post_text
 
-            # Append the beautifully chained bridge
             post_text += "\n\n" + bridge_text
 
-            # Append the strict CTA
             if "keressétek az első kommentben" not in post_text.lower():
                 post_text += "\n\nA mai válogatásunkat és a könyvek elérhetőségét keressétek az első kommentben! 👇"
 
-            # --- STEP 9: PUBLISH & MEMORY ---
-            memory_data = {"fingerprint": post_text[:100], "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]}
+            # --- STEP 9: DYNAMIC HOOK COMMENT GENERATION ---
+            log_event("Step 9: Dinamikus Horog Komment (Hook) generálása...")
+            hook_prompt = (
+                f"Te egy kifinomult, de eredményorientált antikváriumi értékesítő vagy. Írj egy mindössze 1-2 mondatos, "
+                f"frappáns, figyelemfelkeltő Facebook komment-szöveget! Ez lesz a poszt legelső kommentje, amelyre válaszként fűzzük majd a könyvek linkjeit. "
+                f"Feladatod: elegánsan és sürgetően kommunikáld, hogy a könyvek a 'válasz' (reply) szálban vannak, és tudatosítsd az olvasóban, hogy antikvár kincsekről lévén szó, "
+                f"a legtöbbből csupán 1etlen példányunk van! (Kerüld a bazári kifejezéseket, mint az 'aki kapja marja'). "
+                f"Magyarul írj, hibátlan nyelvhelyességgel. Használj lefele mutató emojit (👇) a legvégén. NE írj bevezetőt, csak a tiszta szöveget add vissza!"
+            )
+            hook_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=150, system="Professional CopySEO tone.", messages=[{"role": "user", "content": hook_prompt}]).content[0].text.strip()
+
+            # --- STEP 10: PUBLISH & MEMORY ---
+            memory_data = {
+                "fingerprint": post_text[:100], 
+                "hook_text": hook_text,
+                "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]
+            }
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
             if has_video:
@@ -574,7 +587,7 @@ class BooksySocialAgent:
                     log_event(f"✅ Képes vázlat kész! (ID: {photo_id})")
             
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
-            self.send_morning_email(post_text, memory_data['links']); log_event("Kész.")
+            self.send_morning_email(post_text, memory_data['links'], hook_text); log_event("Kész.")
             
         except Exception as e:
             err_trace = traceback.format_exc()
@@ -588,13 +601,13 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync (IDEIGLENESEN KIKAPCSOLVA) -> Social Post")
-    # try:
-    #     sync_success = updater.run_daily_update()
-    #     if not sync_success:
-    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
-    # except Exception as e:
-    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
+    try:
+        sync_success = updater.run_daily_update()
+        if not sync_success:
+            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    except Exception as e:
+        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
     social_agent.run_night_generation()
 
@@ -610,7 +623,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V234 Online", "project": "Booksy"}
+def home(): return {"status": "V235 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -621,12 +634,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V234 Prompt Chaining Test Started"}
+    return {"status": "V235 Dynamic Hook Comment Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V234 Full Cascade Test Started"}
+    return {"status": "V235 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
