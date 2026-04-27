@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V235 (THE ULTIMATE MASTERPIECE EDITION)
-# VERZIÓ: V235 - DYNAMIC HOOK COMMENT + CHAINED PROMPTS + 35MM VISUALS + SYNC ACTIVE
+# BOOKSY BRAIN - V236 (THE UNCUT EDITION)
+# VERZIÓ: V236 - DYNAMIC HUNGARIAN DATE + RAISED TOKEN LIMITS + SYNC SUSPENDED
 
 __import__('pysqlite3')
 import sys
@@ -396,15 +396,20 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V235 Masterpiece)...")
+        log_event("Agentic Generálás indítása (V236 Uncut Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
+            # --- DATE LOGIC ---
+            now_dt = datetime.now(LOCAL_TZ)
+            hu_months = ["Január", "Február", "Március", "Április", "Május", "Június", "Július", "Augusztus", "Szeptember", "Október", "November", "December"]
+            hu_date_str = f"{hu_months[now_dt.month-1]} {now_dt.day}."
+
             # --- STEP 1: STRICT WIKIPEDIA + GEMINI AUTHOR SELECTION ---
-            today_date = datetime.now(LOCAL_TZ).strftime('%B %d')
+            today_date = now_dt.strftime('%B %d')
             log_event(f"Step 1: Élő API lekérdezés a mai napról ({today_date}) és Gemini Kereszttűz (SZIGORÚ ÍRÓ SZŰRŐ)...")
             
-            r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{datetime.now(LOCAL_TZ).strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
+            r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{now_dt.strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
             wiki_text = "Nem található adat."
             if r_wiki.status_code == 200:
                 births = [p.get('text', '') for p in r_wiki.json().get('births', []) if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet', 'novelist'])]
@@ -446,10 +451,10 @@ class BooksySocialAgent:
             main_book = selected_books[0]; log_event(f"Vizuális Fókusz Könyv: {main_book['title']} by {main_book.get('author', '')}")
 
             # --- STEP 3: GENERATE MARKETING DESCRIPTIONS (CLAUDE) ---
-            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing + Grammatikai Szigor)...")
+            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing + Magasabb Token Limit)...")
             for b in selected_books:
                 desc_prompt = f"Könyv: {b['title']} - {b['author']}. Rövid infó: {b.get('text_preview', '')}. Írj EGYETLEN, magával ragadó, zamatos magyar nyelvű marketing mondatot, ami meghozza a kedvet az olvasáshoz! Tökéletes nyelvhelyességgel, megfelelő ékezetekkel (ő, ű) és mondatzáró írásjellel. Ne csak a tartalmat írd le, add el az élményt. Csak a mondatot add vissza!"
-                b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=100, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
+                b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
             
             # --- STEP 4: VISUAL FOCUS (DEEP SCAN & 35MM REALISTIC DALL-E) ---
             log_event("Step 4: A fókusz-könyv mélyelemzése (Gemini) és 35mm-es DALL-E 3 képgenerálás...")
@@ -503,20 +508,21 @@ class BooksySocialAgent:
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
             # --- STEP 5: POST TEXT DRAFTING (PURE LEXICON ONLY) ---
-            log_event("Step 5: Napi Lexikon vázlat generálása (Kizárólag Lexikon, nincs Bridge)...")
+            log_event("Step 5: Napi Lexikon vázlat generálása (Kizárólag Lexikon, Emelt Token Limit, Hardkódolt Dátum)...")
             authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
 
             draft_prompt = (
                 f"Írj egy posztot az Antikvarius.ro FB oldalára. Koncepció: Napi 'irodalmi naptár' és mini lexikon.\n"
                 f"SZIGORÚ SZERKEZETI SZABÁLYOK:\n"
                 f"1. A poszt LÉGELSŐ sora kötelezően egy Facebook NLP érzelem címke legyen pontosan így: [Érzés: inspirált 🌟] vagy [Érzés: nosztalgikus 📚].\n"
-                f"2. MINI LEXIKON: Készíts megemlékezést az alábbi 6, ma született íróról:\n{authors_text}\n\n"
+                f"2. CÍM: A posztot KÖTELEZŐEN ezzel a pontos dátummal és címmel folytasd: **{hu_date_str} — IRODALMI NAPTÁR**\n"
+                f"3. MINI LEXIKON: Készíts megemlékezést az alábbi 6, ma született íróról:\n{authors_text}\n\n"
                 f"TOVÁBBI SZABÁLYOK:\n"
                 f"- Tónus: Zamatos, választékos, gyönyörű magyar nyelvezet. Úgy írj, mint egy szenvedélyes, művelt antikvárius.\n"
                 f"- ZÉRÓ LINK a posztban!\n"
                 f"- NE írj semmilyen befejezést, lezárást, CTA-t vagy marketing szöveget a végére! Csak a lexikont írd meg és állj meg."
             )
-            draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
+            draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
             
             # --- STEP 6: 2-STEP LECTORING ON LEXICON (ZERO TOLERANCE) ---
             log_event("Step 6: Kétlépcsős Lektorálás a Lexikonon (Zero-Tolerance Nyelvtani Ellenőrzés)...")
@@ -525,11 +531,11 @@ class BooksySocialAgent:
                 f"Különös figyelmet fordíts a mondatzáró írásjelekre (minden felsorolás és mondat végén legyen pont vagy megfelelő írásjel!), "
                 f"a kettős ékezetekre (ő, ű helyes használata) és a gépelési hibákra. "
                 f"Legyen tökéletesen magyaros, zamatos, választékos, mentes az anglicizmusoktól (tükörfordításoktól) és a fogalmazási hibáktól. "
-                f"Őrizd meg az NLP '[Érzés: ...]' címkét a legelső sorban. "
+                f"Őrizd meg az NLP '[Érzés: ...]' címkét és a pontos dátumos címet az elején. "
                 f"NE írj bevezetőt, NE fűzz hozzá új lezárást, csak a tökéletes, végleges poszt szövegét add vissza!\n\n"
                 f"VÁZLAT:\n{draft_text}"
             )
-            lektored_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
+            lektored_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
 
             # --- STEP 7: MARKETING BRIDGE GENERATION (NEW CHAIN) ---
             log_event("Step 7: Független Marketing Híd generálása (Prompt Chaining)...")
@@ -541,7 +547,7 @@ class BooksySocialAgent:
                 f"'{main_book['title']}' – írta {main_book.get('author', '')}. "
                 f"Tónus: Zamatos, választékos, emberi. NE használj linkeket, NE írj CTA-t (Call to Action), NE írj bevezetőt, CSAK és kizárólag a 3-4 mondatos átvezetőt add vissza tökéletes magyarsággal!"
             )
-            bridge_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, system="Professional CopySEO tone.", messages=[{"role": "user", "content": bridge_prompt}]).content[0].text.strip()
+            bridge_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=500, system="Professional CopySEO tone.", messages=[{"role": "user", "content": bridge_prompt}]).content[0].text.strip()
 
             # --- STEP 8: ASSEMBLY & INTEGRITY CHECKS ---
             log_event("Step 8: Belső Python Összeszerelés és Integritás-vizsgálat (NLP, Bridge, CTA)...")
@@ -601,13 +607,13 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
-    try:
-        sync_success = updater.run_daily_update()
-        if not sync_success:
-            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
-    except Exception as e:
-        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync (KIKAPCSOLVA TESZT MIATT) -> Social Post")
+    # try:
+    #     sync_success = updater.run_daily_update()
+    #     if not sync_success:
+    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    # except Exception as e:
+    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
     social_agent.run_night_generation()
 
@@ -623,7 +629,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V235 Online", "project": "Booksy"}
+def home(): return {"status": "V236 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -634,12 +640,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V235 Dynamic Hook Comment Test Started"}
+    return {"status": "V236 Uncut Edition Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V235 Full Cascade Test Started"}
+    return {"status": "V236 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
