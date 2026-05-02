@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V239 (THE PLAIN-TEXT TYPOGRAPHY EDITION)
-# VERZIÓ: V239 - ZERO MARKDOWN PROTOCOL + DRAFT FEED POST API + 1080p RAM OPTIMIZATION + DIRECT COMMENT TEST
+# BOOKSY BRAIN - V240 (THE RFC MAIL & FULL SYNC EDITION)
+# VERZIÓ: V240 - RFC COMPLIANT EMAIL HEADERS + ACTIVE DB SYNC + ZERO MARKDOWN + DRAFT FEED API
 
 __import__('pysqlite3')
 import sys
@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 import markdownify
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.header import Header
 
 # --- CONFIG & CLIENTS ---
 load_dotenv()
@@ -299,8 +300,9 @@ class BooksySocialAgent:
             server.starttls(); server.login(sender, password)
             for admin in admin_emails:
                 msg = MIMEMultipart()
-                msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
-                msg['Subject'] = f"⚠️ KRITIKUS HIBA: Booksy Social Agent ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
+                msg['From'] = Header(f"Booksy AI <{sender}>", 'utf-8')
+                msg['To'] = admin
+                msg['Subject'] = Header(f"⚠️ KRITIKUS HIBA: Booksy Social Agent ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})", 'utf-8')
                 body = f"Üdv!\n\nA napi Facebook vázlat generálása során váratlan hiba történt. A folyamat megszakadt.\n\nRészletek a fejlesztőnek:\n\n{error_details}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
@@ -323,8 +325,9 @@ class BooksySocialAgent:
             server.starttls(); server.login(sender, password)
             for admin in admin_emails:
                 msg = MIMEMultipart()
-                msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
-                msg['Subject'] = f"✅ Booksy Social Vázlatok (Képes & Reels) - {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}"
+                msg['From'] = Header(f"Booksy AI <{sender}>", 'utf-8')
+                msg['To'] = admin
+                msg['Subject'] = Header(f"✅ Booksy Social Vázlatok (Képes & Reels) - {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}", 'utf-8')
                 body = (
                     f"Üdv!\n\n"
                     f"A Facebook vázlatok elkészültek a Drafts mappába.\n"
@@ -345,7 +348,7 @@ class BooksySocialAgent:
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
-            log_event("Értesítő e-mail sikeresen elküldve.")
+            log_event("Értesítő e-mail sikeresen elküldve (RFC 2822 UTF-8 kódolással).")
         except Exception as e: log_event(f"📧 Email hiba: {e}")
 
     def _prepare_visual_layers(self, raw_img_path, overlay_path, fallback_path, title, author):
@@ -410,7 +413,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V239 Plain-Text Typography Edition)...")
+        log_event("Agentic Generálás indítása (V240 RFC Mail & Full Sync Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -668,13 +671,13 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync (KIKAPCSOLVA TESZT MIATT) -> Social Post")
-    # try:
-    #     sync_success = updater.run_daily_update()
-    #     if not sync_success:
-    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
-    # except Exception as e:
-    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
+    try:
+        sync_success = updater.run_daily_update()
+        if not sync_success:
+            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    except Exception as e:
+        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
     
     social_agent.run_night_generation()
 
@@ -690,7 +693,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V239 Online", "project": "Booksy"}
+def home(): return {"status": "V240 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -701,12 +704,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V239 Plain-Text Typography Test Started"}
+    return {"status": "V240 RFC Mail Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V239 Full Cascade Test Started"}
+    return {"status": "V240 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
