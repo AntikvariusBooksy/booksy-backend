@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V238 (THE DRAFT API & MEMORY FIX EDITION)
-# VERZIÓ: V238 - DRAFT FEED POST API + 1080p RAM OPTIMIZATION + DUAL PUBLISH + SYNC SUSPENDED
+# BOOKSY BRAIN - V239 (THE PLAIN-TEXT TYPOGRAPHY EDITION)
+# VERZIÓ: V239 - ZERO MARKDOWN PROTOCOL + DRAFT FEED POST API + 1080p RAM OPTIMIZATION + DIRECT COMMENT TEST
 
 __import__('pysqlite3')
 import sys
@@ -391,10 +391,10 @@ class BooksySocialAgent:
         if not MOVIEPY_AVAILABLE: return False
         try:
             log_event("Videó renderelés indítása (Memória-kímélő 1080p)...")
-            gc.collect() # Memória takarítás renderelés előtt
+            gc.collect() 
             clip = ImageClip(raw_img_path).set_duration(5)
             zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center')
-            fixed_bg = CompositeVideoClip([zoomed], size=(1080, 1080)).set_duration(5) # 1920 helyett 1080 a szerver kedvéért
+            fixed_bg = CompositeVideoClip([zoomed], size=(1080, 1080)).set_duration(5) 
             bg_loop = concatenate_videoclips([fixed_bg, fixed_bg.fx(vfx.time_mirror)])
             if os.path.exists(overlay_path):
                 overlay_img = PIL.Image.open(overlay_path).convert("RGBA")
@@ -405,12 +405,12 @@ class BooksySocialAgent:
                 final_video = bg_loop.fl_image(stamp_overlay)
             else: final_video = bg_loop
             final_video.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
-            gc.collect() # Memória takarítás renderelés után
+            gc.collect() 
             return True
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V238 Draft API & Memory Fix Edition)...")
+        log_event("Agentic Generálás indítása (V239 Plain-Text Typography Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -465,9 +465,14 @@ class BooksySocialAgent:
             main_book = selected_books[0]; log_event(f"Vizuális Fókusz Könyv: {main_book['title']} by {main_book.get('author', '')}")
 
             # --- STEP 3: GENERATE MARKETING DESCRIPTIONS (CLAUDE) ---
-            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing + Magasabb Token Limit)...")
+            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing + Zéró Markdown)...")
             for b in selected_books:
-                desc_prompt = f"Könyv: {b['title']} - {b['author']}. Rövid infó: {b.get('text_preview', '')}. Írj EGYETLEN, magával ragadó, zamatos magyar nyelvű marketing mondatot, ami meghozza a kedvet az olvasáshoz! Tökéletes nyelvhelyességgel, megfelelő ékezetekkel (ő, ű) és mondatzáró írásjellel. Ne csak a tartalmat írd le, add el az élményt. Csak a mondatot add vissza!"
+                desc_prompt = (
+                    f"Könyv: {b['title']} - {b['author']}. Rövid infó: {b.get('text_preview', '')}. "
+                    f"Írj EGYETLEN, magával ragadó, zamatos magyar nyelvű marketing mondatot, ami meghozza a kedvet az olvasáshoz! "
+                    f"Tökéletes nyelvhelyességgel, megfelelő ékezetekkel (ő, ű) és mondatzáró írásjellel. Ne csak a tartalmat írd le, add el az élményt. "
+                    f"ZÉRÓ MARKDOWN: Szigorúan tilos a * vagy ** használata formázásra. Csak a mondatot add vissza!"
+                )
                 b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
             
             # --- STEP 4: VISUAL FOCUS (DEEP SCAN & 35MM REALISTIC DALL-E) ---
@@ -517,50 +522,53 @@ class BooksySocialAgent:
                 raise Exception(f"DALL-E letöltési hiba HTTP {r_img.status_code}")
             
             img_obj = PIL.Image.open(raw_img_path)
-            # MEMÓRIA OPTIMALIZÁLÁS: 1920 helyett 1080 a videó renderelés túléléséért
             img_resized = PIL.ImageOps.fit(img_obj, (1080, 1080), PIL.Image.Resampling.LANCZOS); img_resized.save(raw_img_path)
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            # --- STEP 5: POST TEXT DRAFTING (PURE LEXICON ONLY) ---
-            log_event("Step 5: Napi Lexikon vázlat generálása (Kizárólag Lexikon, Emelt Token Limit, Hardkódolt Dátum)...")
-            authors_text = "\n".join([f"📖 {a['name']} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
+            # --- STEP 5: POST TEXT DRAFTING (PURE LEXICON + ZERO MARKDOWN) ---
+            log_event("Step 5: Napi Lexikon vázlat generálása (Zéró Markdown, Csupa Nagybetűs Nevek)...")
+            authors_text = "\n".join([f"📖 {a['name'].upper()} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
 
             draft_prompt = (
                 f"Írj egy posztot az Antikvarius.ro FB oldalára. Koncepció: Napi 'irodalmi naptár' és mini lexikon.\n"
                 f"SZIGORÚ SZERKEZETI SZABÁLYOK:\n"
                 f"1. A poszt LÉGELSŐ sora kötelezően egy Facebook NLP érzelem címke legyen pontosan így: [Érzés: inspirált 🌟] vagy [Érzés: nosztalgikus 📚].\n"
-                f"2. CÍM: A posztot KÖTELEZŐEN ezzel a pontos dátummal és címmel folytasd: **{hu_date_str} — IRODALMI NAPTÁR**\n"
+                f"2. CÍM: A posztot KÖTELEZŐEN ezzel a pontos dátummal és címmel folytasd: {hu_date_str} — IRODALMI NAPTÁR (csillagok nélkül!)\n"
                 f"3. MINI LEXIKON: Készíts megemlékezést az alábbi 6, ma született íróról:\n{authors_text}\n\n"
                 f"TOVÁBBI SZABÁLYOK:\n"
                 f"- Tónus: Zamatos, választékos, gyönyörű magyar nyelvezet. Úgy írj, mint egy szenvedélyes, művelt antikvárius.\n"
                 f"- ZÉRÓ LINK a posztban!\n"
+                f"- ZÉRÓ MARKDOWN: Szigorúan tilos a csillagok (* vagy **) használata! A szerzők nevét csupa nagybetűvel írd (pl. BENJAMIN SPOCK), a könyvcímeket pedig magyar idézőjelbe tedd (pl. „Spock doktor”).\n"
                 f"- NE írj semmilyen befejezést, lezárást, CTA-t vagy marketing szöveget a végére! Csak a lexikont írd meg és állj meg."
             )
             draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, system="Professional CopySEO tone. No URLs allowed.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
             
             # --- STEP 6: 2-STEP LECTORING ON LEXICON (ZERO TOLERANCE) ---
-            log_event("Step 6: Kétlépcsős Lektorálás a Lexikonon (Zero-Tolerance Nyelvtani Ellenőrzés)...")
+            log_event("Step 6: Kétlépcsős Lektorálás a Lexikonon (Zéró Markdown kikényszerítése)...")
             lector_prompt = (
                 f"Az alábbi Facebook poszt vázlatot lektoráld! Végezz kőkemény, karakterenkénti nyelvtani és stilisztikai ellenőrzést. "
                 f"Különös figyelmet fordíts a mondatzáró írásjelekre (minden felsorolás és mondat végén legyen pont vagy megfelelő írásjel!), "
                 f"a kettős ékezetekre (ő, ű helyes használata) és a gépelési hibákra. "
                 f"Legyen tökéletesen magyaros, zamatos, választékos, mentes az anglicizmusoktól (tükörfordításoktól) és a fogalmazási hibáktól. "
                 f"Őrizd meg az NLP '[Érzés: ...]' címkét és a pontos dátumos címet az elején. "
+                f"SZIGORÚ FORMAI SZABÁLY: ZÉRÓ MARKDOWN! Tilos a * vagy ** használata. A szerzők neve legyen CSUPA NAGYBETŰ, a könyvcímek „magyar idézőjelben”. "
                 f"NE írj bevezetőt, NE fűzz hozzá új lezárást, csak a tökéletes, végleges poszt szövegét add vissza!\n\n"
                 f"VÁZLAT:\n{draft_text}"
             )
             lektored_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
 
             # --- STEP 7: MARKETING BRIDGE GENERATION (NEW CHAIN) ---
-            log_event("Step 7: Független Marketing Híd generálása (Prompt Chaining)...")
+            log_event("Step 7: Független Marketing Híd generálása (Zéró Markdown)...")
             bridge_prompt = (
                 f"Te egy profi antikvárius marketinges vagy. "
                 f"Készíts egy 3-4 mondatos, kifinomult marketing átvezetést, amely összeköti a ma született klasszikus írók szellemiségét a mi kínálatunkkal. "
                 f"A narratíva: Magyarázd el az olvasónak, hogy bár ezeknek az óriásoknak a ritka kötetei ma épp más szerencsés gyűjtők polcait díszítik nálunk, "
                 f"az irodalmi szomjunkat az ő szellemiségükben válogatott mai kincsekkel csillapítjuk. Külön emeld ki és ajánld a figyelmükbe ezt a konkrét könyvet: "
-                f"'{main_book['title']}' – írta {main_book.get('author', '')}. "
-                f"Tónus: Zamatos, választékos, emberi. NE használj linkeket, NE írj CTA-t (Call to Action), NE írj bevezetőt, CSAK és kizárólag a 3-4 mondatos átvezetőt add vissza tökéletes magyarsággal!"
+                f"„{main_book['title']}” – írta {main_book.get('author', '').upper()}. "
+                f"Tónus: Zamatos, választékos, emberi. NE használj linkeket, NE írj CTA-t (Call to Action), NE írj bevezetőt! "
+                f"ZÉRÓ MARKDOWN: Szigorúan tilos a * vagy ** használata. A szerző neve legyen CSUPA NAGYBETŰ, a könyv címe „magyar idézőjelben”. "
+                f"CSAK és kizárólag a 3-4 mondatos átvezetőt add vissza tökéletes magyarsággal!"
             )
             bridge_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=500, system="Professional CopySEO tone.", messages=[{"role": "user", "content": bridge_prompt}]).content[0].text.strip()
 
@@ -583,7 +591,8 @@ class BooksySocialAgent:
                 f"frappáns, figyelemfelkeltő Facebook komment-szöveget! Ez lesz a poszt legelső kommentje, amely bevezeti az alatta lévő könyves linkeket. "
                 f"Feladatod: elegánsan és sürgetően kommunikáld, hogy a könyvek itt találhatóak lejjebb, és tudatosítsd az olvasóban, hogy antikvár kincsekről lévén szó, "
                 f"a legtöbbből csupán 1etlen példányunk van! (Kerüld a bazári kifejezéseket, mint az 'aki kapja marja'). "
-                f"Magyarul írj, hibátlan nyelvhelyességgel. Használj lefele mutató emojit (👇) a legvégén. NE írj bevezetőt, csak a tiszta szöveget add vissza!"
+                f"Magyarul írj, hibátlan nyelvhelyességgel. Használj lefele mutató emojit (👇) a legvégén. NE írj bevezetőt, csak a tiszta szöveget add vissza! "
+                f"ZÉRÓ MARKDOWN: Szigorúan tilos a * vagy ** használata formázásra."
             )
             hook_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=150, system="Professional CopySEO tone.", messages=[{"role": "user", "content": hook_prompt}]).content[0].text.strip()
 
@@ -591,9 +600,10 @@ class BooksySocialAgent:
             log_event("Step 9b: Reels (Videó) specifikus 'Cserkész' szöveg generálása...")
             reels_prompt = (
                 f"Írj egy 2-3 mondatos, pörgős, figyelemfelkeltő szöveget egy Facebook Reels videóhoz! "
-                f"Említsd meg, hogy a mai napon olyan zsenik születtek, mint: {', '.join([a['name'] for a in authors_list[:3]])}. "
+                f"Említsd meg, hogy a mai napon olyan zsenik születtek, mint: {', '.join([a['name'].upper() for a in authors_list[:3]])}. "
                 f"De a részletekért, a lexikonért és a ritka antikvár könyvajánlóért irányítsd át az olvasókat a normál Facebook hírfolyamunkon (feed) található legfrissebb képes posztunkhoz! "
-                f"Tónus: lelkes, rövid, figyelemfelkeltő. ZÉRÓ LINK!"
+                f"Tónus: lelkes, rövid, figyelemfelkeltő. ZÉRÓ LINK! "
+                f"ZÉRÓ MARKDOWN: Szigorúan tilos a * vagy ** használata formázásra."
             )
             reels_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, system="Professional CopySEO tone.", messages=[{"role": "user", "content": reels_prompt}]).content[0].text.strip()
 
@@ -680,7 +690,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V238 Online", "project": "Booksy"}
+def home(): return {"status": "V239 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -691,12 +701,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V238 Draft API Fix Edition Test Started"}
+    return {"status": "V239 Plain-Text Typography Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V238 Full Cascade Test Started"}
+    return {"status": "V239 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
