@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V237 (THE DOUBLE-EDGED SWORD EDITION)
-# VERZIÓ: V237 - DUAL PUBLISH (FEED + REELS) + DIRECT COMMENT TEST (NO TROJAN) + SYNC SUSPENDED
+# BOOKSY BRAIN - V238 (THE DRAFT API & MEMORY FIX EDITION)
+# VERZIÓ: V238 - DRAFT FEED POST API + 1080p RAM OPTIMIZATION + DUAL PUBLISH + SYNC SUSPENDED
 
 __import__('pysqlite3')
 import sys
@@ -200,7 +200,8 @@ class BooksyBrain:
             target_post_id = force_post_id
             
             if not target_post_id:
-                media_id = memory.get("media_id")  # Ez a képes feed poszt azonosítója!
+                media_id = memory.get("media_id")  # Feed poszt azonosítója
+                fingerprint_search = normalize_fingerprint(memory.get("fingerprint", ""))
                 search_title = normalize_fingerprint(memory["links"][0].get("title", "")) if memory.get("links") else ""
                 
                 log_event("Omni-Radar: Publikus képes poszt keresése az összes végponton...")
@@ -237,9 +238,12 @@ class BooksyBrain:
                                             found = True; break
                                 if found: break
                             
-                            if not found and search_title:
-                                msg = normalize_fingerprint(p.get("message", ""))
-                                if search_title in msg: found = True
+                            # Radar Biztonsági háló: Ujjlenyomat vagy Cím keresése a szövegben
+                            msg = normalize_fingerprint(p.get("message", ""))
+                            if fingerprint_search and fingerprint_search in msg: 
+                                found = True
+                            elif not found and search_title and search_title in msg: 
+                                found = True
                             
                             if found:
                                 target_post_id = p["id"]
@@ -386,10 +390,11 @@ class BooksySocialAgent:
     def _create_video(self, raw_img_path, overlay_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            log_event("Videó renderelés indítása...")
+            log_event("Videó renderelés indítása (Memória-kímélő 1080p)...")
+            gc.collect() # Memória takarítás renderelés előtt
             clip = ImageClip(raw_img_path).set_duration(5)
             zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center')
-            fixed_bg = CompositeVideoClip([zoomed], size=(1920, 1920)).set_duration(5)
+            fixed_bg = CompositeVideoClip([zoomed], size=(1080, 1080)).set_duration(5) # 1920 helyett 1080 a szerver kedvéért
             bg_loop = concatenate_videoclips([fixed_bg, fixed_bg.fx(vfx.time_mirror)])
             if os.path.exists(overlay_path):
                 overlay_img = PIL.Image.open(overlay_path).convert("RGBA")
@@ -400,11 +405,12 @@ class BooksySocialAgent:
                 final_video = bg_loop.fl_image(stamp_overlay)
             else: final_video = bg_loop
             final_video.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
+            gc.collect() # Memória takarítás renderelés után
             return True
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V237 Double-Edged Sword)...")
+        log_event("Agentic Generálás indítása (V238 Draft API & Memory Fix Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -511,7 +517,8 @@ class BooksySocialAgent:
                 raise Exception(f"DALL-E letöltési hiba HTTP {r_img.status_code}")
             
             img_obj = PIL.Image.open(raw_img_path)
-            img_resized = PIL.ImageOps.fit(img_obj, (1920, 1920), PIL.Image.Resampling.LANCZOS); img_resized.save(raw_img_path)
+            # MEMÓRIA OPTIMALIZÁLÁS: 1920 helyett 1080 a videó renderelés túléléséért
+            img_resized = PIL.ImageOps.fit(img_obj, (1080, 1080), PIL.Image.Resampling.LANCZOS); img_resized.save(raw_img_path)
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
@@ -590,8 +597,8 @@ class BooksySocialAgent:
             )
             reels_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, system="Professional CopySEO tone.", messages=[{"role": "user", "content": reels_prompt}]).content[0].text.strip()
 
-            # --- STEP 10: DUAL PUBLISH & MEMORY ---
-            log_event("Step 10: Dupla Publikálás (Kétélű Kard)...")
+            # --- STEP 10: DUAL PUBLISH & MEMORY (API FIX) ---
+            log_event("Step 10: Dupla Publikálás (Draft Feed API Fix)...")
             memory_data = {
                 "fingerprint": post_text[:100], 
                 "hook_text": hook_text,
@@ -599,15 +606,33 @@ class BooksySocialAgent:
             }
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
-            # 1. Képes Poszt (Nagyágyú)
+            # 1. Képes Poszt (Nagyágyú) - DRAFT FEED POST LÉTREHOZÁSA
             upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
-            r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'message': post_text, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
-            if r_p.status_code == 200:
-                photo_id = str(r_p.json().get('id'))
-                memory_data['media_id'] = photo_id  # Ezt keresi az Omni-Radar a kommenteléshez!
-                log_event(f"✅ Képes vázlat (Feed Főcsapás) kész! (ID: {photo_id})")
+            log_event("Fotó feltöltése a Meta szerverre (rejtett mód)...")
+            r_photo = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
+            
+            if r_photo.status_code == 200:
+                photo_fbid = str(r_photo.json().get('id'))
+                log_event(f"Fotó bent van (ID: {photo_fbid}). Hivatalos Vázlat (Draft) poszt létrehozása a Planner számára...")
+                
+                post_data = {
+                    'access_token': fb_token,
+                    'message': post_text,
+                    'published': 'false',
+                    'unpublished_content_type': 'DRAFT',
+                    'attached_media[0]': f'{{"media_fbid":"{photo_fbid}"}}'
+                }
+                r_draft = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/feed", data=post_data)
+                
+                if r_draft.status_code == 200:
+                    draft_id = str(r_draft.json().get('id'))
+                    memory_data['media_id'] = draft_id
+                    log_event(f"✅ Képes vázlat (Hivatalos Feed Poszt) sikeresen a Tervezőben! (ID: {draft_id})")
+                else:
+                    log_event(f"⚠️ Feed Vázlat hiba, fotó azonosító mentése fallback-ként: {r_draft.text}")
+                    memory_data['media_id'] = photo_fbid
             else:
-                log_event(f"⚠️ Képes vázlat hiba: {r_p.text}")
+                log_event(f"⚠️ Képes feltöltési hiba: {r_photo.text}")
 
             # 2. Reels Videó (Cserkész)
             if has_video:
@@ -655,7 +680,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V237 Online", "project": "Booksy"}
+def home(): return {"status": "V238 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -666,12 +691,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V237 Double-Edged Sword Test Started"}
+    return {"status": "V238 Draft API Fix Edition Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V237 Full Cascade Test Started"}
+    return {"status": "V238 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
