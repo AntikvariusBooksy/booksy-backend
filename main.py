@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V236 (THE UNCUT EDITION)
-# VERZIÓ: V236 - DYNAMIC HUNGARIAN DATE + RAISED TOKEN LIMITS + SYNC SUSPENDED
+# BOOKSY BRAIN - V237 (THE DOUBLE-EDGED SWORD EDITION)
+# VERZIÓ: V237 - DUAL PUBLISH (FEED + REELS) + DIRECT COMMENT TEST (NO TROJAN) + SYNC SUSPENDED
 
 __import__('pysqlite3')
 import sys
@@ -188,7 +188,7 @@ class BooksyBrain:
 
     def _trigger_fb_comment(self, force_post_id=None):
         try:
-            log_event(f"Indítás: FB Komment Bot (Trojan). Force ID: {force_post_id}")
+            log_event(f"Indítás: FB Komment Bot (Direkt Savteszt). Force ID: {force_post_id}")
 
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs memória fájl.", "products": []}
@@ -200,10 +200,10 @@ class BooksyBrain:
             target_post_id = force_post_id
             
             if not target_post_id:
-                media_id = memory.get("media_id")
+                media_id = memory.get("media_id")  # Ez a képes feed poszt azonosítója!
                 search_title = normalize_fingerprint(memory["links"][0].get("title", "")) if memory.get("links") else ""
                 
-                log_event("Omni-Radar: Publikus poszt/Reels keresése az összes végponton...")
+                log_event("Omni-Radar: Publikus képes poszt keresése az összes végponton...")
                 
                 endpoints = [
                     f"https://graph.facebook.com/v19.0/{fb_id}/published_posts?access_token={fb_token}&limit=15&fields=id,message,attachments",
@@ -249,40 +249,32 @@ class BooksyBrain:
                     except Exception as loop_e: log_event(f"Hiba a végpont ellenőrzésénél: {loop_e}")
             
             if not target_post_id: 
-                err_msg = "❌ Célpont poszt (vagy Reels) nem található a publikus hírfolyamon."
+                err_msg = "❌ Célpont képes poszt nem található a publikus hírfolyamon."
                 log_event(err_msg)
                 return {"reply": err_msg, "products": []}
 
-            # --- TRÓJAI FALÓ PROTOKOLL ---
-            clean_hook_text = memory.get("hook_text", "📚 A mai válogatásunk kincseit és a könyvek elérhetőségét a válaszban találjátok! 👇")
-            log_event(f"Trójai Faló 1. Lépés: Dinamikus horog küldése a(z) {target_post_id} azonosítóra...")
-            c_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': clean_hook_text})
+            # --- DIREKT KOMMENT PROTOKOLL (NINCS TRÓJAI FALÓ) ---
+            log_event(f"Direkt Komment Lépés: Linkes rakomány küldése egyben a(z) {target_post_id} azonosítóra...")
             
-            c_data = c_res.json()
-            if "id" in c_data:
-                parent_comment_id = c_data["id"]
-                log_event(f"✅ Horog beakadt (ID: {parent_comment_id}). Trójai Faló 2. Lépés: Linkes rakomány küldése válaszként...")
+            hook_intro = memory.get("hook_text", "📚 A mai válogatásunk kincseit itt találjátok! 👇")
+            payload_text = hook_intro + "\n\n"
+            
+            for book in memory.get("links", []):
+                res = self.db.collection.get(ids=[book.get('id', 'None')])
+                status = " ❌ (Már el is kelt!)" if (res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock') else ""
+                author = f"{book['author']} - " if (book.get('author') and book['author'] != 'Ismeretlen') else ""
+                m_desc = book.get('marketing_desc', '')
                 
-                payload_text = ""
-                for book in memory.get("links", []):
-                    res = self.db.collection.get(ids=[book.get('id', 'None')])
-                    status = " ❌ (Már el is kelt!)" if (res['metadatas'] and res['metadatas'][0].get('stock') == 'outofstock') else ""
-                    author = f"{book['author']} - " if (book.get('author') and book['author'] != 'Ismeretlen') else ""
-                    m_desc = book.get('marketing_desc', '')
-                    
-                    payload_text += f"📖 {author}{book['title']}{status}\n{m_desc}\n🔗 {book['url']}\n\n"
-                
-                r_res = requests.post(f"https://graph.facebook.com/v19.0/{parent_comment_id}/comments", data={'access_token': fb_token, 'message': payload_text.strip()})
-                
-                if "id" in r_res.json():
-                    log_event("✅ Rakomány (Válasz) sikeresen rögzítve a horgon.")
-                    return {"reply": "✅ Komment (Trójai Faló) sikeresen kiment!", "products": []}
-                else:
-                    log_event(f"FB Hiba a válasznál: {r_res.text}")
-                    return {"reply": f"❌ FB hiba a válasz-kommentelésnél: {r_res.text}", "products": []}
+                payload_text += f"📖 {author}{book['title']}{status}\n{m_desc}\n🔗 {book['url']}\n\n"
+            
+            r_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': payload_text.strip()})
+            
+            if "id" in r_res.json():
+                log_event("✅ Direkt Komment sikeresen rögzítve a poszton.")
+                return {"reply": "✅ Komment (Direkt Savteszt) sikeresen kiment!", "products": []}
             else:
-                log_event(f"FB Hiba a főkommentnél: {c_res.text}")
-                return {"reply": f"❌ FB hiba a főkommentelésnél: {c_res.text}", "products": []}
+                log_event(f"FB Hiba a direkt kommentnél: {r_res.text}")
+                return {"reply": f"❌ FB hiba a direkt kommentnél: {r_res.text}", "products": []}
 
         except Exception as e:
             log_event(f"Rendszerhiba: {e}")
@@ -312,7 +304,7 @@ class BooksySocialAgent:
             log_event("⚠️ Hiba e-mail sikeresen elküldve az adminoknak.")
         except Exception as e: log_event(f"📧 Hiba az error e-mail küldésénél: {e}")
 
-    def send_morning_email(self, post_text, memory_links, hook_text=""):
+    def send_morning_email(self, post_text, memory_links, hook_text="", reels_text=""):
         try:
             sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
             admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
@@ -328,8 +320,24 @@ class BooksySocialAgent:
             for admin in admin_emails:
                 msg = MIMEMultipart()
                 msg['From'] = f"Booksy AI <{sender}>"; msg['To'] = admin
-                msg['Subject'] = f"✅ Booksy Social Vázlat ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})"
-                body = f"Üdv!\n\nA FB vázlat elkészült a Drafts mappába.\n\nMiután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot a kommenthez!\n\nSZÖVEG:\n{post_text}\n\nFŐKOMMENT (HOROG):\n{hook_text}\n\nVÁLASZ KOMMENTEK (MÁSOLHATÓ):\n{links_body.strip()}"
+                msg['Subject'] = f"✅ Booksy Social Vázlatok (Képes & Reels) - {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}"
+                body = (
+                    f"Üdv!\n\n"
+                    f"A Facebook vázlatok elkészültek a Drafts mappába.\n"
+                    f"Két posztot találsz majd:\n"
+                    f"1. A Fő Képes Poszt (Erre megy a komment)\n"
+                    f"2. A Reels Videó (Cserkész poszt, ide nem megy komment)\n\n"
+                    f"Miután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot!\n\n"
+                    f"=========================\n"
+                    f"FŐ KÉPES POSZT SZÖVEGE:\n"
+                    f"=========================\n{post_text}\n\n"
+                    f"=========================\n"
+                    f"REELS VIDEÓ SZÖVEGE:\n"
+                    f"=========================\n{reels_text}\n\n"
+                    f"=========================\n"
+                    f"DIREKT KOMMENTBE MEGY (EGYBEN):\n"
+                    f"=========================\n{hook_text}\n\n{links_body.strip()}"
+                )
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
@@ -396,7 +404,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V236 Uncut Edition)...")
+        log_event("Agentic Generálás indítása (V237 Double-Edged Sword)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -550,7 +558,7 @@ class BooksySocialAgent:
             bridge_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=500, system="Professional CopySEO tone.", messages=[{"role": "user", "content": bridge_prompt}]).content[0].text.strip()
 
             # --- STEP 8: ASSEMBLY & INTEGRITY CHECKS ---
-            log_event("Step 8: Belső Python Összeszerelés és Integritás-vizsgálat (NLP, Bridge, CTA)...")
+            log_event("Step 8: Belső Python Összeszerelés (Feed Poszt Szöveg)...")
             post_text = lektored_lexicon
             
             if not re.search(r'\[Érzés:.*?\]', post_text):
@@ -565,14 +573,25 @@ class BooksySocialAgent:
             log_event("Step 9: Dinamikus Horog Komment (Hook) generálása...")
             hook_prompt = (
                 f"Te egy kifinomult, de eredményorientált antikváriumi értékesítő vagy. Írj egy mindössze 1-2 mondatos, "
-                f"frappáns, figyelemfelkeltő Facebook komment-szöveget! Ez lesz a poszt legelső kommentje, amelyre válaszként fűzzük majd a könyvek linkjeit. "
-                f"Feladatod: elegánsan és sürgetően kommunikáld, hogy a könyvek a 'válasz' (reply) szálban vannak, és tudatosítsd az olvasóban, hogy antikvár kincsekről lévén szó, "
+                f"frappáns, figyelemfelkeltő Facebook komment-szöveget! Ez lesz a poszt legelső kommentje, amely bevezeti az alatta lévő könyves linkeket. "
+                f"Feladatod: elegánsan és sürgetően kommunikáld, hogy a könyvek itt találhatóak lejjebb, és tudatosítsd az olvasóban, hogy antikvár kincsekről lévén szó, "
                 f"a legtöbbből csupán 1etlen példányunk van! (Kerüld a bazári kifejezéseket, mint az 'aki kapja marja'). "
                 f"Magyarul írj, hibátlan nyelvhelyességgel. Használj lefele mutató emojit (👇) a legvégén. NE írj bevezetőt, csak a tiszta szöveget add vissza!"
             )
             hook_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=150, system="Professional CopySEO tone.", messages=[{"role": "user", "content": hook_prompt}]).content[0].text.strip()
 
-            # --- STEP 10: PUBLISH & MEMORY ---
+            # --- STEP 9b: REELS SPECIFIC TEXT GENERATION ---
+            log_event("Step 9b: Reels (Videó) specifikus 'Cserkész' szöveg generálása...")
+            reels_prompt = (
+                f"Írj egy 2-3 mondatos, pörgős, figyelemfelkeltő szöveget egy Facebook Reels videóhoz! "
+                f"Említsd meg, hogy a mai napon olyan zsenik születtek, mint: {', '.join([a['name'] for a in authors_list[:3]])}. "
+                f"De a részletekért, a lexikonért és a ritka antikvár könyvajánlóért irányítsd át az olvasókat a normál Facebook hírfolyamunkon (feed) található legfrissebb képes posztunkhoz! "
+                f"Tónus: lelkes, rövid, figyelemfelkeltő. ZÉRÓ LINK!"
+            )
+            reels_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, system="Professional CopySEO tone.", messages=[{"role": "user", "content": reels_prompt}]).content[0].text.strip()
+
+            # --- STEP 10: DUAL PUBLISH & MEMORY ---
+            log_event("Step 10: Dupla Publikálás (Kétélű Kard)...")
             memory_data = {
                 "fingerprint": post_text[:100], 
                 "hook_text": hook_text,
@@ -580,20 +599,27 @@ class BooksySocialAgent:
             }
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
-            if has_video:
-                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'description': post_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(vid_path, 'rb')})
-                if r_v.status_code == 200:
-                    vid_id = str(r_v.json().get('id')); memory_data['media_id'] = vid_id
-                    log_event(f"✅ Videó vázlat kész! (ID: {vid_id})")
+            # 1. Képes Poszt (Nagyágyú)
+            upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
+            r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'message': post_text, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
+            if r_p.status_code == 200:
+                photo_id = str(r_p.json().get('id'))
+                memory_data['media_id'] = photo_id  # Ezt keresi az Omni-Radar a kommenteléshez!
+                log_event(f"✅ Képes vázlat (Feed Főcsapás) kész! (ID: {photo_id})")
             else:
-                upload_img = fallback_img_path if os.path.exists(fallback_img_path) else raw_img_path
-                r_p = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/photos", data={'access_token': fb_token, 'message': post_text, 'published': 'false'}, files={'source': open(upload_img, 'rb')})
-                if r_p.status_code == 200:
-                    photo_id = str(r_p.json().get('id')); memory_data['media_id'] = photo_id
-                    log_event(f"✅ Képes vázlat kész! (ID: {photo_id})")
+                log_event(f"⚠️ Képes vázlat hiba: {r_p.text}")
+
+            # 2. Reels Videó (Cserkész)
+            if has_video:
+                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'description': reels_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(vid_path, 'rb')})
+                if r_v.status_code == 200:
+                    vid_id = str(r_v.json().get('id'))
+                    log_event(f"✅ Videó vázlat (Reels Előőrs) kész! (ID: {vid_id})")
+                else:
+                    log_event(f"⚠️ Videó vázlat hiba: {r_v.text}")
             
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
-            self.send_morning_email(post_text, memory_data['links'], hook_text); log_event("Kész.")
+            self.send_morning_email(post_text, memory_data['links'], hook_text, reels_text); log_event("Kész.")
             
         except Exception as e:
             err_trace = traceback.format_exc()
@@ -629,7 +655,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V236 Online", "project": "Booksy"}
+def home(): return {"status": "V237 Online", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -640,12 +666,12 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V236 Uncut Edition Test Started"}
+    return {"status": "V237 Double-Edged Sword Test Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V236 Full Cascade Test Started"}
+    return {"status": "V237 Full Cascade Test Started"}
 
 if __name__ == "__main__":
     import uvicorn
