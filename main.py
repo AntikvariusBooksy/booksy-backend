@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V240 (THE RFC MAIL & FULL SYNC EDITION)
-# VERZIÓ: V240 - RFC COMPLIANT EMAIL HEADERS + ACTIVE DB SYNC + ZERO MARKDOWN + DRAFT FEED API
+# BOOKSY BRAIN - V241 (THE ISOLATED MAIL TEST EDITION)
+# VERZIÓ: V241 - RFC HEADER FIX + VERBOSE SMTP LOGGING + ISOLATED TEST ENDPOINT + SYNC SUSPENDED
 
 __import__('pysqlite3')
 import sys
@@ -290,6 +290,37 @@ class BooksySocialAgent:
         self.db = db
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+    def send_test_email(self):
+        try:
+            log_event("🛠️ Izolált E-mail Teszt indítása (V241)...")
+            sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
+            admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
+            if not sender or not admin_emails:
+                log_event("❌ Hiba: SMTP_SENDER vagy ADMIN_EMAIL környezeti változók hiányoznak!")
+                return
+            
+            server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
+            server.set_debuglevel(1) # Kőkemény szerver szintű logolás
+            server.starttls()
+            server.login(sender, password)
+            
+            for admin in admin_emails:
+                msg = MIMEMultipart()
+                # A MEGOLDÁS: A név Headerrel kódolva, az email sima ASCII
+                msg['From'] = f"{Header('Booksy AI', 'utf-8')} <{sender}>"
+                msg['To'] = admin
+                msg['Subject'] = Header(f"🛠️ TESZT: Booksy Email Protokoll V241", 'utf-8')
+                body = "Üdv!\n\nEz egy izolált tesztüzenet a Booksy V241-es rendszeréből.\nHa ezt olvasod, a csendes SMTP drop hiba elhárítva, és az RFC 2822 fejléc javítás működik!"
+                msg.attach(MIMEText(body, 'plain', 'utf-8'))
+                
+                log_event(f"Küldendő nyers MIME csomag:\n{msg.as_string()}")
+                server.send_message(msg)
+                
+            server.quit()
+            log_event("✅ Izolált teszt e-mail sikeresen átadva az Antikvarius SMTP szervernek.")
+        except Exception as e:
+            log_event(f"❌ Izolált teszt e-mail hiba: {e}")
+
     def send_error_email(self, error_details):
         try:
             sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
@@ -297,10 +328,11 @@ class BooksySocialAgent:
             if not sender or not admin_emails: return
             
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
+            server.set_debuglevel(1) # Extra logolás bekapcsolva
             server.starttls(); server.login(sender, password)
             for admin in admin_emails:
                 msg = MIMEMultipart()
-                msg['From'] = Header(f"Booksy AI <{sender}>", 'utf-8')
+                msg['From'] = f"{Header('Booksy AI', 'utf-8')} <{sender}>" # FIX
                 msg['To'] = admin
                 msg['Subject'] = Header(f"⚠️ KRITIKUS HIBA: Booksy Social Agent ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})", 'utf-8')
                 body = f"Üdv!\n\nA napi Facebook vázlat generálása során váratlan hiba történt. A folyamat megszakadt.\n\nRészletek a fejlesztőnek:\n\n{error_details}"
@@ -322,10 +354,11 @@ class BooksySocialAgent:
                 links_body += f"📖 {author_display}{b['title']}\n{b.get('marketing_desc', '')}\n🔗 {b['url']}\n\n"
 
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
+            server.set_debuglevel(1) # Extra logolás bekapcsolva
             server.starttls(); server.login(sender, password)
             for admin in admin_emails:
                 msg = MIMEMultipart()
-                msg['From'] = Header(f"Booksy AI <{sender}>", 'utf-8')
+                msg['From'] = f"{Header('Booksy AI', 'utf-8')} <{sender}>" # FIX
                 msg['To'] = admin
                 msg['Subject'] = Header(f"✅ Booksy Social Vázlatok (Képes & Reels) - {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}", 'utf-8')
                 body = (
@@ -413,7 +446,7 @@ class BooksySocialAgent:
         except Exception as e: log_event(f"Videó hiba: {e}"); return False
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V240 RFC Mail & Full Sync Edition)...")
+        log_event("Agentic Generálás indítása (V241 RFC Mail Test Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -671,15 +704,17 @@ class BooksySocialAgent:
 updater = AutoUpdater(db_handler); bot = BooksyBrain(db_handler); social_agent = BooksySocialAgent(db_handler); scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
-    try:
-        sync_success = updater.run_daily_update()
-        if not sync_success:
-            log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
-    except Exception as e:
-        log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
-    
-    social_agent.run_night_generation()
+    log_event("🌅 Master Láncreakció Indítása (TESZT ÜZEMMÓD - NÉMÍTVA)")
+    # TESZT MIATT KIKOMMENTELVE:
+    # try:
+    #     sync_success = updater.run_daily_update()
+    #     if not sync_success:
+    #         log_event("⚠️ Figyelem: A szinkronizáció nem sikerült. Biztonsági protokoll: Korábbi adatok használata.")
+    # except Exception as e:
+    #     log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}. Biztonsági protokoll aktiválva.")
+    # 
+    # social_agent.run_night_generation()
+    log_event("A Master Rutin a V241 e-mail teszt miatt jelenleg fel van függesztve.")
 
 
 # --- FASTAPI LIFESPAN ---
@@ -693,7 +728,7 @@ class ChatRequest(BaseModel): message: str; context_url: Optional[str] = ""; ses
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V240 Online", "project": "Booksy"}
+def home(): return {"status": "V241 Online (Email Test Mode)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest): return bot.process(req.message, req.context_url, req.session_id)
@@ -704,12 +739,18 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V240 RFC Mail Test Started"}
+    return {"status": "V241 Social Night Generation Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V240 Full Cascade Test Started"}
+    return {"status": "V241 Full Cascade Test Started"}
+
+# --- ÚJ: DEDIKÁLT IZOLÁLT E-MAIL TESZT VÉGPONT ---
+@app.post("/test-email-only")
+def test_email_only(bt: BackgroundTasks):
+    bt.add_task(social_agent.send_test_email)
+    return {"status": "V241 Isolated Email Test Started. Check Railway Logs for SMTP Handshake."}
 
 if __name__ == "__main__":
     import uvicorn
