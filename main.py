@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V247 (THE CACHE-BUSTER & PRECISION EDITION)
-# VERZIÓ: V247 - CACHE-BUSTING RAG + REELS DATE ANCHOR + AGGRESSIVE POLICY_ONLY (1M% INTEGRITY)
+# BOOKSY BRAIN - V248 (THE FINAL CUT & STABILITY EDITION)
+# VERZIÓ: V248 - 1000 TOKENS LIMIT + RAMBURS STRICT RULE + MORNING ROUTINE COMMENTED (1M% INTEGRITY)
 
 __import__('pysqlite3')
 import sys
@@ -269,7 +269,7 @@ class AIAnalyticsAgent:
                         f"2. Készlet & Beszerzés (zero_match_flag=True keresések).\n"
                         f"3. Proaktív Frontend UX súrlódások.\n"
                         f"4. 🔮 Webdevmk AI Előrejelzés a következő napokra!\n"
-                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.")
+                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok și százalékok.")
 
         for attempt in range(3):
             try:
@@ -301,7 +301,7 @@ class AIAnalyticsAgent:
         
         prompt = (f"A mellékelt szöveg az elmúlt hónap összes napi jelentése. Piaci havi trendek: {market_trends}\n\n"
                   f"Készíts vezetői HAVI JELENTÉST. Fókusz: Forgalmi források, erdélyi (RO IP, HU nyelvű) piac, hiánycikkek, "
-                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.")
+                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák și százalékok.")
         
         for attempt in range(3):
             try:
@@ -348,7 +348,7 @@ class AIAnalyticsAgent:
                 else:
                     log_event(f"❌ Éves Analitika végleges hiba: {e}")
 
-# --- UPDATER & LIVE POLICY SCRAPER (V247 CACHE-BUSTING) ---
+# --- UPDATER & LIVE POLICY SCRAPER ---
 class AutoUpdater:
     def __init__(self, db: DBHandler): self.db = db
     
@@ -363,7 +363,6 @@ class AutoUpdater:
         policies_text = ""
         for url in urls:
             try:
-                # --- V247: CACHE-BUSTING HOZZÁADVA ---
                 cache_buster = int(time.time())
                 r = requests.get(f"{url}?v={cache_buster}", headers={"Cache-Control": "no-cache"}, timeout=20)
                 if r.status_code == 200:
@@ -589,7 +588,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V247 Cache-Buster & Precision Edition)...")
+        log_event("Agentic Generálás (V248 Final Cut)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -610,7 +609,7 @@ class BooksySocialAgent:
                 f"(regényíró, költő, esszéista, sci-fi író, tudományos-ismeretterjesztő). SZIGORÚAN TILOS listázni filmrendezőket, "
                 f"képregényrajzolókat, színészeket, zenészeket, modelleket, animátorokat, forgatókönyvírókat! Csak klasszikus könyvírókat!\n"
                 f"Prioritás: Ha a listában van magyar vagy román író, kötelezően vedd be! A többit klasszikusokkal töltsd fel.\n"
-                f"Készíts róluk 'mini lexikon' megemlékezést (1-2 mondat/író). SZIGORÚ KIMENET: Csak és kizárólag XML formátum:\n"
+                f"Készíts róluk 'mini lexikon' megemlékezést (1-2 mondat/író). SZIGORÚ KIMENET: Csak și kizárólag XML formátum:\n"
                 f"<authors><author><name>Író Neve</name><nationality>Nemzetiség</nationality><bio>Rövid életrajz és műve.</bio></author></authors>"
             )
             
@@ -773,7 +772,6 @@ class BooksySocialAgent:
                     if attempt < 2: time.sleep(wait_time)
             hook_text = extract_xml_tag(raw_hook, "hook")
 
-            # --- V247: REELS DATE ANCHOR FIX ---
             reels_prompt = (f"Ma {hu_date_str} van! Írj 2-3 mondatos pörgős videó szöveget: {', '.join([a['name'].upper() for a in authors_list[:3]])} ma született. Zéró markdown. "
                             f"A tiszta szöveget KIZÁRÓLAG <reels_text> és </reels_text> tagek közé tedd!")
             
@@ -861,14 +859,16 @@ class BooksyBrain:
 
                 context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in raw_products])
             
-            # --- V247: AGGRESSIVE POLICY_ONLY & STRICT GRAMMAR PROMPT ---
             prompt = (f"Te Booksy vagy, az Antikvarius.ro profi asszisztense. A felhasználó kérdése: '{msg}'.\n\n"
                       f"<company_policies>\n{policy_text}\n</company_policies>\n\n"
                       f"SZIGORÚ SZABÁLYOK (SÉRTHETETLEN):\n"
                       f"1. FIGYELEM: Ha a kérdés adminisztratív (szállítás, cím, ÁSZF), KÖTELEZŐEN a <policy_only> taggel KEZDD A VÁLASZOD! Ne ajánlj könyveket, ha a kérdés csak a szállítási díjra vagy a bolt címére vonatkozik!\n"
                       f"2. Ha a kérdés szállításra, fizetésre, kapcsolatra vagy ÁSZF-re vonatkozik, KIZÁRÓLAG a <company_policies> alapján válaszolj! 0% hallucináció.\n"
-                      f"3. A szállítás díja fix! Nincs ingyenes szállítás semmilyen súlyra/összegre. Kommunikáld marketingesen: mivel fix a díj, minél több könyvet vesznek, annál jobban megéri!\n"
-                      f"4. Kiemelten ügyelj a magyar szakmai terminológiára és a helyesírásra! Tilos a gépelési hiba vagy nem létező, értelmetlen ragozott szavak (pl. 'könyvvizelés' helyett 'könyvvizsgálat') használata!\n"
+                      f"3. A szállítás díja fix! Nincs ingyenes szállítás semmilyen súlyra/összegre. Kommunikáld marketingesen: mivel fix a díj, minél több könyvet vesznek, annál jobban megéri! "
+                      # --- V248: UTÁNVÉT SZABÁLY BEÉGETÉSE ---
+                      f"KÖTELEZŐ SZABÁLY: Utánvétes fizetés (Ramburs / Plata la livrare) KIZÁRÓLAG Románián belül lehetséges! Más országokba (pl. HU, EU) CSAK online bankkártyás fizetés engedélyezett!\n"
+                      # ----------------------------------------
+                      f"4. Kiemelten ügyelj a magyar szakmai terminológiára és a helyesírásra! Tilos a gépelési hiba vagy nem létező, értelmetlen ragozott szavak használata!\n"
                       f"5. A választ kötelezően AZON A NYELVEN fogalmazd meg, ahogy a felhasználó kérdezett!\n\n"
                       f"Raktár infó:\n{context_text}\n\n"
                       f"Zéró markdown!")
@@ -876,12 +876,17 @@ class BooksyBrain:
             reply_text = "Sajnos hiba történt. Kérlek próbáld újra!"
             for attempt in range(3):
                 try:
-                    reply_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=400, system="Professional CopySEO tone. Multi-language Support.", messages=[{"role": "user", "content": prompt}])
+                    # --- V248: MAX_TOKENS FELEMELVE 1000-RE ---
+                    reply_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=1000, system="Professional CopySEO tone. Multi-language Support.", messages=[{"role": "user", "content": prompt}])
                     reply_text = reply_res.content[0].text.strip()
                     break
                 except Exception as e:
                     wait_time = 3 * (attempt + 1)
-                    if attempt < 2: time.sleep(wait_time)
+                    if attempt < 2:
+                        log_event(f"⚠️ Claude Hiba (RAG): {e}. Újra {wait_time} mp múlva...")
+                        time.sleep(wait_time)
+                    else:
+                        log_event(f"❌ Végzetes hiba a chaten: {e}")
 
             final_products = []
             if "<policy_only>" in reply_text:
@@ -907,17 +912,16 @@ social_agent = BooksySocialAgent(db_handler)
 analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
-def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V247)")
-    updater.fetch_store_policies()
-    
-    # DB SYNC KIKOMMENTELVE TESZTELÉSHEZ
-    # try:
-    #     sync_success = updater.run_daily_update()
-    #     if not sync_success: log_event("⚠️ Szinkronizációs hiba.")
-    # except Exception as e: log_event(f"⚠️ Váratlan hiba: {e}")
-    
-    social_agent.run_night_generation()
+# --- V248: NAPI RUTIN KIKOMMENTELVE A DEPLOY UTÁNI MAI LEÁLLÁSHOZ ---
+# def master_morning_routine():
+#     log_event("🌅 Master Láncreakció Indítása (V248)")
+#     updater.fetch_store_policies()
+#     try:
+#         sync_success = updater.run_daily_update()
+#         if not sync_success: log_event("⚠️ Szinkronizációs hiba.")
+#     except Exception as e: log_event(f"⚠️ Váratlan hiba: {e}")
+#     social_agent.run_night_generation()
+# --------------------------------------------------------------------
 
 def daily_analytics_job():
     try: analytics_agent.generate_daily_report()
@@ -937,7 +941,9 @@ def yearly_analytics_job():
 # --- FASTAPI APP ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
+    # --- V248: REGGELI CRON KIKOMMENTELVE ---
+    # scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
+    # ----------------------------------------
     scheduler.add_job(daily_analytics_job, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
     scheduler.add_job(monthly_analytics_job, CronTrigger(hour=8, minute=15, timezone=LOCAL_TZ))
     scheduler.add_job(yearly_analytics_job, CronTrigger(hour=8, minute=30, timezone=LOCAL_TZ))
@@ -954,7 +960,7 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V247 Online (Precision Edition)", "project": "Booksy"}
+def home(): return {"status": "V248 Online (Stability Edition)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
@@ -982,17 +988,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V247 Social Night Started"}
+    return {"status": "V248 Social Night Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V247 Full Cascade Started"}
+    return {"status": "V248 Full Cascade Started (Manual Trigger)"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V247 Daily Analytics Started."}
+    return {"status": "V248 Daily Analytics Started."}
 
 if __name__ == "__main__":
     import uvicorn
