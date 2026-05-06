@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V247 (THE FLAWLESS UX EDITION)
-# VERZIÓ: V247 - STRICT RETRY MECHANISM + POLICY_ONLY TAG + DEDUPLICATION + STRICT GRAMMAR (1M% INTEGRITY)
+# BOOKSY BRAIN - V247 (THE CACHE-BUSTER & PRECISION EDITION)
+# VERZIÓ: V247 - CACHE-BUSTING RAG + REELS DATE ANCHOR + AGGRESSIVE POLICY_ONLY (1M% INTEGRITY)
 
 __import__('pysqlite3')
 import sys
@@ -348,12 +348,12 @@ class AIAnalyticsAgent:
                 else:
                     log_event(f"❌ Éves Analitika végleges hiba: {e}")
 
-# --- UPDATER & LIVE POLICY SCRAPER ---
+# --- UPDATER & LIVE POLICY SCRAPER (V247 CACHE-BUSTING) ---
 class AutoUpdater:
     def __init__(self, db: DBHandler): self.db = db
     
     def fetch_store_policies(self):
-        log_event("📖 [RAG] Céges Kódex (ÁSZF, Szállítás, Fizetés, Kapcsolat) letöltése és frissítése...")
+        log_event("📖 [RAG] Céges Kódex (ÁSZF, Szállítás, Fizetés, Kapcsolat) letöltése...")
         urls = [
             "https://www.antikvarius.ro/hu/kapcsolat/",
             "https://www.antikvarius.ro/hu/szallitasi-informaciok/",
@@ -363,7 +363,9 @@ class AutoUpdater:
         policies_text = ""
         for url in urls:
             try:
-                r = requests.get(url, timeout=20)
+                # --- V247: CACHE-BUSTING HOZZÁADVA ---
+                cache_buster = int(time.time())
+                r = requests.get(f"{url}?v={cache_buster}", headers={"Cache-Control": "no-cache"}, timeout=20)
                 if r.status_code == 200:
                     soup = BeautifulSoup(r.content, 'html.parser')
                     for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -376,7 +378,7 @@ class AutoUpdater:
         if policies_text:
             with open(STORE_POLICIES_FILE, "w", encoding="utf-8") as f:
                 json.dump({"policies": policies_text}, f, ensure_ascii=False)
-            log_event("✅ Céges Kódex sikeresen frissítve az élő weboldalról.")
+            log_event("✅ Céges Kódex sikeresen frissítve az élő weboldalról (Cache-Busting aktív).")
 
     def download_feed(self):
         try:
@@ -587,7 +589,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V247 XML Cage & Strict Authors & RETRIES)...")
+        log_event("Agentic Generálás (V247 Cache-Buster & Precision Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -618,9 +620,10 @@ class BooksySocialAgent:
                     gem_authors_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[author_prompt])
                     break
                 except Exception as e:
+                    wait_time = 3 * (attempt + 1)
                     if attempt < 2:
-                        log_event(f"⚠️ Gemini Hiba (Szerzők): {e}. Újra 3 mp múlva...")
-                        time.sleep(3)
+                        log_event(f"⚠️ Gemini Hiba (Szerzők): {e}. Újra {wait_time} mp múlva...")
+                        time.sleep(wait_time)
                     else:
                         raise Exception(f"Végzetes Gemini hiba a szerzőknél: {e}")
             
@@ -634,7 +637,8 @@ class BooksySocialAgent:
                         vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=author['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                         break
                     except Exception as e:
-                        if attempt < 2: time.sleep(3)
+                        wait_time = 3 * (attempt + 1)
+                        if attempt < 2: time.sleep(wait_time)
                         else: vec = None
                 
                 if vec:
@@ -651,7 +655,8 @@ class BooksySocialAgent:
                         vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="klasszikus irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                         break
                     except Exception as e:
-                        if attempt < 2: time.sleep(3)
+                        wait_time = 3 * (attempt + 1)
+                        if attempt < 2: time.sleep(wait_time)
                         else: vec_fb = None
                 
                 if vec_fb:
@@ -670,9 +675,10 @@ class BooksySocialAgent:
                         b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
                         break
                     except Exception as e:
+                        wait_time = 3 * (attempt + 1)
                         if attempt < 2:
-                            log_event(f"⚠️ Claude Hiba (Marketing): {e}. Újra 3 mp múlva...")
-                            time.sleep(3)
+                            log_event(f"⚠️ Claude Hiba (Marketing): {e}. Újra {wait_time} mp múlva...")
+                            time.sleep(wait_time)
                         else:
                             b['marketing_desc'] = "Egy lenyűgöző ritkaság a kínálatunkból, amely minden könyvtár méltó dísze lehet."
             
@@ -682,7 +688,8 @@ class BooksySocialAgent:
                     gem_res_text = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[f"Elemezd: '{main_book['title']}'. Angol vizuális összefoglaló."]).text
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
             
             c_res_text = "Antique book on a dark wooden table lit by a single candle."
             for attempt in range(3):
@@ -690,7 +697,8 @@ class BooksySocialAgent:
                     c_res_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": f"Elemzés: {gem_res_text} Írj DALL-E 3 promptot. 35mm film frame."}]).content[0].text
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
             
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             try:
@@ -716,11 +724,12 @@ class BooksySocialAgent:
                     draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, system="CopySEO.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
             
             lector_prompt = (f"Lektoráld szigorúan! ZÉRÓ MARKDOWN. "
                              f"KÖTELEZŐ SZABÁLY: A tiszta, végleges posztot KIZÁRÓLAG <final_post> és </final_post> tagek közé tedd! "
-                             f"SZIGORÚAN TILOS a poszt végére jókívánságot (pl. 'Boldog születésnapot') vagy lezárást írni!\n\nVÁZLAT:\n{draft_text}")
+                             f"SZIGORÚAN TILOS a poszt végére jókívánságot vagy lezárást írni!\n\nVÁZLAT:\n{draft_text}")
             
             raw_lexicon = f"<final_post>{draft_text}</final_post>"
             for attempt in range(3):
@@ -728,7 +737,8 @@ class BooksySocialAgent:
                     raw_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
             lektored_lexicon = extract_xml_tag(raw_lexicon, "final_post") 
 
             bridge_prompt = (f"Írj egy 3 mondatos átvezetést ehhez a könyvhöz: „{main_book['title']}”. ZÉRÓ MARKDOWN. "
@@ -740,7 +750,8 @@ class BooksySocialAgent:
                     raw_bridge = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=500, messages=[{"role": "user", "content": bridge_prompt}]).content[0].text
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
             bridge_text = extract_xml_tag(raw_bridge, "bridge")
 
             post_text = lektored_lexicon
@@ -748,7 +759,7 @@ class BooksySocialAgent:
             post_text += "\n\n" + bridge_text
 
             book_titles = ", ".join([b['title'] for b in selected_books])
-            hook_prompt = (f"Te egy értékesítő vagy. Írj 1-2 mondatos bevezetőt a linkek elé, amik ezekhez a könyvekhez vezetnek: {book_titles}. "
+            hook_prompt = (f"Te egy értékesítő vagy. Írj 1-2 mondatos bevezetőt a linkek elé: {book_titles}. "
                            f"A linkek már ott lesznek alattad, így NE kérd be őket tőlem és NE kérdezz vissza! "
                            f"A tiszta szöveget KIZÁRÓLAG <hook> és </hook> tagek közé tedd! Zéró markdown, használj 👇 emojit.")
             
@@ -758,19 +769,22 @@ class BooksySocialAgent:
                     raw_hook = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=150, messages=[{"role": "user", "content": hook_prompt}]).content[0].text
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
             hook_text = extract_xml_tag(raw_hook, "hook")
 
-            reels_prompt = (f"Írj 2-3 mondatos pörgős videó szöveget: {', '.join([a['name'].upper() for a in authors_list[:3]])} ma született. Zéró markdown. "
+            # --- V247: REELS DATE ANCHOR FIX ---
+            reels_prompt = (f"Ma {hu_date_str} van! Írj 2-3 mondatos pörgős videó szöveget: {', '.join([a['name'].upper() for a in authors_list[:3]])} ma született. Zéró markdown. "
                             f"A tiszta szöveget KIZÁRÓLAG <reels_text> és </reels_text> tagek közé tedd!")
             
-            raw_reels = f"<reels_text>Fedezd fel a mai napon született klasszikusokat!</reels_text>"
+            raw_reels = f"<reels_text>Fedezd fel a mai napon, {hu_date_str} született klasszikusokat!</reels_text>"
             for attempt in range(3):
                 try:
                     raw_reels = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": reels_prompt}]).content[0].text
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
             reels_text = extract_xml_tag(raw_reels, "reels_text") + "\n\nRészletek, könyvajánló és a napi irodalmi lexikon a legújabb képes posztunkban a feeden! 👇"
 
             memory_data = {"fingerprint": post_text[:100], "hook_text": hook_text, "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]}
@@ -826,7 +840,8 @@ class BooksyBrain:
                     vec = vec_req.embeddings[0].values
                     break
                 except Exception as e:
-                    if attempt < 2: time.sleep(3)
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
 
             db_res = {'ids': [], 'metadatas': []}
             if vec:
@@ -846,52 +861,44 @@ class BooksyBrain:
 
                 context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in raw_products])
             
-            prompt = (f"Te Booksy vagy, az Antikvarius.ro profi, kedves asszisztense. A felhasználó kérdése: '{msg}'.\n\n"
+            # --- V247: AGGRESSIVE POLICY_ONLY & STRICT GRAMMAR PROMPT ---
+            prompt = (f"Te Booksy vagy, az Antikvarius.ro profi asszisztense. A felhasználó kérdése: '{msg}'.\n\n"
                       f"<company_policies>\n{policy_text}\n</company_policies>\n\n"
-                      f"SZIGORÚ SZABÁLYOK:\n"
-                      f"1. Ha a kérdés szállításra, fizetésre, kapcsolatra vagy ÁSZF-re vonatkozik, KIZÁRÓLAG a <company_policies> alapján válaszolj! 0% hallucináció.\n"
-                      f"2. A szállítás díja fix! Nincs ingyenes szállítás semmilyen súlyra/összegre. Kommunikáld marketingesen: mivel fix a díj, minél több könyvet vesznek, annál jobban megéri!\n"
-                      f"3. A választ kötelezően AZON A NYELVEN (magyarul vagy románul) fogalmazd meg, ahogy a felhasználó a kérdést feltette!\n"
-                      # --- V247: ÚJ UX VÉDŐHÁLÓK HOZZÁADÁSA ---
-                      f"4. Kiemelten ügyelj a magyar szakmai terminológiára és a helyesírásra! Tilos a gépelési hiba, a tükörfordítás, vagy nem létező, értelmetlen ragozott szavak (pl. könyvvizelés helyett könyvvizsgálat) használata. Csak létező, hivatalos szavakat használj!\n"
-                      f"5. Ha a kérdés KIZÁRÓLAG adminisztratív vagy ügyfélszolgálati (szállítás, cím, ÁSZF), és a felajánlott könyvek tartalmilag nem kapcsolódnak szorosan a felhasználó szándékához, kötelezően helyezz el egy <policy_only> taget a válaszodban!\n"
-                      # ----------------------------------------
-                      f"\n"
+                      f"SZIGORÚ SZABÁLYOK (SÉRTHETETLEN):\n"
+                      f"1. FIGYELEM: Ha a kérdés adminisztratív (szállítás, cím, ÁSZF), KÖTELEZŐEN a <policy_only> taggel KEZDD A VÁLASZOD! Ne ajánlj könyveket, ha a kérdés csak a szállítási díjra vagy a bolt címére vonatkozik!\n"
+                      f"2. Ha a kérdés szállításra, fizetésre, kapcsolatra vagy ÁSZF-re vonatkozik, KIZÁRÓLAG a <company_policies> alapján válaszolj! 0% hallucináció.\n"
+                      f"3. A szállítás díja fix! Nincs ingyenes szállítás semmilyen súlyra/összegre. Kommunikáld marketingesen: mivel fix a díj, minél több könyvet vesznek, annál jobban megéri!\n"
+                      f"4. Kiemelten ügyelj a magyar szakmai terminológiára és a helyesírásra! Tilos a gépelési hiba vagy nem létező, értelmetlen ragozott szavak (pl. 'könyvvizelés' helyett 'könyvvizsgálat') használata!\n"
+                      f"5. A választ kötelezően AZON A NYELVEN fogalmazd meg, ahogy a felhasználó kérdezett!\n\n"
                       f"Raktár infó:\n{context_text}\n\n"
-                      f"Zéró markdown! Használj megfelelő mondatzáró jeleket és segítőkész hangnemet.")
+                      f"Zéró markdown!")
             
-            reply_text = "Sajnos hiba történt a keresés során. Kérlek próbáld újra!"
+            reply_text = "Sajnos hiba történt. Kérlek próbáld újra!"
             for attempt in range(3):
                 try:
                     reply_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=400, system="Professional CopySEO tone. Multi-language Support.", messages=[{"role": "user", "content": prompt}])
                     reply_text = reply_res.content[0].text.strip()
                     break
                 except Exception as e:
-                    if attempt < 2:
-                        log_event(f"⚠️ Claude Hiba (RAG): {e}. Újra 3 mp múlva...")
-                        time.sleep(3)
-                    else:
-                        log_event(f"❌ Végzetes hiba a chaten: {e}")
+                    wait_time = 3 * (attempt + 1)
+                    if attempt < 2: time.sleep(wait_time)
 
-            # --- V247: DUPLIKÁCIÓ SZŰRŐ ÉS <policy_only> INTERCEPT HOZZÁADÁSA ---
             final_products = []
             if "<policy_only>" in reply_text:
                 reply_text = reply_text.replace("<policy_only>", "").replace("</policy_only>", "").strip()
-                final_products = [] # Irreleváns könyvek kidobása
+                final_products = []
             else:
-                # Duplikáció szűrés cím alapján
                 seen_titles = set()
                 for p in raw_products:
                     clean_title = p.get('title', '').strip().lower()
                     if clean_title not in seen_titles:
                         seen_titles.add(clean_title)
                         final_products.append(p)
-            # ---------------------------------------------------------------------
 
             return {"reply": reply_text, "products": final_products, "zero_match_flag": zero_match}
         except Exception as e:
             log_event(f"Bot hiba: {e}")
-            return {"reply": "Sajnos hiba történt a keresés során. Kérlek próbáld újra!", "products": [], "zero_match_flag": True}
+            return {"reply": "Sajnos hiba történt. Kérlek próbáld újra!", "products": [], "zero_match_flag": True}
 
 # --- MASTER CASCADE & SCHEDULING ---
 updater = AutoUpdater(db_handler)
@@ -902,14 +909,13 @@ scheduler = BackgroundScheduler()
 
 def master_morning_routine():
     log_event("🌅 Master Láncreakció Indítása (V247)")
-    
     updater.fetch_store_policies()
     
-    # FIGYELEM: TESZTELÉS MIATT A SZINKRONIZÁCIÓ KIKOMMENTELVE!
+    # DB SYNC KIKOMMENTELVE TESZTELÉSHEZ
     # try:
     #     sync_success = updater.run_daily_update()
-    #     if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
-    # except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
+    #     if not sync_success: log_event("⚠️ Szinkronizációs hiba.")
+    # except Exception as e: log_event(f"⚠️ Váratlan hiba: {e}")
     
     social_agent.run_night_generation()
 
@@ -928,7 +934,7 @@ def yearly_analytics_job():
         try: analytics_agent.generate_yearly_report()
         except Exception as e: log_event(f"⚠️ Éves Analitika Hiba: {e}")
 
-# --- FASTAPI APP & ENDPOINTS ---
+# --- FASTAPI APP ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
@@ -941,41 +947,32 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
 
 class ChatRequest(BaseModel): 
-    message: str
-    context_url: Optional[str] = ""
-    session_id: Optional[str] = ""
-    device_type: Optional[str] = "Desktop"
-    ui_lang: Optional[str] = "hu"
-    chat_lang: Optional[str] = "hu"
-    target_catalog: Optional[str] = "mixed"
+    message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
+    device_type: Optional[str] = "Desktop"; ui_lang: Optional[str] = "hu"
+    chat_lang: Optional[str] = "hu"; target_catalog: Optional[str] = "mixed"
 
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V247 Online (Flawless UX Edition)", "project": "Booksy"}
+def home(): return {"status": "V247 Online (Precision Edition)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
     start_time = time.time()
     bot_response = bot.process(req.message, req.context_url, req.session_id)
     latency = int((time.time() - start_time) * 1000)
-    
     if req.message.startswith("/"): return bot_response
-
     client_ip = request.client.host if request.client else None
     geo_country, geo_region = get_geo_from_ip(client_ip)
-
     safe_user_msg = clean_pii(req.message)
     offered_ids = ",".join([p.get("id", "") for p in bot_response.get("products", [])]) if bot_response.get("products") else ""
-    zero_match = bot_response.get("zero_match_flag", False)
-
     log_data = {
         "session_id": req.session_id, "user_msg": safe_user_msg, "bot_reply": bot_response.get("reply", "")[:200],
         "context_url": req.context_url, "geo_country": geo_country, "geo_region": geo_region,
         "ui_language": req.ui_lang, "chat_language": req.chat_lang, "target_catalog": req.target_catalog,
-        "offered_book_ids": offered_ids, "zero_match_flag": zero_match, "latency_ms": latency, "device_type": req.device_type
+        "offered_book_ids": offered_ids, "zero_match_flag": bot_response.get("zero_match_flag", False),
+        "latency_ms": latency, "device_type": req.device_type
     }
-    
     analytics_db.log_chat(log_data)
     return bot_response
 
@@ -985,17 +982,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V247 Social Night Generation Started"}
+    return {"status": "V247 Social Night Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V247 Full Cascade Test Started"}
+    return {"status": "V247 Full Cascade Started"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V247 Daily Analytics Test Started."}
+    return {"status": "V247 Daily Analytics Started."}
 
 if __name__ == "__main__":
     import uvicorn
