@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V243 (THE ANALYTICS, GDPR GEO & T+1 CASCADE EDITION)
-# VERZIÓ: V243 - FULL CASCADE REACTIVATED + RFC HEADER FIX + ZERO MARKDOWN + DRAFT FEED API + AI ANALYTICS
+# BOOKSY BRAIN - V244 (THE ENTERPRISE ANALYTICS EDITION)
+# VERZIÓ: V244 - XML CAGE + RAG RESTORED + T+1 ANALYTICS + GDPR GEO + SYNC COMMENTED FOR TESTING
 
 __import__('pysqlite3')
 import sys
@@ -37,6 +37,7 @@ XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xm
 TEMP_FILE = "temp_feed.xml"
 SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
 CHAT_DB_FILE = "./booksy_db/chat_logs.db"
+ADMIN_EMAILS = ["bookmankiado@gmail.com", "joomla900@gmail.com"] # Fixált menedzsment emailek
 
 try:
     import PIL.Image
@@ -73,6 +74,30 @@ def html_to_markdown_clean(raw_html):
     try: return markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style']).strip()
     except: return str(raw_html)
 
+def extract_xml_tag(text: str, tag: str) -> str:
+    """Kivágja az AI által generált felesleges szövegekből a nyers tartalmat az XML tagek alapján."""
+    match = re.search(f"<{tag}>(.*?)</{tag}>", text, re.DOTALL | re.IGNORECASE)
+    if match: return match.group(1).strip()
+    return text.strip() # Fallback, ha a modell elfelejtette a taget
+
+def clean_pii(text):
+    """GDPR szűrő: Eltávolítja az e-mail címeket és a telefonszámokat logolás előtt."""
+    if not text: return ""
+    text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[EMAIL TÖRÖLVE]', text)
+    text = re.sub(r'(\+?\d{1,3}[\s-]?)?\(?\d{2,3}\)?[\s-]?\d{3}[\s-]?\d{3,4}', '[TELEFON TÖRÖLVE]', text)
+    return text
+
+def get_geo_from_ip(ip_address):
+    """Röpte-Geolokáció: Csak ország/régió, nyers IP nem marad."""
+    if not ip_address or ip_address in ["127.0.0.1", "localhost", "::1"]: return "Ismeretlen", "Ismeretlen"
+    try:
+        r = requests.get(f"http://ip-api.com/json/{ip_address}?fields=countryCode,regionName", timeout=2)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("countryCode", "Ismeretlen"), data.get("regionName", "Ismeretlen")
+    except: pass
+    return "Ismeretlen", "Ismeretlen"
+
 def safe_authors_parse(text):
     try:
         soup = BeautifulSoup(text, 'html.parser')
@@ -98,24 +123,6 @@ def extract_metadata_from_html(raw_html):
                 if next_td: meta[key] = next_td.get_text(strip=True)
     except: pass
     return meta
-
-def clean_pii(text):
-    """GDPR szűrő: Eltávolítja az e-mail címeket és a tipikus telefonszám formátumokat a logolás előtt."""
-    if not text: return ""
-    text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[EMAIL TÖRÖLVE]', text)
-    text = re.sub(r'(\+?\d{1,3}[\s-]?)?\(?\d{2,3}\)?[\s-]?\d{3}[\s-]?\d{3,4}', '[TELEFON TÖRÖLVE]', text)
-    return text
-
-def get_geo_from_ip(ip_address):
-    """Röpte-Geolokáció: Lekéri az országot/régiót, majd az IP-t sosem tárolja (GDPR biztos)."""
-    if not ip_address or ip_address in ["127.0.0.1", "localhost", "::1"]: return "Ismeretlen", "Ismeretlen"
-    try:
-        r = requests.get(f"http://ip-api.com/json/{ip_address}?fields=countryCode,regionName", timeout=2)
-        if r.status_code == 200:
-            data = r.json()
-            return data.get("countryCode", "Ismeretlen"), data.get("regionName", "Ismeretlen")
-    except: pass
-    return "Ismeretlen", "Ismeretlen"
 
 # --- DB HANDLERS ---
 class DBHandler:
@@ -198,7 +205,7 @@ class AnalyticsDB:
             c.execute("DELETE FROM chat_logs WHERE date(timestamp) < ?", (thirty_days_ago,))
             deleted = c.rowcount
             conn.commit(); conn.close()
-            log_event(f"🧹 Takarítás: {deleted} db 30 napnál régebbi nyers log törölve (A riportok megmaradtak).")
+            log_event(f"🧹 Takarítás: {deleted} db 30 napnál régebbi nyers log törölve (Riportok megmaradtak).")
         except Exception as e: log_event(f"⚠️ Takarítás hiba: {e}")
 
 db_handler = DBHandler()
@@ -208,17 +215,16 @@ analytics_db = AnalyticsDB()
 class AIAnalyticsAgent:
     def __init__(self):
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        # A Menedzsment által fixált email címek (fallback)
-        self.report_emails = ["bookmankiado@gmail.com", "joomla900@gmail.com"]
+        self.report_emails = ADMIN_EMAILS
 
     def _get_market_trends(self, context="napi"):
         try:
-            prompt = (f"Keress rá a weben a legfrissebb e-kereskedelmi és könyvpiaci trendekre. Kérlek, SZIGORÚAN ebben a prioritási "
-                      f"sorrendben elemezz és add vissza a {context} információt: 1. Romániai piac, 2. Magyarországi piac, 3. Európai trendek, 4. Világpiac. "
-                      f"Mik a legújabb keresett műfajok, vásárlói szokások?")
+            prompt = (f"Keress rá a weben a legfrissebb e-kereskedelmi és könyvpiaci trendekre. SZIGORÚ prioritási "
+                      f"sorrend a {context} adatokhoz: 1. Romániai piac, 2. Magyarországi piac, 3. Európai trendek, 4. Világpiac. "
+                      f"Mik a legújabb keresett műfajok?")
             res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[prompt])
             return res.text
-        except: return "A piaci trendek lekérése sikertelen."
+        except: return "Piaci trendek lekérése sikertelen."
 
     def _send_analytics_email(self, subject: str, body: str):
         try:
@@ -234,12 +240,11 @@ class AIAnalyticsAgent:
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
-            log_event(f"📧 Analitika E-mail ({subject}) sikeresen elküldve a menedzsmentnek.")
-        except Exception as e: log_event(f"📧 Hiba az Analitika e-mail küldésénél: {e}")
+            log_event(f"📧 Analitika E-mail ({subject}) kiküldve.")
+        except Exception as e: log_event(f"📧 Hiba Analitika küldésnél: {e}")
 
     def generate_daily_report(self):
-        log_event("📊 Napi AI Analitika Indítása (T+1 logika)...")
-        # T+1: A "tegnapi" 24 órát elemezzük
+        log_event("📊 Napi AI Analitika Indítása (T+1)...")
         target_dt = datetime.now(LOCAL_TZ) - timedelta(days=1)
         target_date_str = target_dt.strftime('%Y-%m-%d')
         
@@ -248,31 +253,30 @@ class AIAnalyticsAgent:
         
         if not logs or len(logs) == 0:
             system_prompt = "Válságmenedzser és UX Detektív vagy. Ma nulla interakció volt a chaten."
-            user_msg = f"Piaci adatok: {market_trends}\n\nKészíts egy Napi Riportot arról, mi okozhatta a zéró forgalmat! Vizsgálj meg UX hibákat (elcsúszott gomb, láthatatlan szín), vagy piaci okokat. Készíts bullet-pointos listát!"
+            user_msg = f"Piaci adatok: {market_trends}\n\nKészíts Napi Riportot arról, mi okozhatta a zéró forgalmat! Vizsgálj meg UX hibákat vagy piaci okokat. Készíts bullet-pointos listát!"
         elif len(logs) < 5:
-            system_prompt = "Konverzióoptimalizálási (CRO) és UX szakértő vagy. Kevés adatból is aranyat bányászol."
-            user_msg = f"Napi logok ({len(logs)} db):\n{logs}\n\nPiaci adatok: {market_trends}\n\nKészíts Napi Riportot! Fókusz: Hogyan vegyük rá az embereket a chat használatára? Javasolj egy bevonó Facebook stratégiát a RO/HU trendek alapján. Zéró markdown diagram, csak lista és százalék."
+            system_prompt = "Konverzióoptimalizálási (CRO) és UX szakértő vagy."
+            user_msg = f"Napi logok ({len(logs)} db):\n{logs}\n\nPiaci adatok: {market_trends}\n\nKészíts Napi Riportot! Fókusz: Hogyan vegyük rá az embereket a chat használatára? Javasolj egy bevonó stratégiát a RO/HU trendek alapján. Zéró markdown diagram."
         else:
             system_prompt = "Profi UX/UI kutató, Webdesigner és Menedzsment Stratéga vagy."
             user_msg = (f"Napi logok ({len(logs)} db):\n{logs}\n\nPiaci trendek:\n{market_trends}\n\n"
-                        f"Készíts egy átfogó Napi Riportot a Booksy vezetőségének. Fókuszok:\n"
-                        f"1. Földrajzi & Nyelvi Eloszlás (RO vs HU IP-k és nyelvi anomáliák - Erdély fókusz).\n"
-                        f"2. Készlet & Beszerzés (Mik voltak a 'zero_match_flag=True' keresések? Mit ajánljunk?).\n"
-                        f"3. Proaktív Frontend UX (Vannak-e súrlódások a szállításnál, navigációban?).\n"
-                        f"4. A végén egy '🔮 Webdevmk AI Előrejelzés a következő napokra' szekció!\n"
-                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékos becslések.")
+                        f"Készíts átfogó Napi Riportot. Fókuszok:\n"
+                        f"1. Földrajzi & Nyelvi Eloszlás (RO vs HU IP-k - Erdély fókusz).\n"
+                        f"2. Készlet & Beszerzés (zero_match_flag=True keresések).\n"
+                        f"3. Proaktív Frontend UX súrlódások.\n"
+                        f"4. 🔮 Webdevmk AI Előrejelzés a következő napokra!\n"
+                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.")
 
         try:
             res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2500, system=system_prompt, messages=[{"role": "user", "content": user_msg}])
             report = res.content[0].text
             analytics_db.save_report("daily", target_date_str, report)
             self._send_analytics_email(f"📊 Napi Booksy AI UX & SEO Jelentés ({target_date_str})", report)
-            analytics_db.cleanup_old_logs() # Törli a régi logokat, a riport marad
+            analytics_db.cleanup_old_logs() 
             log_event("✅ Napi Analitika befejezve.")
         except Exception as e: log_event(f"❌ Napi Analitika hiba: {e}")
 
     def generate_monthly_report(self):
-        # T+1: A hónap első napján fut le, és az "előző hónapot" (pl. 2026-04) elemzi
         now = datetime.now(LOCAL_TZ)
         last_month_dt = now.replace(day=1) - timedelta(days=1)
         target_month_str = last_month_dt.strftime('%Y-%m')
@@ -285,10 +289,8 @@ class AIAnalyticsAgent:
         compiled_reports = "\n\n---NAPI JELENTÉS---\n\n".join(daily_reports)
         
         prompt = (f"A mellékelt szöveg az elmúlt hónap összes napi jelentése. Piaci havi trendek: {market_trends}\n\n"
-                  f"Készíts egy kőkemény, vezetői, taktikai HAVI JELENTÉST. "
-                  f"Fókusz: Forgalmi források (Facebook Agent hatékonysága), az erdélyi (RO IP, de HU nyelvű) piac aránya és viselkedése, hiánycikkek aggregált listája, "
-                  f"és UX frontend javaslatok a következő hónapra. "
-                  f"Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok, sallang nélkül.")
+                  f"Készíts vezetői HAVI JELENTÉST. Fókusz: Forgalmi források, erdélyi (RO IP, HU nyelvű) piac, hiánycikkek, "
+                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.")
         
         try:
             res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=3000, system="Üzleti Stratéga vagy.", messages=[{"role": "user", "content": prompt}])
@@ -299,7 +301,6 @@ class AIAnalyticsAgent:
         except Exception as e: log_event(f"❌ Havi Analitika hiba: {e}")
 
     def generate_yearly_report(self):
-        # T+1: Január 1-én fut le, és az "előző évet" elemzi
         target_year_str = str(datetime.now(LOCAL_TZ).year - 1)
         log_event(f"👑 ÉVES AI Stratégiai Analitika Indítása ({target_year_str})...")
         
@@ -310,10 +311,9 @@ class AIAnalyticsAgent:
         compiled_reports = "\n\n---HAVI JELENTÉS---\n\n".join(monthly_reports)
         
         prompt = (f"A mellékelt szöveg az elmúlt év 12 havi jelentése. Globális Éves Trendek: {market_trends}\n\n"
-                  f"Készíts egy ÉVES Menedzsment Riportot és Stratégiai Iránytűt! Értékeld az évet (Year-in-Review), "
-                  f"a terjeszkedési statisztikákat (RO vs HU konverziók), a marketing ROI-t (Chatbot vs SEO). "
-                  f"Írd meg a legfontosabb frontend UX tanulságokat, majd egy masszív '🔮 Webdevmk AI Éves Előrejelzés és Beszerzési Stratégia a Jövő Évre' szekciót. "
-                  f"Tiszta, átlátható, adatalapú, bullet-pointos struktúra.")
+                  f"Készíts ÉVES Menedzsment Riportot! Értékeld a ROI-t, terjeszkedési statisztikákat (RO vs HU), "
+                  f"frontend UX tanulságokat, majd egy '🔮 Webdevmk AI Éves Előrejelzés és Beszerzés' szekciót. "
+                  f"Bullet-pointos, diagrammentes struktúra.")
         
         try:
             res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=4000, system="Vezérigazgatói Tanácsadó vagy.", messages=[{"role": "user", "content": prompt}])
@@ -323,7 +323,7 @@ class AIAnalyticsAgent:
             log_event("✅ Éves Analitika befejezve.")
         except Exception as e: log_event(f"❌ Éves Analitika hiba: {e}")
 
-# --- EXISTING SERVICES (AutoUpdater, BooksySocialAgent) ---
+# --- UPDATER ---
 class AutoUpdater:
     def __init__(self, db: DBHandler): self.db = db
     def download_feed(self):
@@ -384,81 +384,47 @@ class AutoUpdater:
             log_event(f"❌ SZINKRON HIBA (Feldolgozás): {e}")
             return False
 
+# --- SOCIAL AGENT ---
 class BooksySocialAgent:
     def __init__(self, db: DBHandler):
         self.db = db
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-    def send_test_email(self):
-        try:
-            log_event("🛠️ Izolált E-mail Teszt indítása (V243)...")
-            sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
-            admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
-            if not sender or not admin_emails: return
-            
-            server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
-            server.set_debuglevel(1)
-            server.starttls(); server.login(sender, password)
-            
-            for admin in admin_emails:
-                msg = MIMEMultipart()
-                msg['From'] = f"{Header('Booksy AI', 'utf-8')} <{sender}>"
-                msg['To'] = admin
-                msg['Subject'] = Header(f"🛠️ TESZT: Booksy Email Protokoll V243", 'utf-8')
-                body = "Üdv!\n\nEz egy izolált tesztüzenet a Booksy V243-as rendszeréből."
-                msg.attach(MIMEText(body, 'plain', 'utf-8'))
-                server.send_message(msg)
-            server.quit()
-            log_event("✅ Izolált teszt e-mail sikeresen átadva az Antikvarius SMTP szervernek.")
-        except Exception as e: log_event(f"❌ Izolált teszt e-mail hiba: {e}")
-
     def send_error_email(self, error_details):
         try:
             sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
-            admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
-            if not sender or not admin_emails: return
-            
+            if not sender: return
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
-            server.set_debuglevel(1)
             server.starttls(); server.login(sender, password)
-            for admin in admin_emails:
+            for admin in ADMIN_EMAILS:
                 msg = MIMEMultipart()
                 msg['From'] = f"{Header('Booksy AI', 'utf-8')} <{sender}>"
                 msg['To'] = admin
                 msg['Subject'] = Header(f"⚠️ KRITIKUS HIBA: Booksy Social Agent ({datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')})", 'utf-8')
-                body = f"Üdv!\n\nA napi Facebook vázlat generálása során váratlan hiba történt. A folyamat megszakadt.\n\nRészletek a fejlesztőnek:\n\n{error_details}"
+                body = f"Üdv!\n\nA napi Facebook vázlat generálása során váratlan hiba történt.\n\nRészletek:\n\n{error_details}"
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
-            log_event("⚠️ Hiba e-mail sikeresen elküldve az adminoknak.")
-        except Exception as e: log_event(f"📧 Hiba az error e-mail küldésénél: {e}")
+        except Exception as e: log_event(f"📧 Hiba az error e-mailnél: {e}")
 
     def send_morning_email(self, post_text, memory_links, hook_text="", reels_text=""):
         try:
             sender, password = os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD")
-            admin_emails = [e.strip() for e in os.getenv("ADMIN_EMAIL", "").split(",") if e.strip()]
             if not sender: return
-            
             links_body = ""
             for b in memory_links:
                 author_display = f"{b['author']} - " if b.get('author') and b['author'] != 'Ismeretlen' else ""
                 links_body += f"📖 {author_display}{b['title']}\n{b.get('marketing_desc', '')}\n🔗 {b['url']}\n\n"
 
             server = smtplib.SMTP(os.getenv("SMTP_SERVER", "mail.antikvarius.ro"), 26, timeout=20)
-            server.set_debuglevel(1)
             server.starttls(); server.login(sender, password)
-            for admin in admin_emails:
+            for admin in ADMIN_EMAILS:
                 msg = MIMEMultipart()
                 msg['From'] = f"{Header('Booksy AI', 'utf-8')} <{sender}>"
                 msg['To'] = admin
-                msg['Subject'] = Header(f"✅ Booksy Social Vázlatok (Képes & Reels) - {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}", 'utf-8')
+                msg['Subject'] = Header(f"✅ Booksy Social Vázlatok - {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}", 'utf-8')
                 body = (
-                    f"Üdv!\n\n"
-                    f"A Facebook vázlatok elkészültek a Drafts mappába.\n"
-                    f"Két posztot találsz majd:\n"
-                    f"1. A Fő Képes Poszt (Erre megy a komment)\n"
-                    f"2. A Reels Videó (Cserkész poszt, ide nem megy komment)\n\n"
-                    f"Miután Business Suite-ban rákattintottál a Publikálás gombra, a chatben használd a /booklink admin123 parancsot!\n\n"
+                    f"Üdv!\n\nA Facebook vázlatok elkészültek a Drafts mappába.\n"
                     f"=========================\nFŐ KÉPES POSZT SZÖVEGE:\n=========================\n{post_text}\n\n"
                     f"=========================\nREELS VIDEÓ SZÖVEGE:\n=========================\n{reels_text}\n\n"
                     f"=========================\nDIREKT KOMMENTBE MEGY (EGYBEN):\n=========================\n{hook_text}\n\n{links_body.strip()}"
@@ -466,22 +432,17 @@ class BooksySocialAgent:
                 msg.attach(MIMEText(body, 'plain', 'utf-8'))
                 server.send_message(msg)
             server.quit()
-            log_event("Értesítő e-mail sikeresen elküldve (RFC 2822 UTF-8 kódolással).")
+            log_event("Értesítő e-mail sikeresen elküldve.")
         except Exception as e: log_event(f"📧 Email hiba: {e}")
 
     def _prepare_visual_layers(self, raw_img_path, overlay_path, fallback_path, title, author):
         try:
-            log_event("Vizuális rétegek (Overlay és Fallback) generálása Bounding Box algoritmussal...")
             img = PIL.Image.open(raw_img_path).convert("RGBA")
             width, height = img.size
-
             font_path = "Montserrat-Bold.ttf"
-            use_bbox = False
             best_font = ImageFont.load_default()
-
-            if os.path.exists(font_path): use_bbox = True
-            else: log_event("❌ FIGYELEM: A 'Montserrat-Bold.ttf' nem található! Alapértelmezett betű aktív.")
-
+            use_bbox = os.path.exists(font_path)
+            
             overlay = PIL.Image.new('RGBA', (width, height), (0,0,0,0))
             draw = ImageDraw.Draw(overlay)
             bar_height = int(height * 0.15); bar_y = height - bar_height
@@ -504,14 +465,12 @@ class BooksySocialAgent:
             draw.text(((width - text_w) / 2, bar_y + (bar_height - text_h) / 2 - bbox[1]), full_text, font=best_font, fill=(255, 255, 255, 255))
             overlay.save(overlay_path, "PNG")
             combined = PIL.Image.alpha_composite(img, overlay); combined.convert("RGB").save(fallback_path, "JPEG")
-            log_event("Rétegek mentve.")
             return True
-        except Exception as e: log_event(f"Hiba a vizuális rétegeknél: {e}"); return False
+        except: return False
 
     def _create_video(self, raw_img_path, overlay_path, out_path):
         if not MOVIEPY_AVAILABLE: return False
         try:
-            log_event("Videó renderelés indítása (Memória-kímélő 1080p)...")
             gc.collect() 
             clip = ImageClip(raw_img_path).set_duration(5)
             zoomed = clip.resize(lambda t: 1 + 0.03 * t).set_position('center')
@@ -528,10 +487,56 @@ class BooksySocialAgent:
             final_video.write_videofile(out_path, fps=24, codec="libx264", audio=False, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
             gc.collect() 
             return True
-        except Exception as e: log_event(f"Videó hiba: {e}"); return False
+        except: return False
+
+    def _trigger_fb_comment(self, force_post_id=None):
+        """Visszaállított FB Komment funkció a /booklink parancshoz"""
+        try:
+            fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
+            if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs memória fájl.", "products": [], "zero_match_flag": True}
+            with open(SOCIAL_MEMORY_FILE, "r", encoding="utf-8") as f: memory = json.load(f)
+            
+            if not memory.get("links") or len(memory["links"]) == 0:
+                return {"reply": "❌ Memória fájl hibás, nincs könyv.", "products": [], "zero_match_flag": True}
+
+            target_post_id = force_post_id
+            if not target_post_id:
+                media_id = memory.get("media_id") 
+                fingerprint_search = normalize_fingerprint(memory.get("fingerprint", ""))
+                endpoints = [
+                    f"https://graph.facebook.com/v19.0/{fb_id}/published_posts?access_token={fb_token}&limit=15&fields=id,message,attachments",
+                    f"https://graph.facebook.com/v19.0/{fb_id}/feed?access_token={fb_token}&limit=15&fields=id,message,attachments"
+                ]
+                
+                found = False
+                for ep in endpoints:
+                    if found: break
+                    try:
+                        r = requests.get(ep)
+                        if r.status_code != 200: continue
+                        for p in r.json().get('data', []):
+                            if media_id:
+                                for att in p.get('attachments', {}).get('data', []):
+                                    if str(media_id) in str(att.get('target', {}).get('id', '')): found = True; break
+                            if not found and fingerprint_search and fingerprint_search in normalize_fingerprint(p.get("message", "")): found = True
+                            
+                            if found: target_post_id = p["id"]; break
+                    except: pass
+            
+            if not target_post_id: return {"reply": "❌ Célpont poszt nem található.", "products": [], "zero_match_flag": True}
+
+            payload_text = memory.get("hook_text", "📚 A mai válogatásunk kincseit itt találjátok! 👇") + "\n\n"
+            for book in memory.get("links", []):
+                author = f"{book['author']} - " if (book.get('author') and book['author'] != 'Ismeretlen') else ""
+                payload_text += f"📖 {author}{book['title']}\n{book.get('marketing_desc', '')}\n🔗 {book['url']}\n\n"
+            
+            r_res = requests.post(f"https://graph.facebook.com/v19.0/{target_post_id}/comments", data={'access_token': fb_token, 'message': payload_text.strip()})
+            if "id" in r_res.json(): return {"reply": "✅ Komment sikeresen kiment!", "products": [], "zero_match_flag": False}
+            else: return {"reply": f"❌ FB hiba: {r_res.text}", "products": [], "zero_match_flag": True}
+        except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás indítása (V243 Live Email, Full Sync & Analytics Ready)...")
+        log_event("Agentic Generálás (V244 XML Cage)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -540,24 +545,16 @@ class BooksySocialAgent:
             hu_date_str = f"{hu_months[now_dt.month-1]} {now_dt.day}."
             today_date = now_dt.strftime('%B %d')
             
-            log_event(f"Step 1: Élő API lekérdezés a mai napról ({today_date}) és Gemini Kereszttűz...")
             r_wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/births/{now_dt.strftime('%m/%d')}", headers={'User-Agent': 'BooksyBot/1.0'})
             wiki_text = "Nem található adat."
             if r_wiki.status_code == 200:
                 births = [p.get('text', '') for p in r_wiki.json().get('births', []) if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet', 'novelist'])]
                 wiki_text = "\n".join(births[:30])
             
-            author_prompt = (
-                f"Ma {today_date} van. Itt egy nyers lista a Wikipédiáról a mai napon született személyekről: {wiki_text}\n"
-                f"Végezz élő internetes kutatást! Válaszd ki pontosan a legrelevánsabb 6 embert, de KIZÁRÓLAG KÖNYVÍRÓKAT. "
-                f"Prioritás: Ha a listában van magyar vagy román író, kötelezően vedd be! A többit klasszikusokkal töltsd fel.\n"
-                f"Készíts róluk 'mini lexikon' megemlékezést (1-2 mondat/író). SZIGORÚ KIMENET: Csak és kizárólag XML formátum:\n"
-                f"<authors><author><name>Író Neve</name><nationality>Nemzetiség</nationality><bio>Rövid életrajz, stílus és legismertebb műve.</bio></author></authors>"
-            )
+            author_prompt = (f"Ma {today_date} van. Keresd ki a 6 legrelevánsabb könyvírót a listából: {wiki_text}\nKészíts róluk XML-t: <authors><author><name>...</name><nationality>...</nationality><bio>...</bio></author></authors>")
             gem_authors_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[author_prompt])
             authors_list = safe_authors_parse(gem_authors_res.text)[:6]
 
-            log_event("Step 2: Raktárkészlet ellenőrzése a kiválasztott írók alapján...")
             selected_books, seen_ids = [], set()
             for author in authors_list:
                 vec = gemini_client.models.embed_content(model="gemini-embedding-001", contents=author['name'], config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
@@ -568,7 +565,7 @@ class BooksySocialAgent:
                             selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
             if len(selected_books) < 3:
-                vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="népszerű klasszikus és modern irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+                vec_fb = gemini_client.models.embed_content(model="gemini-embedding-001", contents="klasszikus irodalom", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
                 res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
                 if res_fb['ids'] and res_fb['ids'][0]:
                     for p_target in res_fb['metadatas'][0]:
@@ -576,62 +573,58 @@ class BooksySocialAgent:
                             selected_books.append(p_target); seen_ids.add(p_target['id'])
                         if len(selected_books) >= 5: break
 
-            main_book = selected_books[0]; log_event(f"Vizuális Fókusz Könyv: {main_book['title']}")
-
-            log_event("Step 3: Könyvajánlók megírása (Egymondatos zamatos marketing + Zéró Markdown)...")
+            main_book = selected_books[0]
             for b in selected_books:
-                desc_prompt = (f"Könyv: {b['title']} - {b['author']}. Rövid infó: {b.get('text_preview', '')}. "
-                               f"Írj EGYETLEN, magával ragadó, zamatos magyar nyelvű marketing mondatot! ZÉRÓ MARKDOWN: Szigorúan tilos a * vagy **.")
+                desc_prompt = f"Könyv: {b['title']} - {b['author']}. Írj EGY zamatos magyar marketing mondatot! ZÉRÓ MARKDOWN."
                 b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
             
-            log_event("Step 4: DALL-E 3 képgenerálás...")
-            analysis_prompt = f"Elemzés KÖNYVRŐL: '{main_book['title']}' írta {main_book.get('author','valaki')}. Alapadat: {main_book.get('text_preview','')}. Vizuális összefoglaló angolul."
-            gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[analysis_prompt])
-            claude_prompt = (f"Elemzés: {gem_res.text} Írj egy DALL-E 3 promptot angolul. 35mm film frame, anamorphic lens, film grain. Safe, G-rated. No text.")
-            c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": claude_prompt}])
+            gem_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[f"Elemezd: '{main_book['title']}'. Angol vizuális összefoglaló."])
+            c_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": f"Elemzés: {gem_res.text} Írj DALL-E 3 promptot. 35mm film frame."}])
             
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             try:
                 img_res = openai_client.images.generate(model="dall-e-3", prompt=c_res.content[0].text, size="1024x1024", quality="hd", n=1)
                 img_url = img_res.data[0].url
-            except Exception as dalle_err:
-                log_event(f"⚠️ DALL-E 3 Hiba, Fallback: {dalle_err}")
-                img_res = openai_client.images.generate(model="dall-e-3", prompt="Antique book on a dark wooden table lit by a single candle. 35mm film frame, abstract.", size="1024x1024", quality="standard", n=1)
+            except:
+                img_res = openai_client.images.generate(model="dall-e-3", prompt="Antique book on a dark wooden table lit by a single candle.", size="1024x1024", quality="standard", n=1)
                 img_url = img_res.data[0].url
 
             r_img = requests.get(img_url, timeout=90)
-            if r_img.status_code == 200:
-                with open(raw_img_path, 'wb') as f: f.write(r_img.content)
-            else: raise Exception("DALL-E HTTP letöltési hiba")
-            
+            with open(raw_img_path, 'wb') as f: f.write(r_img.content)
             img_obj = PIL.Image.open(raw_img_path)
-            img_resized = PIL.ImageOps.fit(img_obj, (1080, 1080), PIL.Image.Resampling.LANCZOS); img_resized.save(raw_img_path)
+            PIL.ImageOps.fit(img_obj, (1080, 1080), PIL.Image.Resampling.LANCZOS).save(raw_img_path)
             self._prepare_visual_layers(raw_img_path, overlay_path, fallback_img_path, main_book['title'], main_book.get('author', ''))
             has_video = self._create_video(raw_img_path, overlay_path, vid_path)
 
-            log_event("Step 5-6: Napi Lexikon vázlat generálása & Lektorálás (Zéró Markdown)...")
-            authors_text = "\n".join([f"📖 {a['name'].upper()} ({a.get('nationality', 'Világirodalom')}): {a['bio']}" for a in authors_list])
-            draft_prompt = (f"Írj posztot: [Érzés: inspirált 🌟]\n{hu_date_str} — IRODALMI NAPTÁR\n{authors_text}\nZéró markdown! Nincs befejezés.")
-            draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, system="CopySEO tone. No URLs.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
-            lector_prompt = (f"Lektoráld szigorúan a posztot. ZÉRÓ MARKDOWN. Csupa nagybetűs szerzők.\nVÁZLAT:\n{draft_text}")
-            lektored_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
+            authors_text = "\n".join([f"📖 {a['name'].upper()}: {a['bio']}" for a in authors_list])
+            draft_prompt = f"Írj FB posztot. Cím: {hu_date_str} — IRODALMI NAPTÁR\n{authors_text}\nZéró markdown!"
+            draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, system="CopySEO.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
+            
+            lector_prompt = (f"Lektoráld szigorúan! ZÉRÓ MARKDOWN. "
+                             f"KÖTELEZŐ SZABÁLY: A tiszta, végleges posztot KIZÁRÓLAG <final_post> és </final_post> tagek közé tedd, megjegyzéseket csak a tageken kívülre írj!\n\nVÁZLAT:\n{draft_text}")
+            raw_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
+            lektored_lexicon = extract_xml_tag(raw_lexicon, "final_post") # XML Ketrec aktiválva
 
-            log_event("Step 7: Marketing Híd generálása...")
-            bridge_prompt = (f"Írj egy 3-4 mondatos marketing átvezetést ehhez a könyvhöz: „{main_book['title']}”. ZÉRÓ MARKDOWN. Nincs link.")
-            bridge_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=500, messages=[{"role": "user", "content": bridge_prompt}]).content[0].text.strip()
+            bridge_prompt = (f"Írj egy 3 mondatos átvezetést ehhez a könyvhöz: „{main_book['title']}”. ZÉRÓ MARKDOWN. "
+                             f"A tiszta szöveget tedd <bridge> és </bridge> tagek közé!")
+            raw_bridge = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=500, messages=[{"role": "user", "content": bridge_prompt}]).content[0].text
+            bridge_text = extract_xml_tag(raw_bridge, "bridge")
 
             post_text = lektored_lexicon
             if not re.search(r'\[Érzés:.*?\]', post_text): post_text = "[Érzés: inspirált 🌟]\n\n" + post_text
             post_text += "\n\n" + bridge_text
-            if "keressétek az első kommentben" not in post_text.lower(): post_text += "\n\nA mai válogatásunkat és a könyvek elérhetőségét keressétek az első kommentben! 👇"
 
-            log_event("Step 8: Dinamikus Horog & Reels Szöveg generálása...")
-            hook_prompt = "Írj 1-2 mondatos első komment-szöveget, hivatkozva az alatta lévő linkekre. Zéró markdown, használj 👇 emojit."
-            hook_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=150, messages=[{"role": "user", "content": hook_prompt}]).content[0].text.strip()
-            reels_prompt = f"Írj 2-3 mondatos pörgős videó szöveget: {', '.join([a['name'].upper() for a in authors_list[:3]])} ma született. Zéró markdown. Irányíts a feedre!"
-            reels_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": reels_prompt}]).content[0].text.strip()
+            hook_prompt = ("Te egy értékesítő vagy. Írj 1-2 mondatos bevezetőt a linkek elé. NE kérdezz vissza, NE kérj linkeket! "
+                           "A tiszta szöveget KIZÁRÓLAG <hook> és </hook> tagek közé tedd! Zéró markdown, használj 👇 emojit.")
+            raw_hook = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=150, messages=[{"role": "user", "content": hook_prompt}]).content[0].text
+            hook_text = extract_xml_tag(raw_hook, "hook")
 
-            log_event("Step 10: Dupla Publikálás (Draft Feed API)...")
+            reels_prompt = (f"Írj 2-3 mondatos pörgős videó szöveget: {', '.join([a['name'].upper() for a in authors_list[:3]])} ma született. Zéró markdown. "
+                            f"A tiszta szöveget KIZÁRÓLAG <reels_text> és </reels_text> tagek közé tedd!")
+            raw_reels = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": reels_prompt}]).content[0].text
+            # Hardcoded CTA beégetése a Reels végére
+            reels_text = extract_xml_tag(raw_reels, "reels_text") + "\n\nRészletek, könyvajánló és a napi irodalmi lexikon a legújabb képes posztunkban a feeden! 👇"
+
             memory_data = {"fingerprint": post_text[:100], "hook_text": hook_text, "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]}
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             
@@ -645,15 +638,13 @@ class BooksySocialAgent:
                 else: memory_data['media_id'] = photo_fbid
             
             if has_video:
-                r_v = requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'description': reels_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(vid_path, 'rb')})
+                requests.post(f"https://graph.facebook.com/v19.0/{fb_id}/videos", data={'access_token': fb_token, 'description': reels_text, 'published': 'false', 'unpublished_content_type': 'DRAFT'}, files={'source': open(vid_path, 'rb')})
             
             with open(SOCIAL_MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(memory_data, f, ensure_ascii=False)
             self.send_morning_email(post_text, memory_data['links'], hook_text, reels_text); log_event("Kész.")
             
         except Exception as e:
-            err_trace = traceback.format_exc()
-            log_event(f"❌ KRITIKUS RENDSZERHIBA: {e}")
-            self.send_error_email(err_trace)
+            self.send_error_email(traceback.format_exc())
         finally:
             for p in [raw_img_path, overlay_path, fallback_img_path, vid_path]:
                 if os.path.exists(p): os.remove(p)
@@ -661,9 +652,10 @@ class BooksySocialAgent:
 class BooksyBrain:
     def __init__(self, db: DBHandler):
         self.db = db
+        self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     def process(self, msg, context_url, session_id):
-        # A titkos /booklink parancsot továbbra is innen kezeljük
+        # 1. Admin FB Komment (Titkos Parancs)
         if msg.startswith("/booklink"):
             parts = msg.split()
             admin_pass = os.getenv("COMMENT_PASSWORD", "admin123")
@@ -673,16 +665,35 @@ class BooksyBrain:
                 return agent._trigger_fb_comment(force_id)
             else: return {"reply": "🤖 Téves parancs vagy hibás jelszó.", "products": [], "zero_match_flag": True}
         
-        # Ide jön a tényleges RAG chat logika a jövőben. 
-        # Teszt célból (hogy a log működjön), egy dummy választ adunk vissza.
-        return {
-            "reply": "Chat funkció aktív. Jelenleg a Social Agent fut.", 
-            "products": [{"id": "test_book_123"}], # Dummy offered book
-            "zero_match_flag": False
-        }
+        # Más Rendszerparancs (ne logolódjon be rosszul)
+        if msg.startswith("/"): return {"reply": "🤖 Rendszerparancs felismerve.", "products": [], "zero_match_flag": True}
 
-    def _trigger_fb_comment(self, force_post_id=None):
-        pass # Átmozgatva a BooksySocialAgent-be, vagy onnan hívjuk. 
+        # 2. VISSZAÁLLÍTOTT RAG LOGIKA (Vektor Keresés + Claude)
+        try:
+            vec_req = gemini_client.models.embed_content(model="gemini-embedding-001", contents=msg, config=types.EmbedContentConfig(output_dimensionality=768))
+            vec = vec_req.embeddings[0].values
+            db_res = self.db.collection.query(query_embeddings=[vec], n_results=4, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
+            
+            zero_match = True
+            products = []
+            context_text = "Nem találtam megfelelő könyvet a raktárban."
+            
+            if db_res['ids'] and db_res['ids'][0]:
+                zero_match = False
+                products = db_res['metadatas'][0]
+                context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
+            
+            prompt = (f"Te Booksy vagy, az Antikvarius.ro profi, kedves asszisztense. A felhasználó kérdése: '{msg}'. "
+                      f"Raktár infó:\n{context_text}\n"
+                      f"Írj egy barátságos, segítőkész választ magyarul, amely megválaszolja a kérdést és stílusosan kiajánlja a fenti könyveket! "
+                      f"Zéró markdown! Használj megfelelő mondatzáró jeleket és ékezeteket.")
+            
+            reply_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, system="Professional CopySEO tone.", messages=[{"role": "user", "content": prompt}])
+            return {"reply": reply_res.content[0].text.strip(), "products": products, "zero_match_flag": zero_match}
+        except Exception as e:
+            log_event(f"Bot hiba: {e}")
+            return {"reply": "Sajnos hiba történt a keresés során. Kérlek próbáld újra!", "products": [], "zero_match_flag": True}
+
 
 # --- MASTER CASCADE & SCHEDULING ---
 updater = AutoUpdater(db_handler)
@@ -692,11 +703,14 @@ analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync -> Social Post")
-    try:
-        sync_success = updater.run_daily_update()
-        if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
-    except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
+    log_event("🌅 Master Láncreakció Indítása: DB Sync (TESZT MIATT KIKOMMENTELVE) -> Social Post")
+    
+    # FIGYELEM: TESZTELÉS MIATT A SZINKRONIZÁCIÓ KIKOMMENTELVE! 
+    # try:
+    #     sync_success = updater.run_daily_update()
+    #     if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
+    # except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
+    
     social_agent.run_night_generation()
 
 def daily_analytics_job():
@@ -743,48 +757,31 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V243 Online (Analytics & GDPR Geo Ready)", "project": "Booksy"}
+def home(): return {"status": "V244 Online (Enterprise Analytics & XML Cage)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
     start_time = time.time()
-    
-    # 1. Feldolgozás a Bot által
     bot_response = bot.process(req.message, req.context_url, req.session_id)
     latency = int((time.time() - start_time) * 1000)
     
-    # 2. Titkos parancsok szűrése a statisztika védelméért
-    if req.message.startswith("/"):
-        return bot_response
+    if req.message.startswith("/"): return bot_response
 
-    # 3. GDPR Röpte-Geolokáció lekérése
     client_ip = request.client.host if request.client else None
     geo_country, geo_region = get_geo_from_ip(client_ip)
 
-    # 4. Adatok előkészítése és GDPR szűrés (PII takarítás)
     safe_user_msg = clean_pii(req.message)
     offered_ids = ",".join([p.get("id", "") for p in bot_response.get("products", [])]) if bot_response.get("products") else ""
-    zero_match = bot_response.get("zero_match_flag", False) if bot_response.get("products") is None or len(bot_response.get("products", [])) == 0 else False
+    zero_match = bot_response.get("zero_match_flag", False)
 
     log_data = {
-        "session_id": req.session_id,
-        "user_msg": safe_user_msg,
-        "bot_reply": bot_response.get("reply", "")[:200], # Ne mentsünk teljes gigantikus válaszokat
-        "context_url": req.context_url,
-        "geo_country": geo_country,
-        "geo_region": geo_region,
-        "ui_language": req.ui_lang,
-        "chat_language": req.chat_lang,
-        "target_catalog": req.target_catalog,
-        "offered_book_ids": offered_ids,
-        "zero_match_flag": zero_match,
-        "latency_ms": latency,
-        "device_type": req.device_type
+        "session_id": req.session_id, "user_msg": safe_user_msg, "bot_reply": bot_response.get("reply", "")[:200],
+        "context_url": req.context_url, "geo_country": geo_country, "geo_region": geo_region,
+        "ui_language": req.ui_lang, "chat_language": req.chat_lang, "target_catalog": req.target_catalog,
+        "offered_book_ids": offered_ids, "zero_match_flag": zero_match, "latency_ms": latency, "device_type": req.device_type
     }
     
-    # 5. Aszinkron hatású, azonnali DB írás
     analytics_db.log_chat(log_data)
-    
     return bot_response
 
 @app.post("/init-chat")
@@ -793,23 +790,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V243 Social Night Generation Started"}
+    return {"status": "V244 Social Night Generation Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V243 Full Cascade Test Started"}
+    return {"status": "V244 Full Cascade Test Started"}
 
-@app.post("/test-email-only")
-def test_email_only(bt: BackgroundTasks):
-    bt.add_task(social_agent.send_test_email)
-    return {"status": "V243 Isolated Email Test Started."}
-
-# --- ÚJ TESZT VÉGPONTOK AZ ANALITIKÁNAK ---
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V243 Daily Analytics Test Started."}
+    return {"status": "V244 Daily Analytics Test Started."}
 
 if __name__ == "__main__":
     import uvicorn
