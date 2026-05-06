@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V246 (THE UNBREAKABLE RETRY EDITION)
-# VERZIÓ: V246 - STRICT RETRY MECHANISM + FALLBACKS ADDED (1M% INTEGRITY MAINTAINED)
+# BOOKSY BRAIN - V247 (THE FLAWLESS UX EDITION)
+# VERZIÓ: V247 - STRICT RETRY MECHANISM + POLICY_ONLY TAG + DEDUPLICATION + STRICT GRAMMAR (1M% INTEGRITY)
 
 __import__('pysqlite3')
 import sys
@@ -219,7 +219,6 @@ class AIAnalyticsAgent:
         prompt = (f"Keress rá a weben a legfrissebb e-kereskedelmi és könyvpiaci trendekre. SZIGORÚ prioritási "
                   f"sorrend a {context} adatokhoz: 1. Romániai piac, 2. Magyarországi piac, 3. Európai trendek, 4. Világpiac. "
                   f"Mik a legújabb keresett műfajok?")
-        # --- V246: ÚJRAPRÓBÁLKOZÁS (RETRY) BEÉPÍTVE ---
         for attempt in range(3):
             try:
                 res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[prompt])
@@ -230,7 +229,6 @@ class AIAnalyticsAgent:
                     time.sleep(3)
                 else:
                     return "Piaci trendek lekérése sikertelen."
-        # -----------------------------------------------
 
     def _send_analytics_email(self, subject: str, body: str):
         try:
@@ -273,7 +271,6 @@ class AIAnalyticsAgent:
                         f"4. 🔮 Webdevmk AI Előrejelzés a következő napokra!\n"
                         f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.")
 
-        # --- V246: ÚJRAPRÓBÁLKOZÁS (RETRY) BEÉPÍTVE ---
         for attempt in range(3):
             try:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2500, system=system_prompt, messages=[{"role": "user", "content": user_msg}])
@@ -289,7 +286,6 @@ class AIAnalyticsAgent:
                     time.sleep(3)
                 else:
                     log_event(f"❌ Napi Analitika végleges hiba: {e}")
-        # -----------------------------------------------
 
     def generate_monthly_report(self):
         now = datetime.now(LOCAL_TZ)
@@ -307,7 +303,6 @@ class AIAnalyticsAgent:
                   f"Készíts vezetői HAVI JELENTÉST. Fókusz: Forgalmi források, erdélyi (RO IP, HU nyelvű) piac, hiánycikkek, "
                   f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.")
         
-        # --- V246: ÚJRAPRÓBÁLKOZÁS (RETRY) BEÉPÍTVE ---
         for attempt in range(3):
             try:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=3000, system="Üzleti Stratéga vagy.", messages=[{"role": "user", "content": prompt}])
@@ -322,7 +317,6 @@ class AIAnalyticsAgent:
                     time.sleep(3)
                 else:
                     log_event(f"❌ Havi Analitika végleges hiba: {e}")
-        # -----------------------------------------------
 
     def generate_yearly_report(self):
         target_year_str = str(datetime.now(LOCAL_TZ).year - 1)
@@ -339,7 +333,6 @@ class AIAnalyticsAgent:
                   f"frontend UX tanulságokat, majd egy '🔮 Webdevmk AI Éves Előrejelzés és Beszerzés' szekciót. "
                   f"Bullet-pointos, diagrammentes struktúra.")
         
-        # --- V246: ÚJRAPRÓBÁLKOZÁS (RETRY) BEÉPÍTVE ---
         for attempt in range(3):
             try:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=4000, system="Vezérigazgatói Tanácsadó vagy.", messages=[{"role": "user", "content": prompt}])
@@ -354,7 +347,6 @@ class AIAnalyticsAgent:
                     time.sleep(3)
                 else:
                     log_event(f"❌ Éves Analitika végleges hiba: {e}")
-        # -----------------------------------------------
 
 # --- UPDATER & LIVE POLICY SCRAPER ---
 class AutoUpdater:
@@ -595,7 +587,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V246 XML Cage & Strict Authors & RETRIES)...")
+        log_event("Agentic Generálás (V247 XML Cage & Strict Authors & RETRIES)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -620,7 +612,6 @@ class BooksySocialAgent:
                 f"<authors><author><name>Író Neve</name><nationality>Nemzetiség</nationality><bio>Rövid életrajz és műve.</bio></author></authors>"
             )
             
-            # --- V246: RETRY HOZZÁADVA GEMINI SZERZŐKHÖZ ---
             gem_authors_res = None
             for attempt in range(3):
                 try:
@@ -632,13 +623,11 @@ class BooksySocialAgent:
                         time.sleep(3)
                     else:
                         raise Exception(f"Végzetes Gemini hiba a szerzőknél: {e}")
-            # ------------------------------------------------
             
             authors_list = safe_authors_parse(gem_authors_res.text)[:6]
 
             selected_books, seen_ids = [], set()
             for author in authors_list:
-                # --- V246: RETRY HOZZÁADVA GEMINI EMBEDDINGHEZ ---
                 vec = None
                 for attempt in range(3):
                     try:
@@ -647,7 +636,6 @@ class BooksySocialAgent:
                     except Exception as e:
                         if attempt < 2: time.sleep(3)
                         else: vec = None
-                # ------------------------------------------------
                 
                 if vec:
                     res = self.db.collection.query(query_embeddings=[vec], n_results=3, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
@@ -657,7 +645,6 @@ class BooksySocialAgent:
                                 selected_books.append(p_target); seen_ids.add(p_target['id']); break
 
             if len(selected_books) < 3:
-                # --- V246: RETRY HOZZÁADVA GEMINI EMBEDDINGHEZ ---
                 vec_fb = None
                 for attempt in range(3):
                     try:
@@ -666,7 +653,6 @@ class BooksySocialAgent:
                     except Exception as e:
                         if attempt < 2: time.sleep(3)
                         else: vec_fb = None
-                # ------------------------------------------------
                 
                 if vec_fb:
                     res_fb = self.db.collection.query(query_embeddings=[vec_fb], n_results=10, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
@@ -679,7 +665,6 @@ class BooksySocialAgent:
             main_book = selected_books[0]
             for b in selected_books:
                 desc_prompt = f"Könyv: {b['title']} - {b['author']}. Írj EGY zamatos magyar marketing mondatot! ZÉRÓ MARKDOWN."
-                # --- V246: RETRY HOZZÁADVA CLAUDE MARKETINGHEZ ---
                 for attempt in range(3):
                     try:
                         b['marketing_desc'] = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": desc_prompt}]).content[0].text.strip()
@@ -690,9 +675,7 @@ class BooksySocialAgent:
                             time.sleep(3)
                         else:
                             b['marketing_desc'] = "Egy lenyűgöző ritkaság a kínálatunkból, amely minden könyvtár méltó dísze lehet."
-                # ------------------------------------------------
             
-            # --- V246: RETRY HOZZÁADVA GEMINI ELEMZÉSHEZ ÉS CLAUDE DALLE PROMTHOZ ---
             gem_res_text = "Antique book."
             for attempt in range(3):
                 try:
@@ -708,7 +691,6 @@ class BooksySocialAgent:
                     break
                 except Exception as e:
                     if attempt < 2: time.sleep(3)
-            # -------------------------------------------------------------------------
             
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             try:
@@ -728,7 +710,6 @@ class BooksySocialAgent:
             authors_text = "\n".join([f"📖 {a['name'].upper()}: {a['bio']}" for a in authors_list])
             draft_prompt = f"Írj FB posztot. Cím: {hu_date_str} — IRODALMI NAPTÁR\n{authors_text}\nZéró markdown!"
             
-            # --- V246: RETRY HOZZÁADVA CLAUDE DRAFT-HOZ ---
             draft_text = f"Cím: {hu_date_str} — IRODALMI NAPTÁR\n{authors_text}"
             for attempt in range(3):
                 try:
@@ -736,13 +717,11 @@ class BooksySocialAgent:
                     break
                 except Exception as e:
                     if attempt < 2: time.sleep(3)
-            # -----------------------------------------------
             
             lector_prompt = (f"Lektoráld szigorúan! ZÉRÓ MARKDOWN. "
                              f"KÖTELEZŐ SZABÁLY: A tiszta, végleges posztot KIZÁRÓLAG <final_post> és </final_post> tagek közé tedd! "
                              f"SZIGORÚAN TILOS a poszt végére jókívánságot (pl. 'Boldog születésnapot') vagy lezárást írni!\n\nVÁZLAT:\n{draft_text}")
             
-            # --- V246: RETRY HOZZÁADVA CLAUDE LEKTORHOZ ---
             raw_lexicon = f"<final_post>{draft_text}</final_post>"
             for attempt in range(3):
                 try:
@@ -750,13 +729,11 @@ class BooksySocialAgent:
                     break
                 except Exception as e:
                     if attempt < 2: time.sleep(3)
-            # -----------------------------------------------
             lektored_lexicon = extract_xml_tag(raw_lexicon, "final_post") 
 
             bridge_prompt = (f"Írj egy 3 mondatos átvezetést ehhez a könyvhöz: „{main_book['title']}”. ZÉRÓ MARKDOWN. "
                              f"A tiszta szöveget tedd <bridge> és </bridge> tagek közé!")
             
-            # --- V246: RETRY HOZZÁADVA CLAUDE BRIDGE-HEZ ---
             raw_bridge = "<bridge>A mai válogatásunkban rejlő kincsek felfedezésre várnak.</bridge>"
             for attempt in range(3):
                 try:
@@ -764,7 +741,6 @@ class BooksySocialAgent:
                     break
                 except Exception as e:
                     if attempt < 2: time.sleep(3)
-            # -----------------------------------------------
             bridge_text = extract_xml_tag(raw_bridge, "bridge")
 
             post_text = lektored_lexicon
@@ -776,7 +752,6 @@ class BooksySocialAgent:
                            f"A linkek már ott lesznek alattad, így NE kérd be őket tőlem és NE kérdezz vissza! "
                            f"A tiszta szöveget KIZÁRÓLAG <hook> és </hook> tagek közé tedd! Zéró markdown, használj 👇 emojit.")
             
-            # --- V246: RETRY HOZZÁADVA CLAUDE HOOK-HOZ ---
             raw_hook = "<hook>📚 A mai válogatásunk kincseit itt találjátok! 👇</hook>"
             for attempt in range(3):
                 try:
@@ -784,13 +759,11 @@ class BooksySocialAgent:
                     break
                 except Exception as e:
                     if attempt < 2: time.sleep(3)
-            # -----------------------------------------------
             hook_text = extract_xml_tag(raw_hook, "hook")
 
             reels_prompt = (f"Írj 2-3 mondatos pörgős videó szöveget: {', '.join([a['name'].upper() for a in authors_list[:3]])} ma született. Zéró markdown. "
                             f"A tiszta szöveget KIZÁRÓLAG <reels_text> és </reels_text> tagek közé tedd!")
             
-            # --- V246: RETRY HOZZÁADVA CLAUDE REELS-HEZ ---
             raw_reels = f"<reels_text>Fedezd fel a mai napon született klasszikusokat!</reels_text>"
             for attempt in range(3):
                 try:
@@ -798,7 +771,6 @@ class BooksySocialAgent:
                     break
                 except Exception as e:
                     if attempt < 2: time.sleep(3)
-            # -----------------------------------------------
             reels_text = extract_xml_tag(raw_reels, "reels_text") + "\n\nRészletek, könyvajánló és a napi irodalmi lexikon a legújabb képes posztunkban a feeden! 👇"
 
             memory_data = {"fingerprint": post_text[:100], "hook_text": hook_text, "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]}
@@ -847,7 +819,6 @@ class BooksyBrain:
                 with open(STORE_POLICIES_FILE, "r", encoding="utf-8") as f:
                     policy_text = json.load(f).get("policies", "")
 
-            # --- V246: RETRY HOZZÁADVA GEMINI EMBEDDINGHEZ ---
             vec = None
             for attempt in range(3):
                 try:
@@ -856,36 +827,39 @@ class BooksyBrain:
                     break
                 except Exception as e:
                     if attempt < 2: time.sleep(3)
-            # ------------------------------------------------
 
             db_res = {'ids': [], 'metadatas': []}
             if vec:
                 db_res = self.db.collection.query(query_embeddings=[vec], n_results=4, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
             
             zero_match = True
-            products = []
+            raw_products = []
             context_text = "Nem találtam megfelelő könyvet a raktárban."
             
             if db_res['ids'] and db_res['ids'][0]:
                 zero_match = False
-                products = db_res['metadatas'][0]
+                raw_products = db_res['metadatas'][0]
                 
-                for p in products:
+                for p in raw_products:
                     if 'image_url' in p and 'image' not in p:
                         p['image'] = p['image_url']
 
-                context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
+                context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in raw_products])
             
             prompt = (f"Te Booksy vagy, az Antikvarius.ro profi, kedves asszisztense. A felhasználó kérdése: '{msg}'.\n\n"
                       f"<company_policies>\n{policy_text}\n</company_policies>\n\n"
                       f"SZIGORÚ SZABÁLYOK:\n"
                       f"1. Ha a kérdés szállításra, fizetésre, kapcsolatra vagy ÁSZF-re vonatkozik, KIZÁRÓLAG a <company_policies> alapján válaszolj! 0% hallucináció.\n"
                       f"2. A szállítás díja fix! Nincs ingyenes szállítás semmilyen súlyra/összegre. Kommunikáld marketingesen: mivel fix a díj, minél több könyvet vesznek, annál jobban megéri!\n"
-                      f"3. A választ kötelezően AZON A NYELVEN (magyarul vagy románul) fogalmazd meg, ahogy a felhasználó a kérdést feltette!\n\n"
+                      f"3. A választ kötelezően AZON A NYELVEN (magyarul vagy románul) fogalmazd meg, ahogy a felhasználó a kérdést feltette!\n"
+                      # --- V247: ÚJ UX VÉDŐHÁLÓK HOZZÁADÁSA ---
+                      f"4. Kiemelten ügyelj a magyar szakmai terminológiára és a helyesírásra! Tilos a gépelési hiba, a tükörfordítás, vagy nem létező, értelmetlen ragozott szavak (pl. könyvvizelés helyett könyvvizsgálat) használata. Csak létező, hivatalos szavakat használj!\n"
+                      f"5. Ha a kérdés KIZÁRÓLAG adminisztratív vagy ügyfélszolgálati (szállítás, cím, ÁSZF), és a felajánlott könyvek tartalmilag nem kapcsolódnak szorosan a felhasználó szándékához, kötelezően helyezz el egy <policy_only> taget a válaszodban!\n"
+                      # ----------------------------------------
+                      f"\n"
                       f"Raktár infó:\n{context_text}\n\n"
                       f"Zéró markdown! Használj megfelelő mondatzáró jeleket és segítőkész hangnemet.")
             
-            # --- V246: RETRY HOZZÁADVA CLAUDE RAG VÁLASZHOZ ---
             reply_text = "Sajnos hiba történt a keresés során. Kérlek próbáld újra!"
             for attempt in range(3):
                 try:
@@ -898,9 +872,23 @@ class BooksyBrain:
                         time.sleep(3)
                     else:
                         log_event(f"❌ Végzetes hiba a chaten: {e}")
-            # ------------------------------------------------
 
-            return {"reply": reply_text, "products": products, "zero_match_flag": zero_match}
+            # --- V247: DUPLIKÁCIÓ SZŰRŐ ÉS <policy_only> INTERCEPT HOZZÁADÁSA ---
+            final_products = []
+            if "<policy_only>" in reply_text:
+                reply_text = reply_text.replace("<policy_only>", "").replace("</policy_only>", "").strip()
+                final_products = [] # Irreleváns könyvek kidobása
+            else:
+                # Duplikáció szűrés cím alapján
+                seen_titles = set()
+                for p in raw_products:
+                    clean_title = p.get('title', '').strip().lower()
+                    if clean_title not in seen_titles:
+                        seen_titles.add(clean_title)
+                        final_products.append(p)
+            # ---------------------------------------------------------------------
+
+            return {"reply": reply_text, "products": final_products, "zero_match_flag": zero_match}
         except Exception as e:
             log_event(f"Bot hiba: {e}")
             return {"reply": "Sajnos hiba történt a keresés során. Kérlek próbáld újra!", "products": [], "zero_match_flag": True}
@@ -913,7 +901,7 @@ analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V246)")
+    log_event("🌅 Master Láncreakció Indítása (V247)")
     
     updater.fetch_store_policies()
     
@@ -964,7 +952,7 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V246 Online (Unbreakable Retry Edition)", "project": "Booksy"}
+def home(): return {"status": "V247 Online (Flawless UX Edition)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
@@ -997,17 +985,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V246 Social Night Generation Started"}
+    return {"status": "V247 Social Night Generation Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V246 Full Cascade Test Started"}
+    return {"status": "V247 Full Cascade Test Started"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V246 Daily Analytics Test Started."}
+    return {"status": "V247 Daily Analytics Test Started."}
 
 if __name__ == "__main__":
     import uvicorn
