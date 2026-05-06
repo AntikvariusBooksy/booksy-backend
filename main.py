@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V244 (THE ENTERPRISE ANALYTICS EDITION)
-# VERZIÓ: V244 - XML CAGE + RAG RESTORED + T+1 ANALYTICS + GDPR GEO + SYNC COMMENTED FOR TESTING
+# BOOKSY BRAIN - V245 (THE KNOWLEDGE BASE & TOTAL INTEGRITY EDITION)
+# VERZIÓ: V245 - LIVE POLICY RAG + THUMBNAILS FIXED + STRICT AUTHOR PROMPT + XML CAGE + GDPR GEO
 
 __import__('pysqlite3')
 import sys
@@ -37,7 +37,8 @@ XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xm
 TEMP_FILE = "temp_feed.xml"
 SOCIAL_MEMORY_FILE = "./booksy_db/social_memory.json"
 CHAT_DB_FILE = "./booksy_db/chat_logs.db"
-ADMIN_EMAILS = ["bookmankiado@gmail.com", "joomla900@gmail.com"] # Fixált menedzsment emailek
+STORE_POLICIES_FILE = "./booksy_db/store_policies.json"
+ADMIN_EMAILS = ["bookmankiado@gmail.com", "joomla900@gmail.com"]
 
 try:
     import PIL.Image
@@ -75,20 +76,17 @@ def html_to_markdown_clean(raw_html):
     except: return str(raw_html)
 
 def extract_xml_tag(text: str, tag: str) -> str:
-    """Kivágja az AI által generált felesleges szövegekből a nyers tartalmat az XML tagek alapján."""
     match = re.search(f"<{tag}>(.*?)</{tag}>", text, re.DOTALL | re.IGNORECASE)
     if match: return match.group(1).strip()
-    return text.strip() # Fallback, ha a modell elfelejtette a taget
+    return text.strip()
 
 def clean_pii(text):
-    """GDPR szűrő: Eltávolítja az e-mail címeket és a telefonszámokat logolás előtt."""
     if not text: return ""
     text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[EMAIL TÖRÖLVE]', text)
     text = re.sub(r'(\+?\d{1,3}[\s-]?)?\(?\d{2,3}\)?[\s-]?\d{3}[\s-]?\d{3,4}', '[TELEFON TÖRÖLVE]', text)
     return text
 
 def get_geo_from_ip(ip_address):
-    """Röpte-Geolokáció: Csak ország/régió, nyers IP nem marad."""
     if not ip_address or ip_address in ["127.0.0.1", "localhost", "::1"]: return "Ismeretlen", "Ismeretlen"
     try:
         r = requests.get(f"http://ip-api.com/json/{ip_address}?fields=countryCode,regionName", timeout=2)
@@ -323,9 +321,36 @@ class AIAnalyticsAgent:
             log_event("✅ Éves Analitika befejezve.")
         except Exception as e: log_event(f"❌ Éves Analitika hiba: {e}")
 
-# --- UPDATER ---
+# --- UPDATER & LIVE POLICY SCRAPER ---
 class AutoUpdater:
     def __init__(self, db: DBHandler): self.db = db
+    
+    def fetch_store_policies(self):
+        log_event("📖 [RAG] Céges Kódex (ÁSZF, Szállítás, Fizetés, Kapcsolat) letöltése és frissítése...")
+        urls = [
+            "https://www.antikvarius.ro/hu/kapcsolat/",
+            "https://www.antikvarius.ro/hu/szallitasi-informaciok/",
+            "https://www.antikvarius.ro/hu/fizetesi-informaciok/",
+            "https://www.antikvarius.ro/hu/altalanos-szerzodesi-es-felhasznalasi-feltetelek/"
+        ]
+        policies_text = ""
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=20)
+                if r.status_code == 200:
+                    soup = BeautifulSoup(r.content, 'html.parser')
+                    for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                        script.extract()
+                    text = soup.get_text(separator=' ', strip=True)
+                    policies_text += f"\n\n--- FORRÁS: {url} ---\n{text[:6000]}"
+            except Exception as e:
+                log_event(f"⚠️ Hiba a {url} beolvasásakor: {e}")
+        
+        if policies_text:
+            with open(STORE_POLICIES_FILE, "w", encoding="utf-8") as f:
+                json.dump({"policies": policies_text}, f, ensure_ascii=False)
+            log_event("✅ Céges Kódex sikeresen frissítve az élő weboldalról.")
+
     def download_feed(self):
         try:
             r = requests.get(XML_FEED_URL, stream=True, timeout=300)
@@ -490,7 +515,6 @@ class BooksySocialAgent:
         except: return False
 
     def _trigger_fb_comment(self, force_post_id=None):
-        """Visszaállított FB Komment funkció a /booklink parancshoz"""
         try:
             fb_id, fb_token = os.getenv("FB_PAGE_ID"), os.getenv("FB_PAGE_TOKEN")
             if not os.path.exists(SOCIAL_MEMORY_FILE): return {"reply": "❌ Nincs memória fájl.", "products": [], "zero_match_flag": True}
@@ -536,7 +560,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V244 XML Cage)...")
+        log_event("Agentic Generálás (V245 XML Cage & Strict Authors)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -551,7 +575,16 @@ class BooksySocialAgent:
                 births = [p.get('text', '') for p in r_wiki.json().get('births', []) if any(kw in p.get('text', '').lower() for kw in ['writer', 'author', 'poet', 'novelist'])]
                 wiki_text = "\n".join(births[:30])
             
-            author_prompt = (f"Ma {today_date} van. Keresd ki a 6 legrelevánsabb könyvírót a listából: {wiki_text}\nKészíts róluk XML-t: <authors><author><name>...</name><nationality>...</nationality><bio>...</bio></author></authors>")
+            # VISSZAÁLLÍTOTT, SZIGORÚ AUTHOR PROMPT (Clooney és modellek letiltva)
+            author_prompt = (
+                f"Ma {today_date} van. Itt egy nyers lista a Wikipédiáról a mai napon született személyekről: {wiki_text}\n"
+                f"Végezz élő internetes kutatást! Válaszd ki pontosan a legrelevánsabb 6 embert, de KIZÁRÓLAG KÖNYVÍRÓKAT "
+                f"(regényíró, költő, esszéista, sci-fi író, tudományos-ismeretterjesztő). SZIGORÚAN TILOS listázni filmrendezőket, "
+                f"képregényrajzolókat, színészeket, zenészeket, modelleket, animátorokat, forgatókönyvírókat! Csak klasszikus könyvírókat!\n"
+                f"Prioritás: Ha a listában van magyar vagy román író, kötelezően vedd be! A többit klasszikusokkal töltsd fel.\n"
+                f"Készíts róluk 'mini lexikon' megemlékezést (1-2 mondat/író). SZIGORÚ KIMENET: Csak és kizárólag XML formátum:\n"
+                f"<authors><author><name>Író Neve</name><nationality>Nemzetiség</nationality><bio>Rövid életrajz és műve.</bio></author></authors>"
+            )
             gem_authors_res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=[author_prompt])
             authors_list = safe_authors_parse(gem_authors_res.text)[:6]
 
@@ -600,10 +633,12 @@ class BooksySocialAgent:
             draft_prompt = f"Írj FB posztot. Cím: {hu_date_str} — IRODALMI NAPTÁR\n{authors_text}\nZéró markdown!"
             draft_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, system="CopySEO.", messages=[{"role": "user", "content": draft_prompt}]).content[0].text
             
+            # SZIGORÚ LEKTOR PROMPT: Nincs "Boldog születésnapot!"
             lector_prompt = (f"Lektoráld szigorúan! ZÉRÓ MARKDOWN. "
-                             f"KÖTELEZŐ SZABÁLY: A tiszta, végleges posztot KIZÁRÓLAG <final_post> és </final_post> tagek közé tedd, megjegyzéseket csak a tageken kívülre írj!\n\nVÁZLAT:\n{draft_text}")
+                             f"KÖTELEZŐ SZABÁLY: A tiszta, végleges posztot KIZÁRÓLAG <final_post> és </final_post> tagek közé tedd! "
+                             f"SZIGORÚAN TILOS a poszt végére jókívánságot (pl. 'Boldog születésnapot') vagy lezárást írni!\n\nVÁZLAT:\n{draft_text}")
             raw_lexicon = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2000, messages=[{"role": "user", "content": lector_prompt}]).content[0].text
-            lektored_lexicon = extract_xml_tag(raw_lexicon, "final_post") # XML Ketrec aktiválva
+            lektored_lexicon = extract_xml_tag(raw_lexicon, "final_post") 
 
             bridge_prompt = (f"Írj egy 3 mondatos átvezetést ehhez a könyvhöz: „{main_book['title']}”. ZÉRÓ MARKDOWN. "
                              f"A tiszta szöveget tedd <bridge> és </bridge> tagek közé!")
@@ -614,15 +649,17 @@ class BooksySocialAgent:
             if not re.search(r'\[Érzés:.*?\]', post_text): post_text = "[Érzés: inspirált 🌟]\n\n" + post_text
             post_text += "\n\n" + bridge_text
 
-            hook_prompt = ("Te egy értékesítő vagy. Írj 1-2 mondatos bevezetőt a linkek elé. NE kérdezz vissza, NE kérj linkeket! "
-                           "A tiszta szöveget KIZÁRÓLAG <hook> és </hook> tagek közé tedd! Zéró markdown, használj 👇 emojit.")
+            # KONTEXTUSOS HOROG PROMPT
+            book_titles = ", ".join([b['title'] for b in selected_books])
+            hook_prompt = (f"Te egy értékesítő vagy. Írj 1-2 mondatos bevezetőt a linkek elé, amik ezekhez a könyvekhez vezetnek: {book_titles}. "
+                           f"A linkek már ott lesznek alattad, így NE kérd be őket tőlem és NE kérdezz vissza! "
+                           f"A tiszta szöveget KIZÁRÓLAG <hook> és </hook> tagek közé tedd! Zéró markdown, használj 👇 emojit.")
             raw_hook = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=150, messages=[{"role": "user", "content": hook_prompt}]).content[0].text
             hook_text = extract_xml_tag(raw_hook, "hook")
 
             reels_prompt = (f"Írj 2-3 mondatos pörgős videó szöveget: {', '.join([a['name'].upper() for a in authors_list[:3]])} ma született. Zéró markdown. "
                             f"A tiszta szöveget KIZÁRÓLAG <reels_text> és </reels_text> tagek közé tedd!")
             raw_reels = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=250, messages=[{"role": "user", "content": reels_prompt}]).content[0].text
-            # Hardcoded CTA beégetése a Reels végére
             reels_text = extract_xml_tag(raw_reels, "reels_text") + "\n\nRészletek, könyvajánló és a napi irodalmi lexikon a legújabb képes posztunkban a feeden! 👇"
 
             memory_data = {"fingerprint": post_text[:100], "hook_text": hook_text, "links": [{"id": b['id'], "title": b['title'], "author": b['author'], "url": b['url'], "marketing_desc": b.get('marketing_desc', '')} for b in selected_books]}
@@ -655,7 +692,7 @@ class BooksyBrain:
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     def process(self, msg, context_url, session_id):
-        # 1. Admin FB Komment (Titkos Parancs)
+        # 1. Admin FB Komment (Titkos Parancs - Rejtett futás)
         if msg.startswith("/booklink"):
             parts = msg.split()
             admin_pass = os.getenv("COMMENT_PASSWORD", "admin123")
@@ -664,12 +701,17 @@ class BooksyBrain:
                 agent = BooksySocialAgent(self.db)
                 return agent._trigger_fb_comment(force_id)
             else: return {"reply": "🤖 Téves parancs vagy hibás jelszó.", "products": [], "zero_match_flag": True}
-        
-        # Más Rendszerparancs (ne logolódjon be rosszul)
         if msg.startswith("/"): return {"reply": "🤖 Rendszerparancs felismerve.", "products": [], "zero_match_flag": True}
 
-        # 2. VISSZAÁLLÍTOTT RAG LOGIKA (Vektor Keresés + Claude)
+        # 2. RAG & POLICY LOGIC VISSZAÁLLÍTÁSA
         try:
+            # Policy (ÁSZF/Szállítás) olvasása
+            policy_text = "A céges szabályzatok jelenleg nem elérhetők."
+            if os.path.exists(STORE_POLICIES_FILE):
+                with open(STORE_POLICIES_FILE, "r", encoding="utf-8") as f:
+                    policy_text = json.load(f).get("policies", "")
+
+            # Könyv Vektor Keresés
             vec_req = gemini_client.models.embed_content(model="gemini-embedding-001", contents=msg, config=types.EmbedContentConfig(output_dimensionality=768))
             vec = vec_req.embeddings[0].values
             db_res = self.db.collection.query(query_embeddings=[vec], n_results=4, where={"$and": [{"stock": "instock"}, {"type": "book"}]})
@@ -681,19 +723,29 @@ class BooksyBrain:
             if db_res['ids'] and db_res['ids'][0]:
                 zero_match = False
                 products = db_res['metadatas'][0]
+                
+                # BÉLYEGKÉPEK JAVÍTÁSA (Frontend Map)
+                for p in products:
+                    if 'image_url' in p and 'image' not in p:
+                        p['image'] = p['image_url']
+
                 context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
             
-            prompt = (f"Te Booksy vagy, az Antikvarius.ro profi, kedves asszisztense. A felhasználó kérdése: '{msg}'. "
-                      f"Raktár infó:\n{context_text}\n"
-                      f"Írj egy barátságos, segítőkész választ magyarul, amely megválaszolja a kérdést és stílusosan kiajánlja a fenti könyveket! "
-                      f"Zéró markdown! Használj megfelelő mondatzáró jeleket és ékezeteket.")
+            # THE POLICY & MARKETING PROMPT
+            prompt = (f"Te Booksy vagy, az Antikvarius.ro profi, kedves asszisztense. A felhasználó kérdése: '{msg}'.\n\n"
+                      f"<company_policies>\n{policy_text}\n</company_policies>\n\n"
+                      f"SZIGORÚ SZABÁLYOK:\n"
+                      f"1. Ha a kérdés szállításra, fizetésre, kapcsolatra vagy ÁSZF-re vonatkozik, KIZÁRÓLAG a <company_policies> alapján válaszolj! 0% hallucináció.\n"
+                      f"2. A szállítás díja fix! Nincs ingyenes szállítás semmilyen súlyra/összegre. Kommunikáld marketingesen: mivel fix a díj, minél több könyvet vesznek, annál jobban megéri!\n"
+                      f"3. A választ kötelezően AZON A NYELVEN (magyarul vagy románul) fogalmazd meg, ahogy a felhasználó a kérdést feltette!\n\n"
+                      f"Raktár infó:\n{context_text}\n\n"
+                      f"Zéró markdown! Használj megfelelő mondatzáró jeleket és segítőkész hangnemet.")
             
-            reply_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, system="Professional CopySEO tone.", messages=[{"role": "user", "content": prompt}])
+            reply_res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=400, system="Professional CopySEO tone. Multi-language Support.", messages=[{"role": "user", "content": prompt}])
             return {"reply": reply_res.content[0].text.strip(), "products": products, "zero_match_flag": zero_match}
         except Exception as e:
             log_event(f"Bot hiba: {e}")
             return {"reply": "Sajnos hiba történt a keresés során. Kérlek próbáld újra!", "products": [], "zero_match_flag": True}
-
 
 # --- MASTER CASCADE & SCHEDULING ---
 updater = AutoUpdater(db_handler)
@@ -703,14 +755,18 @@ analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása: DB Sync (TESZT MIATT KIKOMMENTELVE) -> Social Post")
+    log_event("🌅 Master Láncreakció Indítása (V245)")
     
-    # FIGYELEM: TESZTELÉS MIATT A SZINKRONIZÁCIÓ KIKOMMENTELVE! 
+    # 1. ÉLŐ TUDÁSBÁZIS FRISSÍTÉS (Mindig lefut!)
+    updater.fetch_store_policies()
+    
+    # 2. DB KÖNYV SZINKRON (Kérésetekre tesztelés miatt ideiglenesen kikommentelve)
     # try:
     #     sync_success = updater.run_daily_update()
     #     if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
     # except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
     
+    # 3. KÖZÖSSÉGI POSZTOLÁS
     social_agent.run_night_generation()
 
 def daily_analytics_job():
@@ -731,15 +787,10 @@ def yearly_analytics_job():
 # --- FASTAPI APP & ENDPOINTS ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # DOMINÓ 1: Social Posztolás
     scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
-    # DOMINÓ 2: Napi Riport (T+1)
     scheduler.add_job(daily_analytics_job, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
-    # DOMINÓ 3: Havi Riport (Hónap 1-jén, T+1)
     scheduler.add_job(monthly_analytics_job, CronTrigger(hour=8, minute=15, timezone=LOCAL_TZ))
-    # DOMINÓ 4: Éves Riport (Január 1-jén, T+1)
     scheduler.add_job(yearly_analytics_job, CronTrigger(hour=8, minute=30, timezone=LOCAL_TZ))
-    
     scheduler.start(); yield; scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan)
@@ -757,7 +808,7 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V244 Online (Enterprise Analytics & XML Cage)", "project": "Booksy"}
+def home(): return {"status": "V245 Online (Live Policy RAG & Total Integrity)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
@@ -790,17 +841,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V244 Social Night Generation Started"}
+    return {"status": "V245 Social Night Generation Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V244 Full Cascade Test Started"}
+    return {"status": "V245 Full Cascade Test Started"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V244 Daily Analytics Test Started."}
+    return {"status": "V245 Daily Analytics Test Started."}
 
 if __name__ == "__main__":
     import uvicorn
