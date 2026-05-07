@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V249 (THE FULL AUTO EDITION)
-# VERZIÓ: V249 - 1000 TOKENS LIMIT + RAMBURS STRICT RULE + FULL XML/DB SYNC ACTIVATED (1M% INTEGRITY)
+# BOOKSY BRAIN - V250 (THE GPT-IMAGE-2 & EXECUTIVE ANALYTICS EDITION)
+# VERZIÓ: V250 - GPT-IMAGE-2 INTEGRATION + EXECUTIVE ANALYTICS (NO DELETION, 1M% INTEGRITY)
 
 __import__('pysqlite3')
 import sys
@@ -269,11 +269,14 @@ class AIAnalyticsAgent:
                         f"2. Készlet & Beszerzés (zero_match_flag=True keresések).\n"
                         f"3. Proaktív Frontend UX súrlódások.\n"
                         f"4. 🔮 Webdevmk AI Előrejelzés a következő napokra!\n"
-                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.")
+                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.\n"
+                        # --- V250: VEZETŐI ÖSSZEFOGLALÓ SZABÁLY BEÉPÍTVE ---
+                        f"KÖTELEZŐ SZABÁLY: Légy rendkívül tömör és lényegretörő (Executive Summary stílus)! Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást és akciótervet emeld ki! Ne írj felesleges litániát, csak a nyers, értékes információt add át!")
 
         for attempt in range(3):
             try:
-                res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=2500, system=system_prompt, messages=[{"role": "user", "content": user_msg}])
+                # --- V250: MAX_TOKENS FELEMELVE 4096-RA ---
+                res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=4096, system=system_prompt, messages=[{"role": "user", "content": user_msg}])
                 report = res.content[0].text
                 analytics_db.save_report("daily", target_date_str, report)
                 self._send_analytics_email(f"📊 Napi Booksy AI UX & SEO Jelentés ({target_date_str})", report)
@@ -301,11 +304,14 @@ class AIAnalyticsAgent:
         
         prompt = (f"A mellékelt szöveg az elmúlt hónap összes napi jelentése. Piaci havi trendek: {market_trends}\n\n"
                   f"Készíts vezetői HAVI JELENTÉST. Fókusz: Forgalmi források, erdélyi (RO IP, HU nyelvű) piac, hiánycikkek, "
-                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.")
+                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.\n"
+                  # --- V250: VEZETŐI ÖSSZEFOGLALÓ SZABÁLY BEÉPÍTVE ---
+                  f"KÖTELEZŐ SZABÁLY: Légy rendkívül tömör és lényegretörő (Executive Summary stílus)! Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki!")
         
         for attempt in range(3):
             try:
-                res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=3000, system="Üzleti Stratéga vagy.", messages=[{"role": "user", "content": prompt}])
+                # --- V250: MAX_TOKENS FELEMELVE 6000-RE ---
+                res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=6000, system="Üzleti Stratéga vagy.", messages=[{"role": "user", "content": prompt}])
                 report = res.content[0].text
                 analytics_db.save_report("monthly", target_month_str, report)
                 self._send_analytics_email(f"📈 HAVI Booksy AI Menedzsment Riport ({target_month_str})", report)
@@ -331,11 +337,14 @@ class AIAnalyticsAgent:
         prompt = (f"A mellékelt szöveg az elmúlt év 12 havi jelentése. Globális Éves Trendek: {market_trends}\n\n"
                   f"Készíts ÉVES Menedzsment Riportot! Értékeld a ROI-t, terjeszkedési statisztikákat (RO vs HU), "
                   f"frontend UX tanulságokat, majd egy '🔮 Webdevmk AI Éves Előrejelzés és Beszerzés' szekciót. "
-                  f"Bullet-pointos, diagrammentes struktúra.")
+                  f"Bullet-pointos, diagrammentes struktúra.\n"
+                  # --- V250: VEZETŐI ÖSSZEFOGLALÓ SZABÁLY BEÉPÍTVE ---
+                  f"KÖTELEZŐ SZABÁLY: Légy rendkívül tömör és lényegretörő (Executive Summary stílus)! Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki!")
         
         for attempt in range(3):
             try:
-                res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=4000, system="Vezérigazgatói Tanácsadó vagy.", messages=[{"role": "user", "content": prompt}])
+                # --- V250: MAX_TOKENS FELEMELVE 8000-RE ---
+                res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=8000, system="Vezérigazgatói Tanácsadó vagy.", messages=[{"role": "user", "content": prompt}])
                 report = res.content[0].text
                 analytics_db.save_report("yearly", target_year_str, report)
                 self._send_analytics_email(f"👑 ÉVES Booksy AI Stratégiai Iránytű ({target_year_str})", report)
@@ -588,7 +597,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V249 Full Auto Edition)...")
+        log_event("Agentic Generálás (V250 GPT Image 2 Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -690,10 +699,15 @@ class BooksySocialAgent:
                     wait_time = 3 * (attempt + 1)
                     if attempt < 2: time.sleep(wait_time)
             
-            c_res_text = "Antique book on a dark wooden table lit by a single candle."
+            # --- V250: ÚJ, SZÖVEGMENTES PROMPT A GPT IMAGE 2 SZÁMÁRA ---
+            c_res_text = "Antique book on a dark wooden table lit by a single candle, highly detailed, no text."
             for attempt in range(3):
                 try:
-                    c_res_text = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=300, messages=[{"role": "user", "content": f"Elemzés: {gem_res_text} Írj DALL-E 3 promptot. 35mm film frame."}]).content[0].text
+                    c_res_text = self.claude.messages.create(
+                        model=CLAUDE_MODEL, 
+                        max_tokens=300, 
+                        messages=[{"role": "user", "content": f"Elemzés: {gem_res_text} Írj egy lélegzetelállító, fotorealisztikus, 35mm filmes képgeneráló promptot. KÖTELEZŐ SZABÁLY: A képen SZIGORÚAN TILOS bármilyen szövegnek, betűnek vagy feliratnak szerepelnie! Csak tiszta vizuális kompozíció."}]
+                    ).content[0].text
                     break
                 except Exception as e:
                     wait_time = 3 * (attempt + 1)
@@ -701,11 +715,23 @@ class BooksySocialAgent:
             
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             try:
-                img_res = openai_client.images.generate(model="dall-e-3", prompt=c_res_text, size="1024x1024", quality="hd", n=1)
+                # --- V250: KÉP GENERÁLÁSA GPT IMAGE 2-VEL ---
+                img_res = openai_client.images.generate(model="gpt-image-2", prompt=c_res_text, size="1024x1024", quality="hd", n=1)
                 img_url = img_res.data[0].url
+                
+                # RÉGI DALL-E 3 KIKOMMENTELVE BIZTONSÁGI TARTALÉKNAK:
+                # img_res = openai_client.images.generate(model="dall-e-3", prompt=c_res_text, size="1024x1024", quality="hd", n=1)
+                # img_url = img_res.data[0].url
+                # ----------------------------------------------
             except:
-                img_res = openai_client.images.generate(model="dall-e-3", prompt="Antique book on a dark wooden table lit by a single candle.", size="1024x1024", quality="standard", n=1)
+                # --- V250: GPT IMAGE 2 FALLBACK ---
+                img_res = openai_client.images.generate(model="gpt-image-2", prompt="Antique book on a dark wooden table lit by a single candle. No text.", size="1024x1024", quality="standard", n=1)
                 img_url = img_res.data[0].url
+                
+                # RÉGI DALL-E 3 FALLBACK KIKOMMENTELVE:
+                # img_res = openai_client.images.generate(model="dall-e-3", prompt="Antique book on a dark wooden table lit by a single candle.", size="1024x1024", quality="standard", n=1)
+                # img_url = img_res.data[0].url
+                # ----------------------------------------------
 
             r_img = requests.get(img_url, timeout=90)
             with open(raw_img_path, 'wb') as f: f.write(r_img.content)
@@ -910,15 +936,15 @@ analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V249)")
+    log_event("🌅 Master Láncreakció Indítása (V250)")
     updater.fetch_store_policies()
     
-    # --- V249: XML SYNC AKTIVÁLVA ---
-    try:
-        sync_success = updater.run_daily_update()
-        if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
-    except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
-    # --------------------------------
+    # --- V250: XML SYNC FELFÜGGESZTVE TESZTELÉSHEZ ---
+    # try:
+    #     sync_success = updater.run_daily_update()
+    #     if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
+    # except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
+    # --------------------------------------------------
     
     social_agent.run_night_generation()
 
@@ -940,9 +966,7 @@ def yearly_analytics_job():
 # --- FASTAPI APP ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- V249: REGGELI CRON AKTIVÁLVA ---
     scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
-    # ------------------------------------
     scheduler.add_job(daily_analytics_job, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
     scheduler.add_job(monthly_analytics_job, CronTrigger(hour=8, minute=15, timezone=LOCAL_TZ))
     scheduler.add_job(yearly_analytics_job, CronTrigger(hour=8, minute=30, timezone=LOCAL_TZ))
@@ -959,7 +983,7 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V249 Online (Full Auto Edition)", "project": "Booksy"}
+def home(): return {"status": "V250 Online (GPT Image 2 & Exec Analytics)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
@@ -987,17 +1011,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V249 Social Night Started"}
+    return {"status": "V250 Social Night Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V249 Full Cascade Started"}
+    return {"status": "V250 Full Cascade Started"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V249 Daily Analytics Started."}
+    return {"status": "V250 Daily Analytics Started."}
 
 if __name__ == "__main__":
     import uvicorn
