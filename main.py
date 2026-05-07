@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V251 (THE CROSS-MODEL FAILOVER EDITION)
-# VERZIÓ: V251 - GPT-IMAGE-2 WITH DALL-E-3 FALLBACK + ALL PREVIOUS FIXES (1M% INTEGRITY)
+# BOOKSY BRAIN - V252 (THE CINEMATIC VISUALS & BUSINESS ANALYTICS EDITION)
+# VERZIÓ: V252 - CINEMATIC PROMPT + NO-JARGON ANALYTICS + LOG POLLUTION FIX (1M% INTEGRITY)
 
 __import__('pysqlite3')
 import sys
@@ -255,29 +255,37 @@ class AIAnalyticsAgent:
         logs = analytics_db.get_logs_for_date(target_date_str)
         market_trends = self._get_market_trends("napi")
         
+        # --- V252: BUSINESS/MARKETING FÓKUSZÚ PROMPT (NO-JARGON) ---
+        analytics_rule = (f"KÖTELEZŐ SZABÁLY: A nyelvezet legyen üzleti, vezetői, laikusok számára is érthető, emberi! "
+                          f"Zéró kód-zsargon vagy technikai kifejezés! Szigorúan TILOS olyan szavakat használni, mint "
+                          f"'session_id', 'zero_match_flag', 'latencia ms-ban', 'geo_country', 'log bejegyzés' stb. "
+                          f"Ehelyett fogalmazz így: 'Egy látogató', 'Nincs találat a raktárban', 'A válaszidő 29 másodperc volt'. "
+                          f"Fókuszálj a tiszta üzleti összefüggésekre, marketing stratégiára és levonható következtetésekre "
+                          f"('Ez történt, ezek az adatok, ebből az következik...'). Szekciónként maximum a 3 legfontosabb, "
+                          f"üzletileg kritikus megállapítást és akciótervet emeld ki röviden.")
+        
         if not logs or len(logs) == 0:
-            system_prompt = "Válságmenedzser és UX Detektív vagy. Ma nulla interakció volt a chaten."
-            user_msg = f"Piaci adatok: {market_trends}\n\nKészíts Napi Riportot arról, mi okozhatta a zéró forgalmat! Vizsgálj meg UX hibákat vagy piaci okokat. Készíts bullet-pointos listát!"
+            system_prompt = "Válságmenedzser és Üzleti Elemző vagy. Ma nulla interakció volt a chaten."
+            user_msg = f"Piaci adatok: {market_trends}\n\nKészíts Napi Riportot arról, mi okozhatta a zéró forgalmat! Vizsgálj meg UX hibákat vagy piaci okokat. Készíts bullet-pointos listát!\n{analytics_rule}"
         elif len(logs) < 5:
-            system_prompt = "Konverzióoptimalizálási (CRO) és UX szakértő vagy."
-            user_msg = f"Napi logok ({len(logs)} db):\n{logs}\n\nPiaci adatok: {market_trends}\n\nKészíts Napi Riportot! Fókusz: Hogyan vegyük rá az embereket a chat használatára? Javasolj egy bevonó stratégiát a RO/HU trendek alapján. Zéró markdown diagram."
+            system_prompt = "E-kereskedelmi (CRO) és Marketing Elemző vagy."
+            user_msg = f"Napi interakciók ({len(logs)} db):\n{logs}\n\nPiaci adatok: {market_trends}\n\nKészíts Napi Riportot! Fókusz: Hogyan vegyük rá az embereket a chat használatára? Javasolj egy bevonó stratégiát a RO/HU trendek alapján. Zéró markdown diagram.\n{analytics_rule}"
         else:
-            system_prompt = "Profi UX/UI kutató, Webdesigner és Menedzsment Stratéga vagy."
-            user_msg = (f"Napi logok ({len(logs)} db):\n{logs}\n\nPiaci trendek:\n{market_trends}\n\n"
+            system_prompt = "Profi Marketing Elemző, Webdesigner és Menedzsment Stratéga vagy."
+            user_msg = (f"Napi interakciók ({len(logs)} db):\n{logs}\n\nPiaci trendek:\n{market_trends}\n\n"
                         f"Készíts átfogó Napi Riportot. Fókuszok:\n"
                         f"1. Földrajzi & Nyelvi Eloszlás (RO vs HU IP-k - Erdély fókusz).\n"
-                        f"2. Készlet & Beszerzés (zero_match_flag=True keresések).\n"
-                        f"3. Proaktív Frontend UX súrlódások.\n"
+                        f"2. Készlet & Beszerzés (milyen könyveket kerestek hiába).\n"
+                        f"3. Proaktív Frontend UX súrlódások (mit rontottunk el a boltban).\n"
                         f"4. 🔮 Webdevmk AI Előrejelzés a következő napokra!\n"
-                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.\n"
-                        f"KÖTELEZŐ SZABÁLY: Légy rendkívül tömör és lényegretörő (Executive Summary stílus)! Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást és akciótervet emeld ki! Ne írj felesleges litániát, csak a nyers, értékes információt add át!")
+                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.\n{analytics_rule}")
 
         for attempt in range(3):
             try:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=4096, system=system_prompt, messages=[{"role": "user", "content": user_msg}])
                 report = res.content[0].text
                 analytics_db.save_report("daily", target_date_str, report)
-                self._send_analytics_email(f"📊 Napi Booksy AI UX & SEO Jelentés ({target_date_str})", report)
+                self._send_analytics_email(f"📊 Napi Booksy AI Üzleti Jelentés ({target_date_str})", report)
                 analytics_db.cleanup_old_logs() 
                 log_event("✅ Napi Analitika befejezve.")
                 break
@@ -300,10 +308,13 @@ class AIAnalyticsAgent:
         market_trends = self._get_market_trends("havi")
         compiled_reports = "\n\n---NAPI JELENTÉS---\n\n".join(daily_reports)
         
+        analytics_rule = (f"KÖTELEZŐ SZABÁLY: A nyelvezet legyen üzleti, vezetői, laikusok számára is érthető, emberi! "
+                          f"Zéró kód-zsargon vagy technikai kifejezés! Fókuszálj a tiszta üzleti összefüggésekre és levonható "
+                          f"következtetésekre. Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki röviden.")
+        
         prompt = (f"A mellékelt szöveg az elmúlt hónap összes napi jelentése. Piaci havi trendek: {market_trends}\n\n"
                   f"Készíts vezetői HAVI JELENTÉST. Fókusz: Forgalmi források, erdélyi (RO IP, HU nyelvű) piac, hiánycikkek, "
-                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.\n"
-                  f"KÖTELEZŐ SZABÁLY: Légy rendkívül tömör és lényegretörő (Executive Summary stílus)! Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki!")
+                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.\n{analytics_rule}")
         
         for attempt in range(3):
             try:
@@ -330,11 +341,14 @@ class AIAnalyticsAgent:
         market_trends = self._get_market_trends("éves jövőkutatási")
         compiled_reports = "\n\n---HAVI JELENTÉS---\n\n".join(monthly_reports)
         
+        analytics_rule = (f"KÖTELEZŐ SZABÁLY: A nyelvezet legyen üzleti, vezetői, laikusok számára is érthető, emberi! "
+                          f"Zéró kód-zsargon vagy technikai kifejezés! Fókuszálj a tiszta üzleti összefüggésekre és levonható "
+                          f"következtetésekre. Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki röviden.")
+        
         prompt = (f"A mellékelt szöveg az elmúlt év 12 havi jelentése. Globális Éves Trendek: {market_trends}\n\n"
                   f"Készíts ÉVES Menedzsment Riportot! Értékeld a ROI-t, terjeszkedési statisztikákat (RO vs HU), "
                   f"frontend UX tanulságokat, majd egy '🔮 Webdevmk AI Éves Előrejelzés és Beszerzés' szekciót. "
-                  f"Bullet-pointos, diagrammentes struktúra.\n"
-                  f"KÖTELEZŐ SZABÁLY: Légy rendkívül tömör és lényegretörő (Executive Summary stílus)! Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki!")
+                  f"Bullet-pointos, diagrammentes struktúra.\n{analytics_rule}")
         
         for attempt in range(3):
             try:
@@ -591,7 +605,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V251 Cross-Model Failover Edition)...")
+        log_event("Agentic Generálás (V252 Cinematic Visuals Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -693,13 +707,25 @@ class BooksySocialAgent:
                     wait_time = 3 * (attempt + 1)
                     if attempt < 2: time.sleep(wait_time)
             
-            c_res_text = "Antique book on a dark wooden table lit by a single candle, highly detailed, no text."
+            # --- V252: OSCAR-DÍJAS OPERATŐR (CINEMATIC VISUALS) PROMPT ---
+            c_res_text = "Antique book on a dark wooden table lit by a single candle, highly detailed."
             for attempt in range(3):
                 try:
+                    visual_prompt_instructions = (
+                        f"Képzeld el, hogy te egy Oscar-díjas operatőr vagy. Elemzés a könyvről: {gem_res_text}. "
+                        f"Tervezz meg EGYETLEN lélegzetelállító filmkockát, ami a könyv csúcsjelenetét (climax) ábrázolja "
+                        f"valós helyszínen, valós szereplőkkel. Írj hozzá angol nyelvű képgeneráló promptot!\n"
+                        f"KÖTELEZŐ VIZUÁLIS SZABÁLYOK: Shot on 35mm anamorphic lens, raw photography, hyper-realistic, "
+                        f"cinematography, natural lighting, cool color grading, real human skin texture, no CGI, no 3D render. "
+                        f"Szigorúan kerüld a tipikus műanyag vagy meleg sárgás DALL-E hatást!\n"
+                        f"KÖTELEZŐ SZÖVEG SZABÁLY: A kompozíció tartalmazhat környezeti szöveget (pl. egy régi cégér, újság, "
+                        f"falon lévő levél részlete), DE ez a szöveg SZIGORÚAN a könyv történelmi/földrajzi kontextusának "
+                        f"megfelelő nyelven (magyarul vagy románul) és helyesírással szerepeljen! Zéró hallucinált angol szöveg!"
+                    )
                     c_res_text = self.claude.messages.create(
                         model=CLAUDE_MODEL, 
                         max_tokens=300, 
-                        messages=[{"role": "user", "content": f"Elemzés: {gem_res_text} Írj egy lélegzetelállító, fotorealisztikus, 35mm filmes képgeneráló promptot. KÖTELEZŐ SZABÁLY: A képen SZIGORÚAN TILOS bármilyen szövegnek, betűnek vagy feliratnak szerepelnie! Csak tiszta vizuális kompozíció."}]
+                        messages=[{"role": "user", "content": visual_prompt_instructions}]
                     ).content[0].text
                     break
                 except Exception as e:
@@ -709,7 +735,6 @@ class BooksySocialAgent:
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             img_url = None
             
-            # --- V251: CROSS-MODEL IMAGE FAILOVER (GPT-IMAGE-2 -> DALL-E-3) ---
             for attempt in range(3):
                 try:
                     img_res = openai_client.images.generate(model="gpt-image-2", prompt=c_res_text, size="1024x1024", quality="high", n=1)
@@ -725,13 +750,11 @@ class BooksySocialAgent:
 
             if not img_url:
                 try:
-                    # DALL-E 3 PRIMARY FALLBACK
                     img_res = openai_client.images.generate(model="dall-e-3", prompt=c_res_text, size="1024x1024", quality="hd", n=1)
                     img_url = img_res.data[0].url
                 except Exception as e:
                     log_event(f"⚠️ DALL-E 3 Hiba: {e}. Váltás alapértelmezett DALL-E 3 promptra.")
-                    # DALL-E 3 SECONDARY FALLBACK
-                    img_res = openai_client.images.generate(model="dall-e-3", prompt="Antique book on a dark wooden table lit by a single candle.", size="1024x1024", quality="standard", n=1)
+                    img_res = openai_client.images.generate(model="dall-e-3", prompt="A highly realistic cinematic shot on 35mm film of a classical library scene, natural cool lighting.", size="1024x1024", quality="standard", n=1)
                     img_url = img_res.data[0].url
             # ------------------------------------------------------------------
 
@@ -843,15 +866,15 @@ class BooksyBrain:
         self.claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     def process(self, msg, context_url, session_id):
-        if msg.startswith("/booklink"):
-            parts = msg.split()
+        if msg.strip().startswith("/booklink"):
+            parts = msg.strip().split()
             admin_pass = os.getenv("COMMENT_PASSWORD", "admin123")
             if len(parts) >= 2 and parts[1] == admin_pass:
                 force_id = parts[2] if len(parts) >= 3 else None
                 agent = BooksySocialAgent(self.db)
                 return agent._trigger_fb_comment(force_id)
             else: return {"reply": "🤖 Téves parancs sau hibás jelszó.", "products": [], "zero_match_flag": True}
-        if msg.startswith("/"): return {"reply": "🤖 Rendszerparancs felismerve.", "products": [], "zero_match_flag": True}
+        if msg.strip().startswith("/"): return {"reply": "🤖 Rendszerparancs felismerve.", "products": [], "zero_match_flag": True}
 
         try:
             policy_text = "A céges szabályzatok jelenleg nem elérhetők."
@@ -938,10 +961,10 @@ analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V251)")
+    log_event("🌅 Master Láncreakció Indítása (V252)")
     updater.fetch_store_policies()
     
-    # --- V251: XML SYNC FELFÜGGESZTVE TESZTELÉSHEZ ---
+    # --- V252: XML SYNC FELFÜGGESZTVE TESZTELÉSHEZ ---
     # try:
     #     sync_success = updater.run_daily_update()
     #     if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
@@ -985,18 +1008,24 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V251 Online (Cross-Model Image Failover Edition)", "project": "Booksy"}
+def home(): return {"status": "V252 Online (Cinematic Visuals & Business Analytics Edition)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
     start_time = time.time()
     bot_response = bot.process(req.message, req.context_url, req.session_id)
     latency = int((time.time() - start_time) * 1000)
-    if req.message.startswith("/"): return bot_response
+    
+    # --- V252: LOG POLLUTION FIX (COMMANDS ARE SKIPPED FROM DB) ---
+    if req.message.strip().startswith("/"): 
+        return bot_response
+    # --------------------------------------------------------------
+    
     client_ip = request.client.host if request.client else None
     geo_country, geo_region = get_geo_from_ip(client_ip)
     safe_user_msg = clean_pii(req.message)
     offered_ids = ",".join([p.get("id", "") for p in bot_response.get("products", [])]) if bot_response.get("products") else ""
+    
     log_data = {
         "session_id": req.session_id, "user_msg": safe_user_msg, "bot_reply": bot_response.get("reply", "")[:200],
         "context_url": req.context_url, "geo_country": geo_country, "geo_region": geo_region,
@@ -1013,17 +1042,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V251 Social Night Started"}
+    return {"status": "V252 Social Night Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V251 Full Cascade Started"}
+    return {"status": "V252 Full Cascade Started"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V251 Daily Analytics Started."}
+    return {"status": "V252 Daily Analytics Started."}
 
 if __name__ == "__main__":
     import uvicorn
