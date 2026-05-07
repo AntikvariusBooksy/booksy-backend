@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V252 (THE CINEMATIC VISUALS & BUSINESS ANALYTICS EDITION)
-# VERZIÓ: V252 - CINEMATIC PROMPT + NO-JARGON ANALYTICS + LOG POLLUTION FIX (1M% INTEGRITY)
+# BOOKSY BRAIN - V253 (THE HTML ANALYTICS EDITION)
+# VERZIÓ: V253 - HTML EMAIL ANALYTICS + NO MARKDOWN + ALL PREVIOUS FIXES (1M% INTEGRITY)
 
 __import__('pysqlite3')
 import sys
@@ -241,7 +241,9 @@ class AIAnalyticsAgent:
                 msg['From'] = f"{Header('Booksy Analytics', 'utf-8')} <{sender}>"
                 msg['To'] = admin
                 msg['Subject'] = Header(subject, 'utf-8')
-                msg.attach(MIMEText(body, 'plain', 'utf-8'))
+                # --- V253: PLAIN TEXT HELYETT HTML FORMÁTUM A SZÉP MEGJELENÉSÉRT ---
+                msg.attach(MIMEText(body, 'html', 'utf-8'))
+                # ------------------------------------------------------------------
                 server.send_message(msg)
             server.quit()
             log_event(f"📧 Analitika E-mail ({subject}) kiküldve.")
@@ -255,18 +257,20 @@ class AIAnalyticsAgent:
         logs = analytics_db.get_logs_for_date(target_date_str)
         market_trends = self._get_market_trends("napi")
         
-        # --- V252: BUSINESS/MARKETING FÓKUSZÚ PROMPT (NO-JARGON) ---
+        # --- V253: HTML FORMÁZÁSI SZABÁLY HOZZÁADVA ---
         analytics_rule = (f"KÖTELEZŐ SZABÁLY: A nyelvezet legyen üzleti, vezetői, laikusok számára is érthető, emberi! "
                           f"Zéró kód-zsargon vagy technikai kifejezés! Szigorúan TILOS olyan szavakat használni, mint "
                           f"'session_id', 'zero_match_flag', 'latencia ms-ban', 'geo_country', 'log bejegyzés' stb. "
                           f"Ehelyett fogalmazz így: 'Egy látogató', 'Nincs találat a raktárban', 'A válaszidő 29 másodperc volt'. "
-                          f"Fókuszálj a tiszta üzleti összefüggésekre, marketing stratégiára és levonható következtetésekre "
-                          f"('Ez történt, ezek az adatok, ebből az következik...'). Szekciónként maximum a 3 legfontosabb, "
-                          f"üzletileg kritikus megállapítást és akciótervet emeld ki röviden.")
+                          f"Fókuszálj a tiszta üzleti összefüggésekre, marketing stratégiára és levonható következtetésekre. "
+                          f"Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást és akciótervet emeld ki röviden.\n"
+                          f"KÖTELEZŐ HTML FORMÁZÁS: A teljes riportot SZIGORÚAN tiszta HTML kódban írd meg (használj <h2>, <h3>, <ul>, <li>, <strong>, <br> tageket)! "
+                          f"NE használj Markdown-t (zéró csillag, zéró hashtag)! A felsorolásokat (pl. keresési témák) MINDIG <ul><li> listába tedd! "
+                          f"NE tegyél markdown blokk (backticks) jelzést az elejére és végére, csak tisztán a HTML szöveget add vissza!")
         
         if not logs or len(logs) == 0:
             system_prompt = "Válságmenedzser és Üzleti Elemző vagy. Ma nulla interakció volt a chaten."
-            user_msg = f"Piaci adatok: {market_trends}\n\nKészíts Napi Riportot arról, mi okozhatta a zéró forgalmat! Vizsgálj meg UX hibákat vagy piaci okokat. Készíts bullet-pointos listát!\n{analytics_rule}"
+            user_msg = f"Piaci adatok: {market_trends}\n\nKészíts Napi Riportot arról, mi okozhatta a zéró forgalmat! Vizsgálj meg UX hibákat vagy piaci okokat. Készíts HTML listát!\n{analytics_rule}"
         elif len(logs) < 5:
             system_prompt = "E-kereskedelmi (CRO) és Marketing Elemző vagy."
             user_msg = f"Napi interakciók ({len(logs)} db):\n{logs}\n\nPiaci adatok: {market_trends}\n\nKészíts Napi Riportot! Fókusz: Hogyan vegyük rá az embereket a chat használatára? Javasolj egy bevonó stratégiát a RO/HU trendek alapján. Zéró markdown diagram.\n{analytics_rule}"
@@ -278,12 +282,17 @@ class AIAnalyticsAgent:
                         f"2. Készlet & Beszerzés (milyen könyveket kerestek hiába).\n"
                         f"3. Proaktív Frontend UX súrlódások (mit rontottunk el a boltban).\n"
                         f"4. 🔮 Webdevmk AI Előrejelzés a következő napokra!\n"
-                        f"Szigorú forma: Zéró diagram. Csak jól tagolt bullet-pointok és százalékok.\n{analytics_rule}")
+                        f"Szigorú forma: Zéró diagram. Csak jól tagolt HTML listák és százalékok.\n{analytics_rule}")
 
         for attempt in range(3):
             try:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=4096, system=system_prompt, messages=[{"role": "user", "content": user_msg}])
-                report = res.content[0].text
+                report = res.content[0].text.strip()
+                
+                # Biztonsági tisztítás a markdown backtickek eltávolítására
+                md_fence = "`" * 3
+                report = report.replace(md_fence + "html", "").replace(md_fence, "").strip()
+                
                 analytics_db.save_report("daily", target_date_str, report)
                 self._send_analytics_email(f"📊 Napi Booksy AI Üzleti Jelentés ({target_date_str})", report)
                 analytics_db.cleanup_old_logs() 
@@ -309,17 +318,23 @@ class AIAnalyticsAgent:
         compiled_reports = "\n\n---NAPI JELENTÉS---\n\n".join(daily_reports)
         
         analytics_rule = (f"KÖTELEZŐ SZABÁLY: A nyelvezet legyen üzleti, vezetői, laikusok számára is érthető, emberi! "
-                          f"Zéró kód-zsargon vagy technikai kifejezés! Fókuszálj a tiszta üzleti összefüggésekre és levonható "
-                          f"következtetésekre. Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki röviden.")
+                          f"Zéró kód-zsargon vagy technikai kifejezés! Fókuszálj a tiszta üzleti összefüggésekre és levonható következtetésekre. "
+                          f"Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki röviden.\n"
+                          f"KÖTELEZŐ HTML FORMÁZÁS: A teljes riportot SZIGORÚAN tiszta HTML kódban írd meg! NE használj Markdown-t! "
+                          f"A felsorolásokat MINDIG <ul><li> listába tedd! Csak tisztán a HTML szöveget add vissza!")
         
         prompt = (f"A mellékelt szöveg az elmúlt hónap összes napi jelentése. Piaci havi trendek: {market_trends}\n\n"
                   f"Készíts vezetői HAVI JELENTÉST. Fókusz: Forgalmi források, erdélyi (RO IP, HU nyelvű) piac, hiánycikkek, "
-                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak listák és százalékok.\n{analytics_rule}")
+                  f"és UX frontend javaslatok. Végezetül: '🔮 Webdevmk AI Előrejelzés a következő hónapra'. Csak HTML listák és százalékok.\n{analytics_rule}")
         
         for attempt in range(3):
             try:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=6000, system="Üzleti Stratéga vagy.", messages=[{"role": "user", "content": prompt}])
-                report = res.content[0].text
+                report = res.content[0].text.strip()
+                
+                md_fence = "`" * 3
+                report = report.replace(md_fence + "html", "").replace(md_fence, "").strip()
+                
                 analytics_db.save_report("monthly", target_month_str, report)
                 self._send_analytics_email(f"📈 HAVI Booksy AI Menedzsment Riport ({target_month_str})", report)
                 log_event("✅ Havi Analitika befejezve.")
@@ -342,18 +357,24 @@ class AIAnalyticsAgent:
         compiled_reports = "\n\n---HAVI JELENTÉS---\n\n".join(monthly_reports)
         
         analytics_rule = (f"KÖTELEZŐ SZABÁLY: A nyelvezet legyen üzleti, vezetői, laikusok számára is érthető, emberi! "
-                          f"Zéró kód-zsargon vagy technikai kifejezés! Fókuszálj a tiszta üzleti összefüggésekre és levonható "
-                          f"következtetésekre. Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki röviden.")
+                          f"Zéró kód-zsargon vagy technikai kifejezés! Fókuszálj a tiszta üzleti összefüggésekre és levonható következtetésekre. "
+                          f"Szekciónként maximum a 3 legfontosabb, üzletileg kritikus megállapítást emeld ki röviden.\n"
+                          f"KÖTELEZŐ HTML FORMÁZÁS: A teljes riportot SZIGORÚAN tiszta HTML kódban írd meg! NE használj Markdown-t! "
+                          f"A felsorolásokat MINDIG <ul><li> listába tedd! Csak tisztán a HTML szöveget add vissza!")
         
         prompt = (f"A mellékelt szöveg az elmúlt év 12 havi jelentése. Globális Éves Trendek: {market_trends}\n\n"
                   f"Készíts ÉVES Menedzsment Riportot! Értékeld a ROI-t, terjeszkedési statisztikákat (RO vs HU), "
                   f"frontend UX tanulságokat, majd egy '🔮 Webdevmk AI Éves Előrejelzés és Beszerzés' szekciót. "
-                  f"Bullet-pointos, diagrammentes struktúra.\n{analytics_rule}")
+                  f"Csak HTML listás, diagrammentes struktúra.\n{analytics_rule}")
         
         for attempt in range(3):
             try:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=8000, system="Vezérigazgatói Tanácsadó vagy.", messages=[{"role": "user", "content": prompt}])
-                report = res.content[0].text
+                report = res.content[0].text.strip()
+                
+                md_fence = "`" * 3
+                report = report.replace(md_fence + "html", "").replace(md_fence, "").strip()
+                
                 analytics_db.save_report("yearly", target_year_str, report)
                 self._send_analytics_email(f"👑 ÉVES Booksy AI Stratégiai Iránytű ({target_year_str})", report)
                 log_event("✅ Éves Analitika befejezve.")
@@ -605,7 +626,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V252 Cinematic Visuals Edition)...")
+        log_event("Agentic Generálás (V253 HTML Analytics Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -707,7 +728,6 @@ class BooksySocialAgent:
                     wait_time = 3 * (attempt + 1)
                     if attempt < 2: time.sleep(wait_time)
             
-            # --- V252: OSCAR-DÍJAS OPERATŐR (CINEMATIC VISUALS) PROMPT ---
             c_res_text = "Antique book on a dark wooden table lit by a single candle, highly detailed."
             for attempt in range(3):
                 try:
@@ -756,7 +776,6 @@ class BooksySocialAgent:
                     log_event(f"⚠️ DALL-E 3 Hiba: {e}. Váltás alapértelmezett DALL-E 3 promptra.")
                     img_res = openai_client.images.generate(model="dall-e-3", prompt="A highly realistic cinematic shot on 35mm film of a classical library scene, natural cool lighting.", size="1024x1024", quality="standard", n=1)
                     img_url = img_res.data[0].url
-            # ------------------------------------------------------------------
 
             r_img = requests.get(img_url, timeout=90)
             with open(raw_img_path, 'wb') as f: f.write(r_img.content)
@@ -961,10 +980,10 @@ analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V252)")
+    log_event("🌅 Master Láncreakció Indítása (V253)")
     updater.fetch_store_policies()
     
-    # --- V252: XML SYNC FELFÜGGESZTVE TESZTELÉSHEZ ---
+    # --- V253: XML SYNC FELFÜGGESZTVE TESZTELÉSHEZ ---
     # try:
     #     sync_success = updater.run_daily_update()
     #     if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
@@ -1008,7 +1027,7 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V252 Online (Cinematic Visuals & Business Analytics Edition)", "project": "Booksy"}
+def home(): return {"status": "V253 Online (HTML Analytics Edition)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
@@ -1016,10 +1035,8 @@ def chat(req: ChatRequest, request: Request):
     bot_response = bot.process(req.message, req.context_url, req.session_id)
     latency = int((time.time() - start_time) * 1000)
     
-    # --- V252: LOG POLLUTION FIX (COMMANDS ARE SKIPPED FROM DB) ---
     if req.message.strip().startswith("/"): 
         return bot_response
-    # --------------------------------------------------------------
     
     client_ip = request.client.host if request.client else None
     geo_country, geo_region = get_geo_from_ip(client_ip)
@@ -1042,17 +1059,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V252 Social Night Started"}
+    return {"status": "V253 Social Night Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V252 Full Cascade Started"}
+    return {"status": "V253 Full Cascade Started"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V252 Daily Analytics Started."}
+    return {"status": "V253 Daily Analytics Started."}
 
 if __name__ == "__main__":
     import uvicorn
