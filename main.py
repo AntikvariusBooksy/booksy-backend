@@ -1,5 +1,5 @@
-# BOOKSY BRAIN - V253 (THE HTML ANALYTICS EDITION)
-# VERZIÓ: V253 - HTML EMAIL ANALYTICS + NO MARKDOWN + ALL PREVIOUS FIXES (1M% INTEGRITY)
+# BOOKSY BRAIN - V254 (THE PRODUCTION READY EDITION)
+# VERZIÓ: V254 - XML SYNC RESTORED + HTML ANALYTICS + FAILOVERS + GEO-IP FIX (1M% INTEGRITY)
 
 __import__('pysqlite3')
 import sys
@@ -241,9 +241,7 @@ class AIAnalyticsAgent:
                 msg['From'] = f"{Header('Booksy Analytics', 'utf-8')} <{sender}>"
                 msg['To'] = admin
                 msg['Subject'] = Header(subject, 'utf-8')
-                # --- V253: PLAIN TEXT HELYETT HTML FORMÁTUM A SZÉP MEGJELENÉSÉRT ---
                 msg.attach(MIMEText(body, 'html', 'utf-8'))
-                # ------------------------------------------------------------------
                 server.send_message(msg)
             server.quit()
             log_event(f"📧 Analitika E-mail ({subject}) kiküldve.")
@@ -257,7 +255,6 @@ class AIAnalyticsAgent:
         logs = analytics_db.get_logs_for_date(target_date_str)
         market_trends = self._get_market_trends("napi")
         
-        # --- V253: HTML FORMÁZÁSI SZABÁLY HOZZÁADVA ---
         analytics_rule = (f"KÖTELEZŐ SZABÁLY: A nyelvezet legyen üzleti, vezetői, laikusok számára is érthető, emberi! "
                           f"Zéró kód-zsargon vagy technikai kifejezés! Szigorúan TILOS olyan szavakat használni, mint "
                           f"'session_id', 'zero_match_flag', 'latencia ms-ban', 'geo_country', 'log bejegyzés' stb. "
@@ -289,7 +286,6 @@ class AIAnalyticsAgent:
                 res = self.claude.messages.create(model=CLAUDE_MODEL, max_tokens=4096, system=system_prompt, messages=[{"role": "user", "content": user_msg}])
                 report = res.content[0].text.strip()
                 
-                # Biztonsági tisztítás a markdown backtickek eltávolítására
                 md_fence = "`" * 3
                 report = report.replace(md_fence + "html", "").replace(md_fence, "").strip()
                 
@@ -626,7 +622,7 @@ class BooksySocialAgent:
         except Exception as e: return {"reply": f"❌ Hiba: {e}", "products": [], "zero_match_flag": True}
 
     def run_night_generation(self):
-        log_event("Agentic Generálás (V253 HTML Analytics Edition)...")
+        log_event("Agentic Generálás (V254 Production Edition)...")
         raw_img_path = "social_raw.jpg"; overlay_path = "social_overlay.png"; fallback_img_path = "social_fallback.jpg"; vid_path = "social_video.mp4"
         
         try:
@@ -980,14 +976,14 @@ analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V253)")
+    log_event("🌅 Master Láncreakció Indítása (V254)")
     updater.fetch_store_policies()
     
-    # --- V253: XML SYNC FELFÜGGESZTVE TESZTELÉSHEZ ---
-    # try:
-    #     sync_success = updater.run_daily_update()
-    #     if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
-    # except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
+    # --- V254: XML SYNC VISSZAÁLLÍTVA (ÉLES ÜZEM) ---
+    try:
+        sync_success = updater.run_daily_update()
+        if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
+    except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
     # --------------------------------------------------
     
     social_agent.run_night_generation()
@@ -1027,7 +1023,7 @@ class ChatRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V253 Online (HTML Analytics Edition)", "project": "Booksy"}
+def home(): return {"status": "V254 Online (Production Ready)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
@@ -1038,7 +1034,14 @@ def chat(req: ChatRequest, request: Request):
     if req.message.strip().startswith("/"): 
         return bot_response
     
-    client_ip = request.client.host if request.client else None
+    # --- V254: X-Forwarded-For (Geo-IP) Fix ---
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else None
+    # ------------------------------------------
+    
     geo_country, geo_region = get_geo_from_ip(client_ip)
     safe_user_msg = clean_pii(req.message)
     offered_ids = ",".join([p.get("id", "") for p in bot_response.get("products", [])]) if bot_response.get("products") else ""
@@ -1059,17 +1062,17 @@ def init_chat(req: InitRequest): return {"ui_lang": req.ui_lang, "bubble_text": 
 @app.post("/test-social-night")
 def test_night(bt: BackgroundTasks): 
     bt.add_task(social_agent.run_night_generation)
-    return {"status": "V253 Social Night Started"}
+    return {"status": "V254 Social Night Started"}
 
 @app.post("/test-cascade")
 def test_cascade(bt: BackgroundTasks):
     bt.add_task(master_morning_routine)
-    return {"status": "V253 Full Cascade Started"}
+    return {"status": "V254 Full Cascade Started"}
 
 @app.post("/test-daily-analytics")
 def test_daily_analytics(bt: BackgroundTasks):
     bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V253 Daily Analytics Started."}
+    return {"status": "V254 Daily Analytics Started."}
 
 if __name__ == "__main__":
     import uvicorn
