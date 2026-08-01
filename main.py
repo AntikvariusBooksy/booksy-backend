@@ -39,7 +39,7 @@ claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # JAVÍTVA: A működő modell verzió
-CLAUDE_MODEL = "claude-3-5-sonnet-latest" # Szóvivő/Értékesítő
+CLAUDE_MODEL = "claude-sonnet-5" # Szóvivő/Értékesítő
 OPENAI_MODEL = "gpt-4o-mini" # Karmester/Szándékfelismerő
 
 XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml"
