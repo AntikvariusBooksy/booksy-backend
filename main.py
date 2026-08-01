@@ -38,7 +38,8 @@ gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-CLAUDE_MODEL = "claude-3-5-sonnet-latest" # Szóvivő/Értékesítő
+# JAVÍTVA: A működő modell verzió
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022" # Szóvivő/Értékesítő
 OPENAI_MODEL = "gpt-4o-mini" # Karmester/Szándékfelismerő
 
 XML_FEED_URL = "https://www.antikvarius.ro/wp-content/uploads/woo-feed/google/xml/booksyfullfeed.xml"
@@ -121,6 +122,13 @@ class AnalyticsDB:
             c.execute('''CREATE TABLE IF NOT EXISTS analytics_reports
                          (id INTEGER PRIMARY KEY AUTOINCREMENT, report_type TEXT, target_date TEXT,
                           content TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+            
+            # JAVÍTVA: Automatikus SQL migráció a hiányzó oszlophoz
+            try:
+                c.execute("ALTER TABLE chat_logs ADD COLUMN trigger_type TEXT DEFAULT 'manual'")
+            except sqlite3.OperationalError:
+                pass # Az oszlop már létezik
+                
             conn.commit(); conn.close()
         except Exception as e: log_event(f"❌ AnalyticsDB Init Hiba: {e}")
 
