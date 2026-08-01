@@ -1,47 +1,30 @@
-import time
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
+import os, time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from typing import Optional
 
-# Saját moduljaink beimportálása
-from database import log_event, get_geo_from_ip, clean_pii, analytics_db, db_handler, LOCAL_TZ
-from agent import AutoUpdater, BooksyProactiveAgent, AIAnalyticsAgent
+from database import DBHandler, AnalyticsDB, log_event, clean_pii, get_geo_from_ip, LOCAL_TZ
+from agent import BooksyProactiveAgent, AutoUpdater, AIAnalyticsAgent
 
-class ChatRequest(BaseModel): 
-    message: str
-    context_url: Optional[str] = ""
-    session_id: Optional[str] = ""
-    device_type: Optional[str] = "Desktop"
-    ui_lang: Optional[str] = "hu"
-    chat_lang: Optional[str] = "hu"
-    target_catalog: Optional[str] = "mixed"
-
-class ProactiveRequest(BaseModel):
-    trigger_type: str # 'cart_abandonment', 'zero_match_search', 'checkout_hesitation'
-    session_id: str
-    context_url: Optional[str] = ""
-    failed_search_term: Optional[str] = ""
-    last_book_title: Optional[str] = ""
-    ui_lang: Optional[str] = "hu"
-    device_type: Optional[str] = "Desktop"
-
-class InitRequest(BaseModel): 
-    url: str
-    session_id: str
-    ui_lang: str = "hu"
-
-# --- MASTER CASCADE & SCHEDULING ---
+db_handler = DBHandler()
+analytics_db = AnalyticsDB()
 updater = AutoUpdater(db_handler)
 agent = BooksyProactiveAgent(db_handler)
 analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
+/* STREAMING_CHUNK:Scheduler routines... */
 def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V255 Modular)")
+    log_event("🌅 Master Láncreakció Indítása (V256)")
     updater.fetch_store_policies()
     try:
         sync_success = updater.run_daily_update()
@@ -52,37 +35,42 @@ def daily_analytics_job():
     try: analytics_agent.generate_daily_report()
     except Exception as e: log_event(f"⚠️ Napi Analitika Hiba: {e}")
 
-def monthly_analytics_job():
-    if datetime.now(LOCAL_TZ).day == 1:
-        try: analytics_agent.generate_monthly_report()
-        except Exception as e: log_event(f"⚠️ Havi Analitika Hiba: {e}")
-
-def yearly_analytics_job():
-    now = datetime.now(LOCAL_TZ)
-    if now.month == 1 and now.day == 1:
-        try: analytics_agent.generate_yearly_report()
-        except Exception as e: log_event(f"⚠️ Éves Analitika Hiba: {e}")
-
-# --- FASTAPI APP ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
     scheduler.add_job(daily_analytics_job, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
-    scheduler.add_job(monthly_analytics_job, CronTrigger(hour=8, minute=15, timezone=LOCAL_TZ))
-    scheduler.add_job(yearly_analytics_job, CronTrigger(hour=8, minute=30, timezone=LOCAL_TZ))
     scheduler.start(); yield; scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
 
+/* STREAMING_CHUNK:Request payload models... */
+class ChatRequest(BaseModel): 
+    message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
+    device_type: Optional[str] = "Desktop"; ui_lang: Optional[str] = "hu"
+    chat_lang: Optional[str] = "hu"; target_catalog: Optional[str] = "mixed"
+    user_mode: Optional[str] = "felfedezo"
+
+class ProactiveRequest(BaseModel):
+    trigger_type: str
+    session_id: str
+    context_url: Optional[str] = ""
+    failed_search_term: Optional[str] = ""
+    last_book_title: Optional[str] = ""
+    ui_lang: Optional[str] = "hu"
+    device_type: Optional[str] = "Desktop"
+    user_mode: Optional[str] = "felfedezo"
+
+class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
+
+/* STREAMING_CHUNK:API endpoints... */
 @app.get("/")
-def home(): 
-    return {"status": "V255 Online (Modular Proactive Agent)", "project": "Booksy"}
+def home(): return {"status": "V256 Online (Intelligent Expert Agent)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
     start_time = time.time()
-    bot_response = agent.process_chat(req.message)
+    bot_response = agent.process_chat(req.message, req.ui_lang, req.user_mode)
     latency = int((time.time() - start_time) * 1000)
     
     forwarded_for = request.headers.get("X-Forwarded-For")
@@ -102,12 +90,12 @@ def chat(req: ChatRequest, request: Request):
 
 @app.post("/proactive-hook")
 def proactive_hook(req: ProactiveRequest, request: Request):
-    """ÚJ VÉGPONT: Telemetriai jelek fogadása és proaktív válasz generálása"""
     start_time = time.time()
-    
     session_data = {
         "failed_search_term": req.failed_search_term,
-        "last_book_title": req.last_book_title
+        "last_book_title": req.last_book_title,
+        "ui_lang": req.ui_lang,
+        "user_mode": req.user_mode
     }
     
     bot_response = agent.process_proactive_trigger(req.trigger_type, session_data)
@@ -130,17 +118,10 @@ def proactive_hook(req: ProactiveRequest, request: Request):
 
 @app.post("/init-chat")
 def init_chat(req: InitRequest): 
-    return {"ui_lang": req.ui_lang, "bubble_text": "Szia!", "placeholder": "Keresel valamit?"}
-
-@app.post("/test-cascade")
-def test_cascade(bt: BackgroundTasks):
-    bt.add_task(master_morning_routine)
-    return {"status": "V255 Full Cascade Started"}
-
-@app.post("/test-daily-analytics")
-def test_daily_analytics(bt: BackgroundTasks):
-    bt.add_task(analytics_agent.generate_daily_report)
-    return {"status": "V255 Daily Analytics Started."}
+    if req.ui_lang == "hu":
+        return {"ui_lang": "hu", "bubble_text": "Miben segíthetek?", "placeholder": "Kérdezz bármit..."}
+    else:
+        return {"ui_lang": "ro", "bubble_text": "Cu ce te pot ajuta?", "placeholder": "Întreabă orice..."}
 
 if __name__ == "__main__":
     import uvicorn
