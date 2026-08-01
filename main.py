@@ -2,44 +2,25 @@ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
-import os, time
+import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from typing import Optional
 
-from database import DBHandler, AnalyticsDB, log_event, clean_pii, get_geo_from_ip, LOCAL_TZ
+from database import DBHandler, AnalyticsDB, clean_pii, get_geo_from_ip
 from agent import BooksyProactiveAgent
-from agent_modules import AutoUpdater, AIAnalyticsAgent
 
 db_handler = DBHandler()
 analytics_db = AnalyticsDB()
-updater = AutoUpdater(db_handler)
 agent = BooksyProactiveAgent(db_handler)
-analytics_agent = AIAnalyticsAgent()
-scheduler = BackgroundScheduler()
-
-def master_morning_routine():
-    log_event("🌅 Master Láncreakció Indítása (V256)")
-    updater.fetch_store_policies()
-    try:
-        sync_success = updater.run_daily_update()
-        if not sync_success: log_event("⚠️ Szinkronizációs hiba, korábbi adatok használata.")
-    except Exception as e: log_event(f"⚠️ Váratlan hiba a szinkronnál: {e}")
-
-def daily_analytics_job():
-    try: analytics_agent.generate_daily_report()
-    except Exception as e: log_event(f"⚠️ Napi Analitika Hiba: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.add_job(master_morning_routine, CronTrigger(hour=7, minute=0, timezone=LOCAL_TZ))
-    scheduler.add_job(daily_analytics_job, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
-    scheduler.start(); yield; scheduler.shutdown()
+    # Jelenleg nincsenek háttérfolyamatok (cron jobok), 
+    # mert az AutoUpdater és Analytics modulok nincsenek bekötve.
+    yield
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
@@ -63,7 +44,7 @@ class ProactiveRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V256 Online (Intelligent Expert Agent)", "project": "Booksy"}
+def home(): return {"status": "V256 Online (Proactive Expert Agent)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
