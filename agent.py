@@ -20,14 +20,12 @@ class BooksyProactiveAgent:
     def __init__(self, db: DBHandler):
         self.db = db
 
-/* STREAMING_CHUNK:Loading store policies... */
     def _get_policies(self):
         if os.path.exists(STORE_POLICIES_FILE):
             with open(STORE_POLICIES_FILE, "r", encoding="utf-8") as f:
                 return json.load(f).get("policies", "")
         return "Céges szabályzat nem elérhető."
 
-/* STREAMING_CHUNK:Intent routing and query expansion... */
     def _intent_routing(self, msg: str) -> dict:
         system_prompt = (
             "Te egy e-kereskedelmi router vagy. Elemezd a bejövő üzenetet. Válaszolj KIZÁRÓLAG JSON formátumban!\n"
@@ -50,7 +48,6 @@ class BooksyProactiveAgent:
             log_event(f"⚠️ Intent Routing Hiba: {e}")
             return {"intent": "search", "expanded_query": msg} 
 
-/* STREAMING_CHUNK:Vector search implementation... */
     def _vector_search(self, query: str, limit: int = 4) -> list:
         try:
             vec_req = gemini_client.models.embed_content(
@@ -81,14 +78,12 @@ class BooksyProactiveAgent:
             log_event(f"⚠️ Vektor Keresés Hiba: {e}")
             return []
 
-/* STREAMING_CHUNK:Claude expert persona response generation... */
     def _generate_claude_response(self, user_msg: str, intent_data: dict, products: list, is_proactive: bool = False, trigger_context: str = "", ui_lang: str = "hu", user_mode: str = "felfedezo") -> str:
         policy_text = self._get_policies()
         context_text = "Nem találtam megfelelő könyvet a raktárban."
         if products:
             context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
 
-        # Szigorú nyelvi instrukció
         if ui_lang == "hu":
             lang_instruction = "MAGYARUL (Hungarian)"
             persona_style = "Művelt, tapasztalt, rendkívül segítőkész antikvárius szakértő vagy."
@@ -96,7 +91,6 @@ class BooksyProactiveAgent:
             lang_instruction = "ROMÁNUL (Romanian - în limba română)"
             persona_style = "Ești un anticar expert, cultivat, pasionat de cărți și foarte amabil."
 
-        # User mode fókusz
         if user_mode == "vadasz":
             mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra, a raktárkészletre és a gyors döntésre!"
         else:
@@ -135,7 +129,6 @@ class BooksyProactiveAgent:
             log_event(f"⚠️ Claude Válaszgenerálási Hiba: {e}")
             return "Eroare tehnică. Te rog încearcă mai târziu." if ui_lang == "ro" else "Sajnos technikai hiba történt. Kérlek, próbáld újra később!"
 
-/* STREAMING_CHUNK:Public chat processing... */
     def process_chat(self, msg: str, ui_lang: str = "hu", user_mode: str = "felfedezo") -> dict:
         intent_data = self._intent_routing(msg)
         final_products = []
@@ -151,7 +144,6 @@ class BooksyProactiveAgent:
             "zero_match_flag": (intent_data['intent'] == 'search' and len(final_products) == 0)
         }
 
-/* STREAMING_CHUNK:Proactive trigger handling... */
     def process_proactive_trigger(self, trigger_type: str, session_data: dict) -> dict:
         trigger_context = ""
         search_query = ""

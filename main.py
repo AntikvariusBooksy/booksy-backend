@@ -22,7 +22,6 @@ agent = BooksyProactiveAgent(db_handler)
 analytics_agent = AIAnalyticsAgent()
 scheduler = BackgroundScheduler()
 
-/* STREAMING_CHUNK:Scheduler routines... */
 def master_morning_routine():
     log_event("🌅 Master Láncreakció Indítása (V256)")
     updater.fetch_store_policies()
@@ -44,7 +43,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
 
-/* STREAMING_CHUNK:Request payload models... */
 class ChatRequest(BaseModel): 
     message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
     device_type: Optional[str] = "Desktop"; ui_lang: Optional[str] = "hu"
@@ -63,7 +61,6 @@ class ProactiveRequest(BaseModel):
 
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
-/* STREAMING_CHUNK:API endpoints... */
 @app.get("/")
 def home(): return {"status": "V256 Online (Intelligent Expert Agent)", "project": "Booksy"}
 
