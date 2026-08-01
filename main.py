@@ -13,7 +13,8 @@ from apscheduler.triggers.cron import CronTrigger
 from typing import Optional
 
 from database import DBHandler, AnalyticsDB, log_event, clean_pii, get_geo_from_ip, LOCAL_TZ
-from agent import BooksyProactiveAgent, AutoUpdater, AIAnalyticsAgent
+from agent import BooksyProactiveAgent
+from agent_modules import AutoUpdater, AIAnalyticsAgent
 
 db_handler = DBHandler()
 analytics_db = AnalyticsDB()
