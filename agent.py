@@ -1,11 +1,13 @@
 import os, time, json
+import requests
+from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
 import anthropic 
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from database import DBHandler, log_event, STORE_POLICIES_FILE
+from database import DBHandler, log_event
 
 load_dotenv()
 
@@ -15,23 +17,40 @@ claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # A lassú, de okos modell a beszélgetéshez, és a villámgyors a felugró ablakokhoz
-CLAUDE_MODEL = "claude-3-5-sonnet-latest" 
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022" 
 OPENAI_MODEL = "gpt-4o-mini"
 
 class BooksyProactiveAgent:
     def __init__(self, db: DBHandler):
         self.db = db
 
-    def _get_policies(self):
-        if os.path.exists(STORE_POLICIES_FILE):
-            with open(STORE_POLICIES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f).get("policies", "")
-        return "Céges szabályzat nem elérhető."
+    def _live_scrape_policies(self) -> str:
+        """Élőben beolvassa a szállítási és fizetési feltételeket a weboldalról."""
+        urls = [
+            "https://www.antikvarius.ro/informatii-despre-livrare/",
+            "https://www.antikvarius.ro/informatii-despre-plata/"
+        ]
+        scraped_text = ""
+        for url in urls:
+            try:
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                r = requests.get(url, headers=headers, timeout=4)
+                if r.status_code == 200:
+                    soup = BeautifulSoup(r.text, 'html.parser')
+                    # Próbáljuk megtalálni a fő tartalmi részt
+                    content = soup.select_one('.entry-content') or soup.find('main') or soup.find('body')
+                    if content:
+                        # Csak az első 1500 karaktert tartjuk meg oldalanként, hogy ne terheljük túl a promptot
+                        scraped_text += f"--- {url} ---\n" + content.get_text(separator=' ', strip=True)[:1500] + "\n\n"
+            except Exception as e:
+                log_event(f"⚠️ Policy Scrape Hiba ({url}): {e}")
+                
+        return scraped_text if scraped_text else "A szállítási és fizetési információk jelenleg nem olvashatók."
 
     def _intent_routing(self, msg: str) -> dict:
         system_prompt = (
             "Te egy e-kereskedelmi router vagy. Elemezd a bejövő üzenetet. Válaszolj KIZÁRÓLAG JSON formátumban!\n"
-            "Lehetséges 'intent' értékek: 'policy' (szállítás, fizetés, kapcsolat, árak, cégadatok), 'search' (konkrét könyv vagy téma keresése), 'general' (egyéb csevegés).\n"
+            "Lehetséges 'intent' értékek: 'policy' (szállítás, fizetés, kapcsolat, árak, szabályzat), 'search' (konkrét könyv vagy téma keresése), 'general' (egyéb csevegés, üdvözlés).\n"
             "Ha 'search', akkor generálj egy 'expanded_query' mezőt, ami 3-5 szemantikus kulcsszóval bővíti a keresést.\n"
             "Minta JSON: {\"intent\": \"search\", \"expanded_query\": \"eredeti szó, szinonima1, szinonima2\"}"
         )
@@ -65,7 +84,6 @@ class BooksyProactiveAgent:
             )
             vec = vec_req.embeddings[0].values
             
-            # Kérünk rengeteg találatot (20 db), hogy a szigorú nyelvi szűrés után is maradjon könyv
             db_res = self.db.collection.query(
                 query_embeddings=[vec], 
                 n_results=20, 
@@ -83,19 +101,17 @@ class BooksyProactiveAgent:
                         
                     url = p.get('url', '').lower()
                     
-                    # --- GOLYÓÁLLÓ NYELVI ÉS KATEGÓRIA URL SZŰRŐ ---
+                    # --- GOLYÓÁLLÓ URL KATEGÓRIA SZŰRŐ ---
                     if ui_lang == 'hu':
-                        # Ha a látogató a magyar felületen van, TILOS román kategóriát ajánlani!
+                        # Magyar felület: Ha nincs benne a magyar kategória, vagy benne van a román, kuka.
                         if 'carti-in-limba-romana' in url: 
                             continue 
-                        # Szigorítva: Csak akkor fogadja el, ha benne van a magyar slug vagy a /hu/ tag
                         if 'magyar-nyelvu-konyvek' not in url and '/hu/' not in url:
                             continue
                     else: 
-                        # Ha a látogató a román felületen van, TILOS magyar könyvet / kategóriát ajánlani!
+                        # Román felület: Ha benne van a magyar kategória, kuka.
                         if 'magyar-nyelvu-konyvek' in url or '/hu/' in url: 
                             continue 
-                        # Szigorítva: Csak a román kategóriát fogadja el
                         if 'carti-in-limba-romana' not in url:
                             continue
 
@@ -112,43 +128,50 @@ class BooksyProactiveAgent:
             return []
 
     def _generate_response(self, user_msg: str, intent_data: dict, products: list, is_proactive: bool = False, trigger_context: str = "", ui_lang: str = "ro", user_mode: str = "felfedezo") -> str:
-        policy_text = self._get_policies()
         
         # Szigorú nyelvi elválasztás a Prompt számára
         if ui_lang == "hu":
             lang_instruction = "MAGYARUL (Hungarian)"
             persona_style = "Művelt, tapasztalt, rendkívül segítőkész antikvárius szakértő vagy."
             context_text = "Nem találtam megfelelő könyvet a raktárban."
-            if products:
-                context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
         else:
             lang_instruction = "ROMÂNĂ (Romanian - în limba română)"
             persona_style = "Ești un anticar expert, cultivat, pasionat de cărți și foarte amabil."
             context_text = "Nu am găsit cărți potrivite în stoc."
-            if products:
+
+        # Termék adatok előkészítése
+        if intent_data.get('intent') == 'search' and products:
+            if ui_lang == "hu":
+                context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
+            else:
                 context_text = "\n".join([f"Titlu: {p['title']} - Autor: {p.get('author','')} - Preț: {p.get('price','')}. Descriere: {p.get('text_preview','')}" for p in products])
 
         if user_mode == "vadasz":
-            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra és a raktárkészletre!" if ui_lang == "hu" else "Vizitatorul este hotărât. Fii precis, axează-te pe preț și stoc!"
+            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, fókuszálj az árakra és a tényekre!" if ui_lang == "hu" else "Vizitatorul este hotărât. Fii precis, axează-te pe preț și fapte!"
         else:
             mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust, mesélj a könyvek hangulatáról!" if ui_lang == "hu" else "Vizitatorul explorează. Oferă context cultural, povestește despre atmosfera cărților!"
 
         system_prompt = (
             f"Te Booksy vagy, az antikvarius.ro prémium antikváriumának szaktanácsadója. {persona_style}\n"
             f"Vásárlói profil: {mode_instruction}\n\n"
-            f"Céges tudásbázisod:\n<company_policies>\n{policy_text}\n</company_policies>\n\n"
             f"SÉRTHETETLEN SZABÁLYOK:\n"
             f"1. A szállítási díj zónánként FIX! SOHA NICS INGYENES SZÁLLÍTÁS!\n"
             f"2. Utánvétes fizetés KIZÁRÓLAG Románián belül lehetséges!\n"
             f"3. A VÁLASZT KÖTELEZŐEN ÉS KIZÁRÓLAG {lang_instruction} FOGALMAZD MEG!\n"
-            f"4. Formázás: ZÉRÓ HTML címke!\n"
+            f"4. Formázás: ZÉRÓ HTML címke! Csak markdown.\n"
         )
+
+        # Ha a szándék szabályzat (policy), betöltjük az élőben kikapart adatokat
+        if intent_data.get('intent') == 'policy' and not is_proactive:
+            system_prompt += (
+                f"\n\nÉLŐBEN BEOLVASOTT SZABÁLYZAT AZ OLDALRÓL:\n<policy>\n{trigger_context}\n</policy>\n"
+                f"Ezek a hivatalos információk. Használd ezeket a válaszodban, és foglald össze röviden, udvariasan a kért adatokat!"
+            )
 
         user_content = f"Üzenet / Message: '{user_msg}'\n\nTalálatok / Results:\n{context_text}"
 
         try:
             if is_proactive:
-                # SEBESSÉG OPTIMALIZÁLÁS: A proaktív megkeresések a villámgyors GPT-4o-mini-n futnak (1-2 másodperc)
                 system_prompt += (
                     f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. "
                     f"Légy nagyon rövid (max 2-3 mondat), természetes, udvarias, de ne légy tolakodó! "
@@ -165,27 +188,46 @@ class BooksyProactiveAgent:
                 )
                 return res.choices[0].message.content.strip()
             else:
-                # Normál Chat logikához megmarad a Claude a mély és okos beszélgetéshez
-                res = claude_client.messages.create(
-                    model=CLAUDE_MODEL, 
-                    max_tokens=1000, 
-                    system=system_prompt, 
-                    messages=[{"role": "user", "content": user_content}]
-                )
-                return res.content[0].text.strip()
+                # NORMÁL CHAT - KETTŐS BIZTOSÍTÁS (Fallback)
+                try:
+                    res = claude_client.messages.create(
+                        model=CLAUDE_MODEL, 
+                        max_tokens=1000, 
+                        system=system_prompt, 
+                        messages=[{"role": "user", "content": user_content}]
+                    )
+                    return res.content[0].text.strip()
+                except Exception as claude_err:
+                    log_event(f"⚠️ Claude modell hiba, átkapcsolás GPT-4o-mini-re: {claude_err}")
+                    # Ha a Claude elszáll (pl. API limit, hálózat), a GPT azonnal átveszi a munkát!
+                    res_fallback = openai_client.chat.completions.create(
+                        model=OPENAI_MODEL,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content}
+                        ],
+                        max_tokens=1000,
+                        temperature=0.7
+                    )
+                    return res_fallback.choices[0].message.content.strip()
                 
         except Exception as e:
-            log_event(f"⚠️ Válaszgenerálási Hiba: {e}")
+            log_event(f"⚠️ Válaszgenerálási Hiba (Mindkét modell elszállt): {e}")
             return "Eroare tehnică. Te rog încearcă mai târziu." if ui_lang == "ro" else "Sajnos technikai hiba történt. Kérlek, próbáld újra később!"
 
     def process_chat(self, msg: str, ui_lang: str = "ro", user_mode: str = "felfedezo") -> dict:
         intent_data = self._intent_routing(msg)
         final_products = []
+        policy_context = ""
+        
         if intent_data['intent'] == 'search':
             final_products = self._vector_search(intent_data.get('expanded_query', msg), limit=4, ui_lang=ui_lang)
-        
+        elif intent_data['intent'] == 'policy':
+            # Élő adatgyűjtés az ügyfélszolgálati kérdésekhez
+            policy_context = self._live_scrape_policies()
+            
         reply_text = self._generate_response(
-            msg, intent_data, final_products, is_proactive=False, ui_lang=ui_lang, user_mode=user_mode
+            msg, intent_data, final_products, is_proactive=False, trigger_context=policy_context, ui_lang=ui_lang, user_mode=user_mode
         )
         return {
             "reply": reply_text, 
@@ -200,7 +242,6 @@ class BooksyProactiveAgent:
         user_mode = session_data.get("user_mode", "felfedezo")
         book_title = session_data.get("last_book_title", "")
 
-        # Nyelvi kontextus a modellnek (Itt kapja meg a pontos instrukciót a választott nyelven!)
         if ui_lang == "ro":
             if trigger_type == "cart_abandonment":
                 trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă. Ultima carte vizionată: '{book_title}'."
@@ -236,7 +277,6 @@ class BooksyProactiveAgent:
 
         final_products = []
         if search_query:
-            # Rögtön keresünk, kihagyva az intent_routing lassítását proaktív módban!
             final_products = self._vector_search(search_query, limit=3, ui_lang=ui_lang)
             
         reply_text = self._generate_response(
