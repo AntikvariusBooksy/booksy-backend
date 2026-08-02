@@ -8,19 +8,31 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+from fastapi import BackgroundTasks
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
 
 from database import DBHandler, AnalyticsDB, clean_pii, get_geo_from_ip, update_store_policies
-from agent import BooksyProactiveAgent
+from agent import BooksyProactiveAgent, BooksyAnalyticsReporter
 
 db_handler = DBHandler()
 analytics_db = AnalyticsDB()
 agent = BooksyProactiveAgent(db_handler)
+reporter = BooksyAnalyticsReporter(analytics_db)
+LOCAL_TZ = pytz.timezone('Europe/Bucharest')
+
+scheduler = BackgroundScheduler()
+# Minden reggel 8:00-kor lefut az AI analitika generálása és kiküldése
+scheduler.add_job(reporter.generate_and_send_daily_report, CronTrigger(hour=8, minute=0, timezone=LOCAL_TZ))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Szerver indulásakor betöltjük a legfrissebb szabályzatokat a memóriába (RAG)
     update_store_policies()
+    scheduler.start()
     yield
+    scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], allow_methods=["*"])
@@ -101,6 +113,12 @@ def init_chat(req: InitRequest):
         return {"ui_lang": "hu", "bubble_text": "Miben segíthetek?", "placeholder": "Kérdezz bármit..."}
     else:
         return {"ui_lang": "ro", "bubble_text": "Cu ce te pot ajuta?", "placeholder": "Întreabă orice..."}
+
+@app.post("/test-analytics")
+def test_analytics(bt: BackgroundTasks):
+    # A háttérben elindítja a folyamatot, így a hívó nem fagy le amíg a GPT és az SMTP dolgozik
+    bt.add_task(reporter.generate_and_send_daily_report)
+    return {"status": "Triggered", "message": "AI Analitika generálása és e-mail küldés elindult a háttérben!"}
 
 if __name__ == "__main__":
     import uvicorn

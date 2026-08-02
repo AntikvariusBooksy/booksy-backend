@@ -3,11 +3,11 @@ import requests
 from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
-import anthropic 
-from openai import OpenAI
-from dotenv import load_dotenv
-
-from database import DBHandler, log_event, get_store_policies
+from database import DBHandler, log_event, get_store_policies, ADMIN_EMAILS
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -274,3 +274,84 @@ class BooksyProactiveAgent:
             "products": final_products,
             "trigger_handled": True
         }
+
+class BooksyAnalyticsReporter:
+    def __init__(self, analytics_db):
+        self.db = analytics_db
+
+    def generate_and_send_daily_report(self):
+        try:
+            # 1. Lekérdezzük az előző napi logokat
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            logs = self.db.get_logs_for_date(yesterday)
+            
+            # Ha ma teszteljük és tegnap nem volt log, akkor a mai napot is belerakjuk a teszt kedvéért
+            if not logs:
+                today = datetime.now().strftime("%Y-%m-%d")
+                logs = self.db.get_logs_for_date(today)
+                yesterday = f"{today} (Mai teszt adatok)"
+                
+            if not logs:
+                log_event("Nincs elég adat az analitikához, e-mail küldés kihagyva.")
+                return {"status": "skipped", "message": "Nincs log"}
+
+            log_summary = f"Dátum: {yesterday}\nÖsszes interakció: {len(logs)}\n\n"
+            for log in logs:
+                log_summary += f"- Esemény: {log.get('trigger_type', 'manual')} | Nyelv: {log.get('ui_language', 'ro')} | Üzenet: '{log.get('user_msg', '')[:100]}' | Nincs találat flag: {log.get('zero_match_flag', False)}\n"
+            
+            # 2. AI Elemzés (GPT-4o-mini)
+            system_prompt = (
+                "Te egy vezetői adatelemző vagy az Antikvarius.ro-nál. Elemezd a webáruház előző napi chat logjait. "
+                "Készíts egy profi, vizuálisan vonzó, mobilbarát HTML e-mail jelentést magyar nyelven! "
+                "Tartalmazzon: 1. Napi összefoglalót (interakciók száma). 2. Miket kerestek a legtöbbet. "
+                "3. 'Nincs találat' (zero-match) elemzést - mik azok a könyvek/témák, amiket kerestek, de nincsenek. "
+                "4. Javaslatokat beszerzésre vagy UX javításra. "
+                "KIZÁRÓLAG érvényes HTML kódot adj vissza <html> és <body> tagekkel, inline CSS formázással, "
+                "sötétkék/arany színvilággal. Ne tegyél markdown ```html blokkokat a kimenetbe!"
+            )
+            
+            res = openai_client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Itt vannak a napi logok:\n{log_summary}"}
+                ],
+                max_tokens=2500,
+                temperature=0.5
+            )
+            
+            html_content = res.choices[0].message.content.strip()
+            if html_content.startswith("```html"):
+                html_content = html_content[7:-3].strip()
+            
+            # 3. Mentsük el az adatbázisba a riportot
+            self.db.save_report("daily_analytics", yesterday, html_content)
+            
+            # 4. E-mail küldés
+            sender = os.getenv("SMTP_SENDER")
+            password = os.getenv("SMTP_PASSWORD")
+            server_url = os.getenv("SMTP_SERVER", "mail.antikvarius.ro")
+            
+            if not sender or not password:
+                log_event("⚠️ Nincs SMTP beállítva, az analitikai e-mail küldés elmaradt.")
+                return {"status": "error", "message": "Nincs SMTP beállítva"}
+                
+            server = smtplib.SMTP(server_url, 26, timeout=15)
+            server.starttls()
+            server.login(sender, password)
+            
+            for admin in ADMIN_EMAILS:
+                msg = MIMEMultipart()
+                msg['Subject'] = f"📊 Booksy AI Napi Analitika ({yesterday})"
+                msg['From'] = sender
+                msg['To'] = admin
+                msg.attach(MIMEText(html_content, 'html'))
+                server.send_message(msg)
+                
+            server.quit()
+            log_event(f"✅ Napi AI Analitika sikeresen elküldve a vezetőségnek ({yesterday}).")
+            return {"status": "success", "message": "Jelentés elküldve"}
+            
+        except Exception as e:
+            log_event(f"❌ Napi Analitika Hiba: {e}")
+            return {"status": "error", "message": str(e)}
