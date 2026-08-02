@@ -48,7 +48,7 @@ class BooksyProactiveAgent:
             log_event(f"⚠️ Intent Routing Hiba: {e}")
             return {"intent": "search", "expanded_query": msg} 
 
-    def _vector_search(self, query: str, limit: int = 4, ui_lang: str = "hu") -> list:
+    def _vector_search(self, query: str, limit: int = 4, ui_lang: str = "ro") -> list:
         try:
             vec_req = gemini_client.models.embed_content(
                 model="gemini-embedding-001", 
@@ -57,7 +57,7 @@ class BooksyProactiveAgent:
             )
             vec = vec_req.embeddings[0].values
             
-            # Request more items to allow for filtering
+            # Kérünk több találatot, hogy legyen miből szűrni a nyelvet
             db_res = self.db.collection.query(
                 query_embeddings=[vec], 
                 n_results=15, 
@@ -74,11 +74,12 @@ class BooksyProactiveAgent:
                         break
                         
                     url = p.get('url', '').lower()
-                    # Szigorú nyelvi URL szűrés:
+                    
+                    # --- NYELVI SZŰRÉS (ALAPÉRTELMEZETT ROMÁN) ---
                     if ui_lang == 'ro':
-                        if '/ro/' not in url: continue
-                    else:
-                        if '/ro/' in url: continue
+                        if '/hu/' in url: continue # Román oldalon ne legyen /hu/ könyv
+                    else: # ui_lang == 'hu'
+                        if '/hu/' not in url: continue # Magyar oldalon KÖTELEZŐ a /hu/ könyv
 
                     if 'image_url' in p and 'image' not in p: p['image'] = p['image_url']
                     clean_title = p.get('title', '').strip().lower()
@@ -92,7 +93,7 @@ class BooksyProactiveAgent:
             log_event(f"⚠️ Vektor Keresés Hiba: {e}")
             return []
 
-    def _generate_response(self, user_msg: str, intent_data: dict, products: list, is_proactive: bool = False, trigger_context: str = "", ui_lang: str = "hu", user_mode: str = "felfedezo") -> str:
+    def _generate_response(self, user_msg: str, intent_data: dict, products: list, is_proactive: bool = False, trigger_context: str = "", ui_lang: str = "ro", user_mode: str = "felfedezo") -> str:
         policy_text = self._get_policies()
         context_text = "Nem találtam megfelelő könyvet a raktárban."
         if products:
@@ -106,7 +107,7 @@ class BooksyProactiveAgent:
             persona_style = "Ești un anticar expert, cultivat, pasionat de cărți și foarte amabil."
 
         if user_mode == "vadasz":
-            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra, a raktárkészletre și a gyors döntésre!"
+            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra, a raktárkészletre și a rapiditate!"
         else:
             mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust, mesélj a cărților hangulatáról, légy inspiráló!"
 
@@ -126,7 +127,7 @@ class BooksyProactiveAgent:
 
         try:
             if is_proactive:
-                # Sebesség optimalizálás: GPT-4o-mini a proaktív üzenetekhez
+                # Sebesség optimalizálás: GPT-4o-mini a proaktív üzenetekhez (1-2s válaszidő)
                 system_prompt += (
                     f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. "
                     f"Légy nagyon scurt (max 3-4 mondat), természetes, udvarias!"
@@ -135,14 +136,14 @@ class BooksyProactiveAgent:
                     model=OPENAI_MODEL,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": "Írd meg a megszólítást (Scrie mesajul)."}
+                        {"role": "user", "content": "Scrie mesajul de întâmpinare / Írd meg a megszólítást."}
                     ],
                     max_tokens=250,
                     temperature=0.7
                 )
                 return res.choices[0].message.content.strip()
             else:
-                # Normál chat: Claude
+                # Normál, mély beszélgetés: Claude 3.5 Sonnet
                 res = claude_client.messages.create(
                     model=CLAUDE_MODEL, 
                     max_tokens=1000, 
@@ -155,7 +156,7 @@ class BooksyProactiveAgent:
             log_event(f"⚠️ Válaszgenerálási Hiba: {e}")
             return "Eroare tehnică. Te rog încearcă mai târziu." if ui_lang == "ro" else "Sajnos technikai hiba történt. Kérlek, próbáld újra később!"
 
-    def process_chat(self, msg: str, ui_lang: str = "hu", user_mode: str = "felfedezo") -> dict:
+    def process_chat(self, msg: str, ui_lang: str = "ro", user_mode: str = "felfedezo") -> dict:
         intent_data = self._intent_routing(msg)
         final_products = []
         if intent_data['intent'] == 'search':
@@ -173,14 +174,14 @@ class BooksyProactiveAgent:
     def process_proactive_trigger(self, trigger_type: str, session_data: dict) -> dict:
         trigger_context = ""
         search_query = ""
-        ui_lang = session_data.get("ui_lang", "hu")
+        ui_lang = session_data.get("ui_lang", "ro")
         user_mode = session_data.get("user_mode", "felfedezo")
         book_title = session_data.get("last_book_title", "")
 
-        # Nyelvi kontextus beállítása a triggerhez
+        # Nyelvi kontextus beállítása a triggerhez (hogy a modell biztosan értse, milyen nyelven kell reagálnia)
         if ui_lang == "ro":
             if trigger_type == "cart_abandonment":
-                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă. Ultima carte: '{book_title}'."
+                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă (poate adăuga mai multe cărți). Ultima carte: '{book_title}'."
                 search_query = book_title or "clasic"
             elif trigger_type == "product_exit_intent":
                 trigger_context = f"Clientul părăsește pagina produsului '{book_title}'. Atrage-i atenția politicos că exemplarele noastre anticare sunt unice."
@@ -194,9 +195,9 @@ class BooksyProactiveAgent:
             elif trigger_type == "checkout_hesitation":
                  trigger_context = "Clientul ezită la checkout. Amintește de plata ramburs (doar în RO)."
                  search_query = ""
-        else:
+        else: # hu
             if trigger_type == "cart_abandonment":
-                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix. Utolsó könyv: '{book_title}'."
+                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix (több könyvvel megéri). Utolsó könyv: '{book_title}'."
                 search_query = book_title or "klasszikus"
             elif trigger_type == "product_exit_intent":
                 trigger_context = f"A látogató kilépne a '{book_title}' oldaláról. Hívd fel a figyelmét az egyedi példányokra."
@@ -208,7 +209,7 @@ class BooksyProactiveAgent:
                 search_query = session_data.get("failed_search_term", "")
                 trigger_context = f"A kereső nem adott találatot erre: '{search_query}'. Segíts neki hasonló kötetekkel."
             elif trigger_type == "checkout_hesitation":
-                 trigger_context = "A látogató a pénztárnál elakadt. Segíts neki finoman, emlékeztetve a kényelmes utánvétes fizetési lehetőségre."
+                 trigger_context = "A látogató a pénztárnál elakadt. Emlékeztesd az utánvétes fizetési lehetőségre."
                  search_query = ""
 
 

@@ -18,8 +18,7 @@ agent = BooksyProactiveAgent(db_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Jelenleg nincsenek háttérfolyamatok (cron jobok), 
-    # mert az AutoUpdater és Analytics modulok nincsenek bekötve.
+    # Nincsenek háttérfolyamatok, mert az AutoUpdater és Analytics modulok nincsenek bekötve.
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -27,8 +26,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], all
 
 class ChatRequest(BaseModel): 
     message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
-    device_type: Optional[str] = "Desktop"; ui_lang: Optional[str] = "hu"
-    chat_lang: Optional[str] = "hu"; target_catalog: Optional[str] = "mixed"
+    device_type: Optional[str] = "Desktop"; ui_lang: Optional[str] = "ro"
+    chat_lang: Optional[str] = "ro"; target_catalog: Optional[str] = "mixed"
     user_mode: Optional[str] = "felfedezo"
 
 class ProactiveRequest(BaseModel):
@@ -37,14 +36,14 @@ class ProactiveRequest(BaseModel):
     context_url: Optional[str] = ""
     failed_search_term: Optional[str] = ""
     last_book_title: Optional[str] = ""
-    ui_lang: Optional[str] = "hu"
+    ui_lang: Optional[str] = "ro"
     device_type: Optional[str] = "Desktop"
     user_mode: Optional[str] = "felfedezo"
 
-class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
+class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
 
 @app.get("/")
-def home(): return {"status": "V257 Online (Fast Proactive Agent)", "project": "Booksy"}
+def home(): return {"status": "V258 Online (Proactive Expert Agent - URL Language Filter)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
