@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 
-from database import DBHandler, AnalyticsDB, clean_pii, get_geo_from_ip
+from database import DBHandler, AnalyticsDB, clean_pii, get_geo_from_ip, update_store_policies
 from agent import BooksyProactiveAgent
 
 db_handler = DBHandler()
@@ -18,8 +18,8 @@ agent = BooksyProactiveAgent(db_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Jelenleg nincsenek háttérfolyamatok (cron jobok), 
-    # mert az AutoUpdater és Analytics modulok nincsenek bekötve.
+    # Szerver indulásakor betöltjük a legfrissebb szabályzatokat a memóriába (RAG)
+    update_store_policies()
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -44,7 +44,7 @@ class ProactiveRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V258 Online (Proactive Expert Agent - URL Filter)", "project": "Booksy"}
+def home(): return {"status": "V259 Online (Proactive Agent - Claude Fixed, Policy RAG)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 
