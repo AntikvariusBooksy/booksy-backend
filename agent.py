@@ -19,7 +19,7 @@ gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# API AZONOSÍTÓK
+# API AZONOSÍTÓK - Claude 5 frissítés 2026!
 CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -213,29 +213,31 @@ class BooksyAnalyticsReporter:
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
+            # A Bookfest 2026 és a piac trendjeinek beépítése a kontextusba
             market_context = (
-                "A 2026-os romániai és erdélyi (főleg Marosvásárhely környéki) könyvpiaci trendek (Bookfest 2026 adatai alapján): "
+                "A 2026-os romániai és erdélyi könyvpiaci trendek (Bookfest 2026 adatai alapján): "
                 "Hatalmas az érdeklődés a skandináv és nemzetközi thrillerek iránt (pl. Anders & Anette de la Motte, Ragnar Jónasson). "
-                "A pszichológiai thrillerek és az influencer-kultúrát kritizáló könyvek (pl. Tiffany Crum, Freida McFadden) vezetik az eladásokat. "
+                "A pszichológiai thrillerek és az influencer-kultúrát kritizáló könyvek (pl. Tiffany Crum, Freida McFadden - Housemaid) vezetik az eladásokat. "
                 "Matt Haig és a 'feel-good' regények szintén a topon vannak. Román szerzők közül Theodor Paleologu és a non-fiction (pl. Mafia istória) népszerű. "
-                "Gyerekkönyveknél a Harry Potter és a Roald Dahl kötetek örökzöldek. Az erdélyi magyar nyelvű könyvpiacon erősödik a kortárs magyar irodalom és a történelmi regények iránti kereslet."
+                "Gyerekkönyveknél a Harry Potter és a Roald Dahl kötetek örökzöldek."
             )
 
             system_prompt = (
                 f"Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál. "
                 f"Az alábbi PIACI TRENDEK ismeretében kell dolgoznod: {market_context}\n\n"
                 "FELADAT: Készíts egy MÉLYREHATÓ, vezetői HTML napi jelentést az előző napi chat logok alapján.\n"
-                "KÖTELEZŐ elvárás: Fehér háttér, sötétkék és fekete betűk, letisztult modern corporate dizájn.\n"
-                "KÖTELEZŐ az alábbi 5 pont kifejtése:\n"
-                "1. Átfogó Összefoglaló (Napi forgalom értékelése).\n"
-                "2. Keresési Trendek (Milyen témákat/szerzőket kerestek a legtöbbször?).\n"
-                "3. 'Nincs találat' (Zero-Match) Elemzés: Sorold fel a logokból a hiánycikkeket (miket kerestek, ami nem volt), és értékeld a kiesést.\n"
-                "4. UX és Súrlódási Elemzés: Értékeld a logokban szereplő 'cart_abandonment' és 'checkout_hesitation' trigger eseményeket.\n"
-                "5. Beszerzési Javaslatok: Vesd össze a hiánycikkeket a 2026-os piaci trendekkel, és tegyél konkrét javaslatot beszerzésre!\n\n"
-                "Szigorú formai előírás:\n"
-                "A válaszod KIZÁRÓLAG tiszta HTML kód legyen, amely a <html> taggel kezdődik és a </html> taggel végződik. "
-                "TILOS markdown backtickeket (```html) vagy bármilyen más bevezető szöveget írni a kód köré. "
-                "Garantáld, hogy a HTML kód teljes és nem vágod le a végét."
+                "Szigorúan KÖTELEZŐ az alábbi HTML struktúrát használni (fehér háttér, kék/fekete betűk, letisztult modern corporate dizájn, flexbox kártyák a KPI-oknak).\n\n"
+                "A jelentés KÖTELEZŐ elemei (ne csak számokat írj, hanem szöveges értékelést is minden ponthoz!):\n"
+                "1. Átfogó Összefoglaló: KPI kártyák (Összes interakció, RO/HU arány, Készülékek). Ezt kövesse egy rövid szöveges értékelés a napi forgalom minőségéről.\n"
+                "2. Keresési Trendek és Hőtérkép: Milyen témákat/szerzőket kerestek a legtöbbször? Melyik piacon (RO vagy HU)?\n"
+                "3. 'Nincs találat' (Zero-Match) Elemzés: LISTÁZD KI, hogy mi volt a keresőszó, amikor az AI nem tudott könyvet ajánlani! Értékeld, hogy ezek mekkora bevételkiesést jelentenek.\n"
+                "4. UX és Súrlódási (Friction) Elemzés: Mennyi volt a kosárelhagyás (cart_abandonment) vagy a pénztári hezitálás (checkout_hesitation) trigger? Sikerült a botnak megmentenie ezeket?\n"
+                "5. Stratégiai és Beszerzési Javaslatok: Vesd össze a felhasználói kereséseket a 2026-os piaci trendekkel, és tegyél KONKRÉT javaslatokat, hogy mit kell beszerezni a raktárba, és min kell javítani a weboldalon!\n\n"
+                "FORMAI KÖVETELMÉNYEK:\n"
+                "- Tiszta, 100% érvényes HTML kód.\n"
+                "- Kötelezően a <html> tag-el kezdődjön és a </html> tag-el végződjön.\n"
+                "- Használj professzionális CSS-t a <style> tagben: tiszta fehér háttér, sötétkék fejlécek, modern szürke szövegek, árnyékolt dobozok a számoknak.\n"
+                "- A hangvétel legyen határozott, vezetői (C-level) és lényegretörő."
             )
             
             res = claude_client.messages.create(
@@ -259,6 +261,9 @@ class BooksyAnalyticsReporter:
             else:
                 # Ha véletlenül mégsem rakott html taget, legalább a backtickeket irtsuk ki
                 html_content = html_content.replace("```html", "").replace("```", "").strip()
+                # Ha még így sincs benne HTML tag, rakjuk körbe
+                if not html_content.startswith("<"):
+                    html_content = f"<html><body>{html_content}</body></html>"
             
             self.db.save_report("daily_analytics", yesterday, html_content)
             
