@@ -20,7 +20,7 @@ gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# HIVATALOS 2026-OS CLAUDE 5 API AZONOSÍTÓK
+# CLAUDE 5 API AZONOSÍTÓK
 CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -153,7 +153,7 @@ class BooksyProactiveAgent:
                     )
                     final_text = ""
                     for block in res.content:
-                        if getattr(block, 'type', '') == 'text':
+                        if block.type == 'text':
                             final_text += block.text
                     return final_text.strip()
                 except Exception as e:
@@ -178,8 +178,6 @@ class BooksyProactiveAgent:
     def process_proactive_trigger(self, trigger_type: str, session_data: dict) -> dict:
         trigger_context = ""; search_query = ""
         ui_lang = session_data.get("ui_lang", "ro")
-        book_title = session_data.get("last_book_title", "")
-        # Trigger logika ...
         reply_text = self._generate_response("", {"intent": "proactive"}, [], is_proactive=True, trigger_context=trigger_context, ui_lang=ui_lang)
         return {"reply": reply_text, "products": [], "trigger_handled": True}
 
@@ -191,14 +189,22 @@ class BooksyAnalyticsReporter:
         try:
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
             logs = self.db.get_logs_for_date(yesterday)
-            if not logs: return
+            if not logs: 
+                log_event("Nincs log tegnapról, kihagyva.")
+                return
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
+            
             system_prompt = (
                 "Te egy vezetői adatelemző vagy az Antikvarius.ro-nál. Készíts részletes, strukturált, fehér hátterű HTML jelentést a logok alapján. "
-                "Ne használj temperature paramétert a hívásban. Használj listákat, táblázatokat, legyen üzleti szemléletű."
+                "1. Átfogó összefoglaló (interakciók száma, RO/HU arány, eszközök).\n"
+                "2. Legkeresettebb témák és trendek.\n"
+                "3. 'Nincs találat' elemzés (UX hibák).\n"
+                "4. Konkrét marketing/beszerzési javaslatok.\n"
+                "Formázás: HTML, fehér háttér, fekete szöveg, professzionális, táblázatokkal, listákkal."
             )
             
+            # Hiba javítva: Nincs 'temperature' paraméter, a Claude 5 nem támogatja
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=3500,
@@ -206,10 +212,25 @@ class BooksyAnalyticsReporter:
                 messages=[{"role": "user", "content": log_summary}]
             )
             
-            html_content = "".join([b.text for b in res.content if getattr(b, 'type', '') == 'text'])
+            html_content = ""
+            for block in res.content:
+                if block.type == 'text':
+                    html_content += block.text
+            
             self.db.save_report("daily_analytics", yesterday, html_content)
             
-            # SMTP küldés...
-            log_event("✅ Riport kész.")
+            # --- SMTP KÜLDÉS ---
+            msg = MIMEMultipart()
+            msg['Subject'] = f"📊 Booksy Napi Analitika - {yesterday}"
+            msg['From'] = os.getenv("SMTP_SENDER")
+            msg['To'] = ", ".join(ADMIN_EMAILS)
+            msg.attach(MIMEText(html_content, 'html'))
+            
+            with smtplib.SMTP(os.getenv("SMTP_SERVER"), int(os.getenv("SMTP_PORT", 587))) as server:
+                server.starttls()
+                server.login(os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD"))
+                server.send_message(msg)
+            
+            log_event("✅ Riport kész és e-mailben elküldve.")
         except Exception as e:
             log_event(f"❌ Riport Hiba: {e}")
