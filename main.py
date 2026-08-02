@@ -27,8 +27,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_headers=["*"], all
 
 class ChatRequest(BaseModel): 
     message: str; context_url: Optional[str] = ""; session_id: Optional[str] = ""
-    device_type: Optional[str] = "Desktop"; ui_lang: Optional[str] = "ro"
-    chat_lang: Optional[str] = "ro"; target_catalog: Optional[str] = "mixed"
+    device_type: Optional[str] = "Desktop"; ui_lang: Optional[str] = "hu"
+    chat_lang: Optional[str] = "hu"; target_catalog: Optional[str] = "mixed"
     user_mode: Optional[str] = "felfedezo"
 
 class ProactiveRequest(BaseModel):
@@ -37,14 +37,14 @@ class ProactiveRequest(BaseModel):
     context_url: Optional[str] = ""
     failed_search_term: Optional[str] = ""
     last_book_title: Optional[str] = ""
-    ui_lang: Optional[str] = "ro"
+    ui_lang: Optional[str] = "hu"
     device_type: Optional[str] = "Desktop"
     user_mode: Optional[str] = "felfedezo"
 
-class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "ro"
+class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V258 Online (Proactive Expert Agent - URL Language Filter)", "project": "Booksy"}
+def home(): return {"status": "V258 Online (Proactive Expert Agent - URL Filter)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 

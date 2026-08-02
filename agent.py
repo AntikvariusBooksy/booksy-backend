@@ -9,10 +9,12 @@ from database import DBHandler, log_event, STORE_POLICIES_FILE
 
 load_dotenv()
 
+# Inicializáljuk a klienseket
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# A lassú, de okos modell a beszélgetéshez, és a villámgyors a felugró ablakokhoz
 CLAUDE_MODEL = "claude-3-5-sonnet-latest" 
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -34,6 +36,9 @@ class BooksyProactiveAgent:
             "Minta JSON: {\"intent\": \"search\", \"expanded_query\": \"eredeti szó, szinonima1, szinonima2\"}"
         )
         try:
+            if not msg:
+                return {"intent": "search", "expanded_query": ""}
+                
             response = openai_client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
@@ -49,6 +54,9 @@ class BooksyProactiveAgent:
             return {"intent": "search", "expanded_query": msg} 
 
     def _vector_search(self, query: str, limit: int = 4, ui_lang: str = "ro") -> list:
+        if not query:
+            return []
+            
         try:
             vec_req = gemini_client.models.embed_content(
                 model="gemini-embedding-001", 
@@ -57,10 +65,10 @@ class BooksyProactiveAgent:
             )
             vec = vec_req.embeddings[0].values
             
-            # Kérünk több találatot (15 db), hogy a szűrés után is maradjon könyv
+            # Kérünk rengeteg találatot (20 db), hogy a szigorú nyelvi szűrés után is maradjon könyv
             db_res = self.db.collection.query(
                 query_embeddings=[vec], 
-                n_results=15, 
+                n_results=20, 
                 where={"$and": [{"stock": "instock"}, {"type": "book"}]}
             )
             
@@ -75,15 +83,21 @@ class BooksyProactiveAgent:
                         
                     url = p.get('url', '').lower()
                     
-                    # --- A TE PONOTÍTOTT NYELVI URL SZŰRŐD ---
+                    # --- GOLYÓÁLLÓ NYELVI ÉS KATEGÓRIA URL SZŰRŐ ---
                     if ui_lang == 'hu':
-                        # Ha a látogató magyarul böngész, az URL-ben KÖTELEZŐ lennie a /hu/ résznek
-                        if '/hu/' not in url: 
+                        # Ha a látogató a magyar felületen van, TILOS román kategóriát ajánlani!
+                        if 'carti-in-limba-romana' in url: 
                             continue 
-                    else: # ui_lang == 'ro' (alapértelmezett)
-                        # Ha a látogató románul böngész, az URL-ben TILOS lennie a /hu/ résznek
-                        if '/hu/' in url: 
+                        # Szigorítva: Csak akkor fogadja el, ha benne van a magyar slug vagy a /hu/ tag
+                        if 'magyar-nyelvu-konyvek' not in url and '/hu/' not in url:
+                            continue
+                    else: 
+                        # Ha a látogató a román felületen van, TILOS magyar könyvet / kategóriát ajánlani!
+                        if 'magyar-nyelvu-konyvek' in url or '/hu/' in url: 
                             continue 
+                        # Szigorítva: Csak a román kategóriát fogadja el
+                        if 'carti-in-limba-romana' not in url:
+                            continue
 
                     if 'image_url' in p and 'image' not in p: p['image'] = p['image_url']
                     clean_title = p.get('title', '').strip().lower()
@@ -137,7 +151,7 @@ class BooksyProactiveAgent:
                 # SEBESSÉG OPTIMALIZÁLÁS: A proaktív megkeresések a villámgyors GPT-4o-mini-n futnak (1-2 másodperc)
                 system_prompt += (
                     f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. "
-                    f"Légy nagyon rövid (max 3-4 mondat), természetes, udvarias! "
+                    f"Légy nagyon rövid (max 2-3 mondat), természetes, udvarias, de ne légy tolakodó! "
                     f"Írj KIZÁRÓLAG {lang_instruction}!"
                 )
                 res = openai_client.chat.completions.create(
@@ -186,17 +200,17 @@ class BooksyProactiveAgent:
         user_mode = session_data.get("user_mode", "felfedezo")
         book_title = session_data.get("last_book_title", "")
 
-        # Nyelvi kontextus a modellnek
+        # Nyelvi kontextus a modellnek (Itt kapja meg a pontos instrukciót a választott nyelven!)
         if ui_lang == "ro":
             if trigger_type == "cart_abandonment":
-                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă. Ultima carte: '{book_title}'."
+                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă. Ultima carte vizionată: '{book_title}'."
                 search_query = book_title or "clasic"
             elif trigger_type == "product_exit_intent":
-                trigger_context = f"Clientul părăsește pagina produsului '{book_title}'. Atrage-i atenția politicos că exemplarele noastre anticare sunt unice."
+                trigger_context = f"Clientul părăsește pagina produsului '{book_title}'. Atrage-i atenția politicos că exemplarele noastre anticare sunt unice și se vând repede."
                 search_query = book_title or "raritate"
             elif trigger_type == "general_exit_intent":
                 trigger_context = "Clientul părăsește prima pagină. Salută-l scurt și oferă-i ajutorul tău de anticar."
-                search_query = ""
+                search_query = "beletristică"
             elif trigger_type == "zero_match_search":
                 search_query = session_data.get("failed_search_term", "")
                 trigger_context = f"Căutarea a eșuat pentru: '{search_query}'. Oferă-i cărți similare din stoc."
@@ -205,25 +219,25 @@ class BooksyProactiveAgent:
                  search_query = ""
         else: # hu
             if trigger_type == "cart_abandonment":
-                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix. Utolsó könyv: '{book_title}'."
+                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix, így érdemes telepakolni a dobozt. Utolsó könyv: '{book_title}'."
                 search_query = book_title or "klasszikus"
             elif trigger_type == "product_exit_intent":
-                trigger_context = f"A látogató kilépne a '{book_title}' oldaláról. Hívd fel a figyelmét az egyedi példányokra."
+                trigger_context = f"A látogató kilépne a '{book_title}' oldaláról. Hívd fel a figyelmét az egyedi példányokra, és hogy gyorsan elkelnek."
                 search_query = book_title or "ritkaság"
             elif trigger_type == "general_exit_intent":
                 trigger_context = "A látogató kilép a főoldalról. Köszöntsd röviden, és ajánld a segítséged."
-                search_query = ""
+                search_query = "klasszikus"
             elif trigger_type == "zero_match_search":
                 search_query = session_data.get("failed_search_term", "")
                 trigger_context = f"A kereső nem adott találatot erre: '{search_query}'. Segíts neki hasonló kötetekkel."
             elif trigger_type == "checkout_hesitation":
-                 trigger_context = "A látogató a pénztárnál elakadt. Emlékeztesd az utánvétes fizetési lehetőségre."
+                 trigger_context = "A látogató a pénztárnál elakadt. Emlékeztesd az utánvétes fizetési lehetőségre Románián belül."
                  search_query = ""
 
         final_products = []
         if search_query:
-            intent_data = self._intent_routing(search_query) 
-            final_products = self._vector_search(intent_data.get('expanded_query', search_query), limit=3, ui_lang=ui_lang)
+            # Rögtön keresünk, kihagyva az intent_routing lassítását proaktív módban!
+            final_products = self._vector_search(search_query, limit=3, ui_lang=ui_lang)
             
         reply_text = self._generate_response(
             user_msg="", 
