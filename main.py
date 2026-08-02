@@ -44,7 +44,7 @@ class ProactiveRequest(BaseModel):
 class InitRequest(BaseModel): url: str; session_id: str; ui_lang: str = "hu"
 
 @app.get("/")
-def home(): return {"status": "V256 Online (Proactive Expert Agent)", "project": "Booksy"}
+def home(): return {"status": "V257 Online (Fast Proactive Agent)", "project": "Booksy"}
 
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request): 

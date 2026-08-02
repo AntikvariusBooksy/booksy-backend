@@ -57,7 +57,7 @@ class BooksyProactiveAgent:
             )
             vec = vec_req.embeddings[0].values
             
-            # Többet kérünk le (15 db), hogy legyen miből szűrni a nyelv alapján
+            # Request more items to allow for filtering
             db_res = self.db.collection.query(
                 query_embeddings=[vec], 
                 n_results=15, 
@@ -73,12 +73,12 @@ class BooksyProactiveAgent:
                     if len(final_products) >= limit:
                         break
                         
-                    # 1. URL NYELVI SZŰRŐ (RO vs HU)
                     url = p.get('url', '').lower()
+                    # Szigorú nyelvi URL szűrés:
                     if ui_lang == 'ro':
-                        if '/ro/' not in url: continue # Román oldalon csak román URL
+                        if '/ro/' not in url: continue
                     else:
-                        if '/ro/' in url: continue # Magyar oldalon ne legyen román URL
+                        if '/ro/' in url: continue
 
                     if 'image_url' in p and 'image' not in p: p['image'] = p['image_url']
                     clean_title = p.get('title', '').strip().lower()
@@ -102,48 +102,47 @@ class BooksyProactiveAgent:
             lang_instruction = "MAGYARUL (Hungarian)"
             persona_style = "Művelt, tapasztalt, rendkívül segítőkész antikvárius szakértő vagy."
         else:
-            lang_instruction = "ROMÁNUL (Romanian - în limba română)"
+            lang_instruction = "ROMÂNĂ (Romanian - în limba română)"
             persona_style = "Ești un anticar expert, cultivat, pasionat de cărți și foarte amabil."
 
         if user_mode == "vadasz":
-            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra, a raktárkészletre és a gyors döntésre!"
+            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra, a raktárkészletre și a gyors döntésre!"
         else:
-            mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust, mesélj a könyvek hangulatáról, légy inspiráló!"
+            mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust, mesélj a cărților hangulatáról, légy inspiráló!"
 
         system_prompt = (
             f"Te Booksy vagy, az antikvarius.ro prémium antikváriumának szaktanácsadója. {persona_style}\n"
             f"Vásárlói profil: {mode_instruction}\n\n"
             f"Céges tudásbázisod (ÁSZF, szállítás, kapcsolat):\n<company_policies>\n{policy_text}\n</company_policies>\n\n"
             f"SÉRTHETETLEN ÜZLETI ÉS ETIKAI SZABÁLYOK:\n"
-            f"1. A szállítási díj zónánként FIX! SOHA NICS INGYENES SZÁLLÍTÁS! Ne ígérj ingyen szállítást!\n"
+            f"1. A szállítási díj zónánként FIX! SOHA NICS INGYENES SZÁLLÍTÁS!\n"
             f"2. Utánvétes fizetés KIZÁRÓLAG Románián belül lehetséges!\n"
-            f"3. KIZÁRÓLAG a raktári találatokban szereplő létező könyvekre hivatkozhatsz!\n"
+            f"3. KIZÁRÓLAG a raktári találatokban szereplő létező cărților hivatkozhatsz!\n"
             f"4. A VÁLASZT KÖTELEZŐEN ÉS KIZÁRÓLAG {lang_instruction} FOGALMAZD MEG!\n"
-            f"5. Formázás: Tiszta, elegáns szöveg. ZÉRÓ MARKDOWN kódblokk, zéró HTML címke!\n"
+            f"5. Formázás: ZÉRÓ MARKDOWN kódblokk, zéró HTML címke!\n"
         )
 
         user_content = f"Felhasználó üzenete: '{user_msg}'\n\nRaktári találatok:\n{context_text}"
 
         try:
             if is_proactive:
-                # SEBESSÉG OPTIMALIZÁLÁS: A proaktív trigger (exit intent) esetén 
-                # a gpt-4o-mini-t használjuk, hogy a válaszidő 1-2 másodperc legyen!
+                # Sebesség optimalizálás: GPT-4o-mini a proaktív üzenetekhez
                 system_prompt += (
                     f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. "
-                    f"Légy nagyon rövid (max 3-4 mondat), természetes, udvarias!"
+                    f"Légy nagyon scurt (max 3-4 mondat), természetes, udvarias!"
                 )
                 res = openai_client.chat.completions.create(
                     model=OPENAI_MODEL,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": "Fogalmazd meg a megszólítást a megadott kontextus alapján."}
+                        {"role": "user", "content": "Írd meg a megszólítást (Scrie mesajul)."}
                     ],
                     max_tokens=250,
                     temperature=0.7
                 )
                 return res.choices[0].message.content.strip()
             else:
-                # A normál, mély beszélgetésekhez marad a Claude
+                # Normál chat: Claude
                 res = claude_client.messages.create(
                     model=CLAUDE_MODEL, 
                     max_tokens=1000, 
@@ -178,28 +177,40 @@ class BooksyProactiveAgent:
         user_mode = session_data.get("user_mode", "felfedezo")
         book_title = session_data.get("last_book_title", "")
 
-        if trigger_type == "cart_abandonment":
-            trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd arra, că a szállítási díj fix. Utolsó megtekintett címe: '{book_title}'."
-            search_query = book_title or "klasszikus"
-            
-        elif trigger_type == "product_exit_intent":
-            trigger_context = f"A látogató épp kilépne a(z) '{book_title}' termékoldaláról. Szólítsd meg kedvesen: hívd fel a figyelmét az egyedi példányokra, és ajánlj hasonlókat."
-            search_query = book_title or "ritkaság"
-            
-        elif trigger_type == "general_exit_intent":
-            trigger_context = "A látogató a főoldalon vagy egy kategória oldalon van, és épp be akarja zárni a böngészőt anélkül, hogy terméket nézett volna. Köszöntsd röviden, és ajánld fel a segítséged könyvkeresésben."
-            search_query = "bestseller"
-        
-        elif trigger_type == "zero_match_search":
-            search_query = session_data.get("failed_search_term", "")
-            trigger_context = f"A kereső nem adott találatot erre: '{search_query}'. Segíts neki a raktárból kiválasztott hasonló stílusú kötetekkel."
-        
-        elif trigger_type == "checkout_hesitation":
-            trigger_context = "A látogató a pénztárnál elakadt. Segíts neki finoman, emlékeztetve a kényelmes utánvétes fizetési lehetőségre (csak RO)."
-            search_query = ""
-            
+        # Nyelvi kontextus beállítása a triggerhez
+        if ui_lang == "ro":
+            if trigger_type == "cart_abandonment":
+                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă. Ultima carte: '{book_title}'."
+                search_query = book_title or "clasic"
+            elif trigger_type == "product_exit_intent":
+                trigger_context = f"Clientul părăsește pagina produsului '{book_title}'. Atrage-i atenția politicos că exemplarele noastre anticare sunt unice."
+                search_query = book_title or "raritate"
+            elif trigger_type == "general_exit_intent":
+                trigger_context = "Clientul părăsește prima pagină. Salută-l scurt și oferă-i ajutorul tău de anticar."
+                search_query = ""
+            elif trigger_type == "zero_match_search":
+                search_query = session_data.get("failed_search_term", "")
+                trigger_context = f"Căutarea a eșuat pentru: '{search_query}'. Oferă-i cărți similare din stoc."
+            elif trigger_type == "checkout_hesitation":
+                 trigger_context = "Clientul ezită la checkout. Amintește de plata ramburs (doar în RO)."
+                 search_query = ""
         else:
-            return {"reply": "", "products": []}
+            if trigger_type == "cart_abandonment":
+                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix. Utolsó könyv: '{book_title}'."
+                search_query = book_title or "klasszikus"
+            elif trigger_type == "product_exit_intent":
+                trigger_context = f"A látogató kilépne a '{book_title}' oldaláról. Hívd fel a figyelmét az egyedi példányokra."
+                search_query = book_title or "ritkaság"
+            elif trigger_type == "general_exit_intent":
+                trigger_context = "A látogató kilép a főoldalról. Köszöntsd röviden, és ajánld a segítséged."
+                search_query = ""
+            elif trigger_type == "zero_match_search":
+                search_query = session_data.get("failed_search_term", "")
+                trigger_context = f"A kereső nem adott találatot erre: '{search_query}'. Segíts neki hasonló kötetekkel."
+            elif trigger_type == "checkout_hesitation":
+                 trigger_context = "A látogató a pénztárnál elakadt. Segíts neki finoman, emlékeztetve a kényelmes utánvétes fizetési lehetőségre."
+                 search_query = ""
+
 
         final_products = []
         if search_query:
