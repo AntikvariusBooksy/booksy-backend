@@ -6,6 +6,7 @@ import smtplib
 import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate, make_msgid
 from datetime import datetime, timedelta
 import anthropic
 from openai import OpenAI
@@ -141,7 +142,7 @@ class BooksyProactiveAgent:
 
         try:
             if is_proactive:
-                system_prompt += f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. Légy nagyon rövid (max 2-3 mondat)!"
+                system_prompt += f"\nFIGYELEM: Ez Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. Légy nagyon rövid (max 2-3 mondat)!"
                 res = openai_client.chat.completions.create(
                     model=OPENAI_MODEL, 
                     messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": "Scrie mesajul."}], 
@@ -215,62 +216,63 @@ class BooksyAnalyticsReporter:
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
             market_context = (
-                "2026-os erdélyi és romániai (főleg Marosvásárhely és környéke) könyvpiaci trendek: "
-                "A Bookfest 2026 alapján kiemelkedő a kereslet a pszichológiai thrillerek (pl. Freida McFadden, Anders & Anette de la Motte), "
-                "valamint a skandináv krimik iránt. Matt Haig 'feel-good' regényei stabilan vezetik az eladásokat. "
-                "A helyi, marosvásárhelyi közönség kifejezetten keresi a minőségi magyar nyelvű kortárs irodalmat és a ritkaságokat, "
-                "valamint a helytörténeti köteteket. Gyerekkönyveknél a Harry Potter sorozat kötetei hiánycikkek."
+                "A 2026-os romániai és erdélyi könyvpiaci trendek (Bookfest 2026 adatai alapján): "
+                "Hatalmas az érdeklődés a skandináv és nemzetközi thrillerek iránt (pl. Anders & Anette de la Motte, Ragnar Jónasson). "
+                "A pszichológiai thrillerek és az influencer-kultúrát kritizáló könyvek (pl. Tiffany Crum, Freida McFadden) vezetik az eladásokat. "
+                "Matt Haig és a 'feel-good' regények szintén a topon vannak. Román szerzők közül a kortárs non-fiction és a pszichológia megy. "
+                "Gyerekkönyveknél a Harry Potter kötetek stabil hiánycikkek."
             )
 
-            system_prompt = f"""Te az Antikvarius.ro (Marosvásárhely) Vezetői Adatelemzője és E-kereskedelmi Stratégája vagy.
-PIACI KONTEXTUS 2026: {market_context}
-
-FELADAT: Elemezd a kapott chatbot logokat, és készíts egy vizuálisan lenyűgöző, vezetői HTML jelentést.
-
-KÖTELEZŐ TARTALOM ÉS STRUKTÚRA:
-1. Átfogó Összefoglaló: KPI-ok (Interakciók száma, Nyelvi megoszlás HU/RO, Eszközök). Szöveges értékelés a forgalom minőségéről.
-2. 'Nincs találat' (Zero-Match) Elemzés: Pontosan miket kerestek a userek, amit az AI nem talált a raktárban? Listázd a konkrét keresési kifejezéseket! Értékeld a kiesett bevételt.
-3. UX és Súrlódási Elemzés: Hányszor kellett a botnak beavatkoznia (cart_abandonment, checkout_hesitation)? Milyen UX hibákra utal ez a weboldalon (pl. szállítási díj nem tiszta)?
-4. Beszerzési és Marketing Javaslatok: A "nincs találat" szavak és a 2026-os marosvásárhelyi trendek alapján MILYEN KÖNYVEKET kell sürgősen beszerezni a raktárba?
-
-FORMAI KÖVETELMÉNYEK:
-- A válaszod KIZÁRÓLAG egy érvényes, tiszta HTML kód lehet, a <!DOCTYPE html><html>...</html> tagekkel bezárólag.
-- NE írj semmilyen bevezető vagy lezáró szöveget a HTML-en kívül!
-- Használj beágyazott CSS-t a <style> tagben. A dizájn legyen tiszta: fehér háttér (#ffffff), sötétkék fejlécek (#0b57d0), világosszürke árnyékolt dobozok a KPI-oknak, és jól olvasható fekete szöveg (Arial/Helvetica).
-"""
-            
-            res = claude_client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=4000,
-                system=system_prompt,
-                messages=[
-                    {"role": "user", "content": f"Itt vannak a tegnapi logok az elemzéshez:\n{log_summary}"}
-                ]
+            system_prompt = (
+                f"Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál.\n"
+                f"TUDÁS: {market_context}\n\n"
+                "FELADAT: Készíts MÉLYREHATÓ, vezetői HTML napi jelentést a chat logok alapján!\n"
+                "KÖTELEZŐ TARTALOM (Minden ponthoz írj SZÖVEGES elemzést!):\n"
+                "1. Átfogó Összefoglaló: Interakciók száma, RO/HU arány. Milyen volt a nap?\n"
+                "2. Keresési Trendek: Milyen témákat/szerzőket kerestek a legtöbbször?\n"
+                "3. Nincs találat (Zero-Match) Elemzés: LISTÁZD KI A KONKRÉT KERESŐSZAVAKAT, amiket nem talált meg az AI! Értékeld a bevételkiesést.\n"
+                "4. UX Elemzés: Mik voltak a proaktív triggerek (kosárelhagyás, fizetési elakadás)?\n"
+                "5. Beszerzési Javaslatok: Vesd össze a felhasználói kereséseket a 2026-os piaci trendekkel, és tegyél KONKRÉT javaslatokat a beszerzésre!\n\n"
+                "SZIGORÚ HTML KÖVETELMÉNYEK:\n"
+                "- A válaszod KIZÁRÓLAG <html>...</html> kód lehet. SEMMI MÁS!\n"
+                "- TILOS a ```html vagy bármilyen markdown formázás használata a válasz elején vagy végén!\n"
+                "- A <head> részben legyen benne a <meta charset=\"UTF-8\"> tag.\n"
+                "- Használj profi CSS-t: FEHÉR (#ffffff) háttér, kék (#0b57d0) fejlécek, sötét szürke (#333) szöveg. Dobozok, táblázatok használata kötelező."
             )
             
-            html_content = ""
-            for block in res.content:
-                if getattr(block, 'type', '') == 'text':
-                    html_content += block.text
+            try:
+                res = claude_client.messages.create(
+                    model=CLAUDE_MODEL,
+                    max_tokens=4000,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": f"Logok:\n{log_summary}"}]
+                )
+                
+                raw_content = ""
+                for block in res.content:
+                    if getattr(block, 'type', '') == 'text':
+                        raw_content += block.text
+            except Exception as e:
+                log_event(f"⚠️ Claude hiba az analitikánál: {e}")
+                return
 
             # GOLYÓÁLLÓ HTML KINYERÉS ÉS TISZTÍTÁS (Bulletproof parser)
-            clean_html = html_content.strip()
+            clean_html = raw_content.strip()
             
-            # 1. Eltávolítjuk a markdown kódblokkokat, ha a modell mégis használta volna
-            if "```html" in clean_html:
-                clean_html = clean_html.split("```html")[1].split("```")[0].strip()
-            elif "```" in clean_html:
-                clean_html = clean_html.split("```")[1].split("```")[0].strip()
+            # Eltávolítjuk a markdown kódblokkokat, függetlenül attól, hogyan rakta be az AI
+            clean_html = re.sub(r"^```(html)?\s*", "", clean_html, flags=re.IGNORECASE|re.MULTILINE)
+            clean_html = re.sub(r"```\s*$", "", clean_html, flags=re.IGNORECASE|re.MULTILINE)
+            clean_html = clean_html.strip()
             
-            # 2. Ellenőrizzük, hogy van-e benne HTML struktúra. Ha nincs, becsomagoljuk.
-            if "<html" not in clean_html.lower() and "<body" not in clean_html.lower():
-                log_event("⚠️ A Claude nem rakott HTML tageket a válaszba, automatikus becsomagolás indul.")
+            # Biztosítjuk, hogy a legalapvetőbb HTML szerkezet meglegyen, ha a regex mégis csonkolt volna
+            if "<html" not in clean_html.lower():
+                log_event("⚠️ A Claude nem rakott <html> taget a válaszba, automatikus struktúra generálás.")
                 clean_html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <style>
-body {{ font-family: Arial, sans-serif; color: #333; line-height: 1.6; padding: 20px; background-color: #ffffff; }}
+body {{ font-family: Arial, sans-serif; color: #333333; line-height: 1.6; padding: 20px; background-color: #ffffff; }}
 h1, h2, h3 {{ color: #0b57d0; }}
 .card {{ background: #f8f9fa; border: 1px solid #e0e0e0; padding: 15px; border-radius: 8px; margin-bottom: 20px; }}
 ul {{ padding-left: 20px; }}
@@ -282,14 +284,15 @@ ul {{ padding-left: 20px; }}
 </body>
 </html>"""
 
-            # Ha teljesen üres maradt valami oknál fogva
-            if not clean_html:
-                raise ValueError("Az AI által generált HTML tartalom teljesen üres lett tisztítás után!")
+            # Extrém eset (pl. teljesen kiüresedett sztring)
+            if not clean_html or len(clean_html) < 50:
+                log_event("❌ A megtisztított HTML túl rövid vagy üres lett!")
+                return
 
             log_event(f"✅ Riport generálva. HTML hossza: {len(clean_html)} karakter.")
             self.db.save_report("daily_analytics", yesterday, clean_html)
             
-            # TÉNYLEGES E-MAIL KÜLDÉS
+            # TÉNYLEGES E-MAIL KÜLDÉS - GOLYÓÁLLÓ (BULLETPROOF) KONFIGURÁCIÓVAL
             smtp_server = os.getenv("SMTP_SERVER")
             smtp_sender = os.getenv("SMTP_SENDER")
             smtp_pass = os.getenv("SMTP_PASSWORD")
@@ -298,18 +301,30 @@ ul {{ padding-left: 20px; }}
                 log_event("❌ Hiba: Hiányzó SMTP beállítások, analitika e-mail nem lett elküldve.")
                 return
 
-            msg = MIMEMultipart()
-            msg['Subject'] = f"📊 Antikvarius.ro Vezetői AI Analitika - {yesterday}"
-            msg['From'] = smtp_sender
-            msg['To'] = ", ".join(ADMIN_EMAILS)
-            msg.attach(MIMEText(clean_html, 'html'))
-            
             try:
+                # Az 'alternative' típus jobban kezeli a spamszűrőket
+                msg = MIMEMultipart('alternative')
+                msg['Subject'] = f"📊 Antikvarius.ro Vezetői AI Analitika - {yesterday}"
+                msg['From'] = smtp_sender
+                msg['To'] = ", ".join(ADMIN_EMAILS)
+                
+                # Kötelező fejlécek a spamszűrők ellen (Message-ID és Date)
+                msg['Date'] = formatdate(localtime=True)
+                msg['Message-ID'] = make_msgid()
+                
+                # SZIGORÚ UTF-8 KÓDOLÁS KIKÉNYSZERÍTÉSE A LEVÉLTESTRE!
+                # Ez megakadályozza, hogy a magyar/román ékezetek miatt a Gmail azonnal eldobja a csomagot.
+                html_part = MIMEText(clean_html, 'html', 'utf-8')
+                msg.attach(html_part)
+                
                 port = int(os.getenv("SMTP_PORT", 587))
-                with smtplib.SMTP(smtp_server, port, timeout=15) as server:
+                with smtplib.SMTP(smtp_server, port, timeout=20) as server:
                     server.starttls()
                     server.login(smtp_sender, smtp_pass)
-                    server.send_message(msg)
+                    
+                    # SZIGORÚ BORÍTÉK CÍMZÉS (Envelope Sender/Recipients)
+                    # A sendmail() garantálja, hogy az SMTP szerver pontosan tudja, kiknek kell kiosztani a levelet.
+                    server.sendmail(smtp_sender, ADMIN_EMAILS, msg.as_string())
                 
                 log_event("✅ Napi AI Analitika sikeresen elküldve a vezetőségnek.")
             except Exception as smtp_err:
