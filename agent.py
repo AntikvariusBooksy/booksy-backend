@@ -16,8 +16,8 @@ gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# JAVÍTOTT 2026-OS CLAUDE MODELL! (A 3.5-öt kivezették, a Claude 5 az új sztenderd)
-CLAUDE_MODEL = "claude-5-sonnet-latest" 
+# HIVATALOS 2026-OS CLAUDE 5 API AZONOSÍTÓK! (Javítva)
+CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
 
 class BooksyProactiveAgent:
@@ -27,7 +27,7 @@ class BooksyProactiveAgent:
     def _intent_routing(self, msg: str) -> dict:
         system_prompt = (
             "Te egy e-kereskedelmi router vagy. Elemezd a bejövő üzenetet. Válaszolj KIZÁRÓLAG JSON formátumban!\n"
-            "Lehetséges 'intent' értékek: 'policy' (szállítás, fizetés, contact, árak, szabályzat), 'search' (konkrét könyv vagy téma keresése), 'general' (egyéb csevegés, üdvözlés).\n"
+            "Lehetséges 'intent' értékek: 'policy' (szállítás, fizetés, contact, tarife, árak, szabályzat, retur), 'search' (konkrét könyv vagy téma keresése), 'general' (egyéb csevegés, üdvözlés).\n"
             "Ha 'search', akkor generálj egy 'expanded_query' mezőt, ami 3-5 szemantikus kulcsszóval bővíti a keresést.\n"
             "Minta JSON: {\"intent\": \"search\", \"expanded_query\": \"eredeti szó, szinonima1, szinonima2\"}"
         )
@@ -80,15 +80,11 @@ class BooksyProactiveAgent:
                     
                     # --- GOLYÓÁLLÓ URL KATEGÓRIA SZŰRŐ (CSAK A MEGFELELŐ NYELVŰ KÖNYVEK JÖHETNEK) ---
                     if ui_lang == 'hu':
-                        # Magyar felület: Ha NINCS benne a magyar kategória, vagy benne van a román, kuka.
-                        if 'carti-in-limba-romana' in url: 
-                            continue 
-                        if 'magyar-nyelvu-konyvek' not in url and '/hu/' not in url:
+                        # Magyar felület: Ha a "magyar-nyelvu-konyvek" NINCS az URL-ben, akkor elvetjük!
+                        if 'magyar-nyelvu-konyvek' not in url:
                             continue
                     else: 
-                        # Román felület: Ha benne van a magyar kategória, kuka.
-                        if 'magyar-nyelvu-konyvek' in url or '/hu/' in url: 
-                            continue 
+                        # Román felület: Ha a "carti-in-limba-romana" NINCS az URL-ben, akkor elvetjük!
                         if 'carti-in-limba-romana' not in url:
                             continue
 
@@ -165,7 +161,7 @@ class BooksyProactiveAgent:
                 )
                 return res.choices[0].message.content.strip()
             else:
-                # NORMÁL CHAT - CLAUDE ELSŐDLEGES MOTOR (MOST MÁR CLAUDE 5 SONNET!)
+                # NORMÁL CHAT - CLAUDE ELSŐDLEGES MOTOR (CLAUDE 5)
                 try:
                     res = claude_client.messages.create(
                         model=CLAUDE_MODEL, 
@@ -200,7 +196,7 @@ class BooksyProactiveAgent:
         if intent_data['intent'] == 'search':
             final_products = self._vector_search(intent_data.get('expanded_query', msg), limit=4, ui_lang=ui_lang)
         elif intent_data['intent'] == 'policy':
-            # Beolvassuk a memóriából az éjszaka lekapart pontos szabályzatot
+            # Beolvassuk a memóriából az éjszaka/indításkor lekapart pontos szabályzatot
             policy_context = get_store_policies()
             
         reply_text = self._generate_response(
