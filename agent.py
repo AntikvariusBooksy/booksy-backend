@@ -169,7 +169,14 @@ class BooksyProactiveAgent:
                         system=system_prompt, 
                         messages=[{"role": "user", "content": user_content}]
                     )
-                    return res.content[0].text.strip()
+                    
+                    # Biztonságos szövegkinyerés: Kiszűrjük a "ThinkingBlock" (gondolkodás) elemeket!
+                    final_text = ""
+                    for block in res.content:
+                        if getattr(block, 'type', '') == 'text':
+                            final_text += block.text
+                            
+                    return final_text.strip()
                 except Exception as claude_err:
                     log_event(f"⚠️ Claude modell hiba, átkapcsolás GPT-4o-mini-re: {claude_err}")
                     # B-TERV: Ha a Claude elszáll, a GPT azonnal átveszi a munkát, így nincs fagyás!
