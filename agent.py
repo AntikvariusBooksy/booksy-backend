@@ -1,4 +1,6 @@
-import os, time, json
+import os
+import time
+import json
 import requests
 import smtplib
 import re
@@ -19,7 +21,7 @@ gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# API AZONOSÍTÓK - Claude 5 frissítés 2026!
+# API AZONOSÍTÓK - 2026 Claude frissítés
 CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -155,7 +157,6 @@ class BooksyProactiveAgent:
                         messages=[{"role": "user", "content": user_content}]
                     )
                     final_text = ""
-                    # Claude 5 ThinkingBlock kivédése: csak a szöveges blokkokat vesszük
                     for block in res.content:
                         if getattr(block, 'type', '') == 'text':
                             final_text += block.text
@@ -213,32 +214,30 @@ class BooksyAnalyticsReporter:
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
-            # A Bookfest 2026 és a piac trendjeinek beépítése a kontextusba
             market_context = (
-                "A 2026-os romániai és erdélyi könyvpiaci trendek (Bookfest 2026 adatai alapján): "
-                "Hatalmas az érdeklődés a skandináv és nemzetközi thrillerek iránt (pl. Anders & Anette de la Motte, Ragnar Jónasson). "
-                "A pszichológiai thrillerek és az influencer-kultúrát kritizáló könyvek (pl. Tiffany Crum, Freida McFadden - Housemaid) vezetik az eladásokat. "
-                "Matt Haig és a 'feel-good' regények szintén a topon vannak. Román szerzők közül Theodor Paleologu és a non-fiction (pl. Mafia istória) népszerű. "
-                "Gyerekkönyveknél a Harry Potter és a Roald Dahl kötetek örökzöldek."
+                "2026-os erdélyi és romániai (főleg Marosvásárhely és környéke) könyvpiaci trendek: "
+                "A Bookfest 2026 alapján kiemelkedő a kereslet a pszichológiai thrillerek (pl. Freida McFadden, Anders & Anette de la Motte), "
+                "valamint a skandináv krimik iránt. Matt Haig 'feel-good' regényei stabilan vezetik az eladásokat. "
+                "A helyi, marosvásárhelyi közönség kifejezetten keresi a minőségi magyar nyelvű kortárs irodalmat és a ritkaságokat, "
+                "valamint a helytörténeti köteteket. Gyerekkönyveknél a Harry Potter sorozat kötetei hiánycikkek."
             )
 
-            system_prompt = (
-                f"Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál. "
-                f"Az alábbi PIACI TRENDEK ismeretében kell dolgoznod: {market_context}\n\n"
-                "FELADAT: Készíts egy MÉLYREHATÓ, vezetői HTML napi jelentést az előző napi chat logok alapján.\n"
-                "Szigorúan KÖTELEZŐ az alábbi HTML struktúrát használni (fehér háttér, kék/fekete betűk, letisztult modern corporate dizájn, flexbox kártyák a KPI-oknak).\n\n"
-                "A jelentés KÖTELEZŐ elemei (ne csak számokat írj, hanem szöveges értékelést is minden ponthoz!):\n"
-                "1. Átfogó Összefoglaló: KPI kártyák (Összes interakció, RO/HU arány, Készülékek). Ezt kövesse egy rövid szöveges értékelés a napi forgalom minőségéről.\n"
-                "2. Keresési Trendek és Hőtérkép: Milyen témákat/szerzőket kerestek a legtöbbször? Melyik piacon (RO vagy HU)?\n"
-                "3. 'Nincs találat' (Zero-Match) Elemzés: LISTÁZD KI, hogy mi volt a keresőszó, amikor az AI nem tudott könyvet ajánlani! Értékeld, hogy ezek mekkora bevételkiesést jelentenek.\n"
-                "4. UX és Súrlódási (Friction) Elemzés: Mennyi volt a kosárelhagyás (cart_abandonment) vagy a pénztári hezitálás (checkout_hesitation) trigger? Sikerült a botnak megmentenie ezeket?\n"
-                "5. Stratégiai és Beszerzési Javaslatok: Vesd össze a felhasználói kereséseket a 2026-os piaci trendekkel, és tegyél KONKRÉT javaslatokat, hogy mit kell beszerezni a raktárba, és min kell javítani a weboldalon!\n\n"
-                "FORMAI KÖVETELMÉNYEK:\n"
-                "- Tiszta, 100% érvényes HTML kód.\n"
-                "- Kötelezően a <html> tag-el kezdődjön és a </html> tag-el végződjön.\n"
-                "- Használj professzionális CSS-t a <style> tagben: tiszta fehér háttér, sötétkék fejlécek, modern szürke szövegek, árnyékolt dobozok a számoknak.\n"
-                "- A hangvétel legyen határozott, vezetői (C-level) és lényegretörő."
-            )
+            system_prompt = f"""Te az Antikvarius.ro (Marosvásárhely) Vezetői Adatelemzője és E-kereskedelmi Stratégája vagy.
+PIACI KONTEXTUS 2026: {market_context}
+
+FELADAT: Elemezd a kapott chatbot logokat, és készíts egy vizuálisan lenyűgöző, vezetői HTML jelentést.
+
+KÖTELEZŐ TARTALOM ÉS STRUKTÚRA:
+1. Átfogó Összefoglaló: KPI-ok (Interakciók száma, Nyelvi megoszlás HU/RO, Eszközök). Szöveges értékelés a forgalom minőségéről.
+2. 'Nincs találat' (Zero-Match) Elemzés: Pontosan miket kerestek a userek, amit az AI nem talált a raktárban? Listázd a konkrét keresési kifejezéseket! Értékeld a kiesett bevételt.
+3. UX és Súrlódási Elemzés: Hányszor kellett a botnak beavatkoznia (cart_abandonment, checkout_hesitation)? Milyen UX hibákra utal ez a weboldalon (pl. szállítási díj nem tiszta)?
+4. Beszerzési és Marketing Javaslatok: A "nincs találat" szavak és a 2026-os marosvásárhelyi trendek alapján MILYEN KÖNYVEKET kell sürgősen beszerezni a raktárba?
+
+FORMAI KÖVETELMÉNYEK:
+- A válaszod KIZÁRÓLAG egy érvényes, tiszta HTML kód lehet, a <!DOCTYPE html><html>...</html> tagekkel bezárólag.
+- NE írj semmilyen bevezető vagy lezáró szöveget a HTML-en kívül!
+- Használj beágyazott CSS-t a <style> tagben. A dizájn legyen tiszta: fehér háttér (#ffffff), sötétkék fejlécek (#0b57d0), világosszürke árnyékolt dobozok a KPI-oknak, és jól olvasható fekete szöveg (Arial/Helvetica).
+"""
             
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
@@ -254,18 +253,41 @@ class BooksyAnalyticsReporter:
                 if getattr(block, 'type', '') == 'text':
                     html_content += block.text
 
-            # Kőkemény Regex a tisztításra: Csak a <html> és </html> közötti részt tartjuk meg
-            match = re.search(r'(?i)<html.*?>.*</html>', html_content, re.DOTALL)
-            if match:
-                html_content = match.group(0)
-            else:
-                # Ha véletlenül mégsem rakott html taget, legalább a backtickeket irtsuk ki
-                html_content = html_content.replace("```html", "").replace("```", "").strip()
-                # Ha még így sincs benne HTML tag, rakjuk körbe
-                if not html_content.startswith("<"):
-                    html_content = f"<html><body>{html_content}</body></html>"
+            # GOLYÓÁLLÓ HTML KINYERÉS ÉS TISZTÍTÁS (Bulletproof parser)
+            clean_html = html_content.strip()
             
-            self.db.save_report("daily_analytics", yesterday, html_content)
+            # 1. Eltávolítjuk a markdown kódblokkokat, ha a modell mégis használta volna
+            if "```html" in clean_html:
+                clean_html = clean_html.split("```html")[1].split("```")[0].strip()
+            elif "```" in clean_html:
+                clean_html = clean_html.split("```")[1].split("```")[0].strip()
+            
+            # 2. Ellenőrizzük, hogy van-e benne HTML struktúra. Ha nincs, becsomagoljuk.
+            if "<html" not in clean_html.lower() and "<body" not in clean_html.lower():
+                log_event("⚠️ A Claude nem rakott HTML tageket a válaszba, automatikus becsomagolás indul.")
+                clean_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body {{ font-family: Arial, sans-serif; color: #333; line-height: 1.6; padding: 20px; background-color: #ffffff; }}
+h1, h2, h3 {{ color: #0b57d0; }}
+.card {{ background: #f8f9fa; border: 1px solid #e0e0e0; padding: 15px; border-radius: 8px; margin-bottom: 20px; }}
+ul {{ padding-left: 20px; }}
+</style>
+</head>
+<body>
+    <h2>Antikvarius.ro Vezetői Elemzés (Automatikus fallback formátum)</h2>
+    <div>{clean_html.replace(chr(10), '<br>')}</div>
+</body>
+</html>"""
+
+            # Ha teljesen üres maradt valami oknál fogva
+            if not clean_html:
+                raise ValueError("Az AI által generált HTML tartalom teljesen üres lett tisztítás után!")
+
+            log_event(f"✅ Riport generálva. HTML hossza: {len(clean_html)} karakter.")
+            self.db.save_report("daily_analytics", yesterday, clean_html)
             
             # TÉNYLEGES E-MAIL KÜLDÉS
             smtp_server = os.getenv("SMTP_SERVER")
@@ -277,10 +299,10 @@ class BooksyAnalyticsReporter:
                 return
 
             msg = MIMEMultipart()
-            msg['Subject'] = f"📊 Booksy Vezetői AI Analitika - {yesterday}"
+            msg['Subject'] = f"📊 Antikvarius.ro Vezetői AI Analitika - {yesterday}"
             msg['From'] = smtp_sender
             msg['To'] = ", ".join(ADMIN_EMAILS)
-            msg.attach(MIMEText(html_content, 'html'))
+            msg.attach(MIMEText(clean_html, 'html'))
             
             try:
                 port = int(os.getenv("SMTP_PORT", 587))
