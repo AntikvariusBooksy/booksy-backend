@@ -12,10 +12,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from markdownify import markdownify
 
-# Az összes szükséges import helye
 load_dotenv()
 
-# Inicializáljuk a klienseket
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -152,12 +150,13 @@ class BooksyProactiveAgent:
                         messages=[{"role": "user", "content": user_content}]
                     )
                     final_text = ""
+                    # Hiba javítva: Csak a 'text' típusú blokkokat olvassuk ki, a 'ThinkingBlock'-ot figyelmen kívül hagyjuk
                     for block in res.content:
-                        if block.type == 'text':
+                        if getattr(block, 'type', '') == 'text':
                             final_text += block.text
                     return final_text.strip()
                 except Exception as e:
-                    log_event(f"⚠️ Claude hiba, GPT fallback: {e}")
+                    log_event(f"⚠️ Claude hiba, átkapcsolás GPT-4o-mini-re: {e}")
                     res_f = openai_client.chat.completions.create(model=OPENAI_MODEL, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], max_tokens=1000)
                     return res_f.choices[0].message.content.strip()
         except Exception as e:
@@ -178,8 +177,17 @@ class BooksyProactiveAgent:
     def process_proactive_trigger(self, trigger_type: str, session_data: dict) -> dict:
         trigger_context = ""; search_query = ""
         ui_lang = session_data.get("ui_lang", "ro")
+        
+        if trigger_type == 'cart_abandonment':
+            trigger_context = "A látogató kilépne a kosárból. Emlékeztesd, hogy a szállítási díj fix, így érdemes még körülnézni!"
+        elif trigger_type == 'checkout_hesitation':
+            trigger_context = "A látogató elakadt a pénztárnál. Emlékeztesd, hogy Románián belül utánvéttel is fizethet!"
+        elif trigger_type == 'zero_match_search':
+            trigger_context = f"A látogató keresett valamit ({session_data.get('failed_search_term')}), de nem talált. Ajánlj fel segítséget!"
+            
         reply_text = self._generate_response("", {"intent": "proactive"}, [], is_proactive=True, trigger_context=trigger_context, ui_lang=ui_lang)
         return {"reply": reply_text, "products": [], "trigger_handled": True}
+
 
 class BooksyAnalyticsReporter:
     def __init__(self, analytics_db):
@@ -190,47 +198,73 @@ class BooksyAnalyticsReporter:
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
             logs = self.db.get_logs_for_date(yesterday)
             if not logs: 
-                log_event("Nincs log tegnapról, kihagyva.")
+                log_event("Nincs log tegnapról, analitika kihagyva.")
                 return
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
+            # A Bookfest 2026 és a piac trendjeinek beépítése a kontextusba
+            market_context = (
+                "A 2026-os romániai és erdélyi könyvpiaci trendek (Bookfest 2026 adatai alapján): "
+                "Hatalmas az érdeklődés a skandináv és nemzetközi thrillerek iránt (pl. Anders & Anette de la Motte, Ragnar Jónasson). "
+                "A pszichológiai thrillerek és az influencer-kultúrát kritizáló könyvek (pl. Tiffany Crum, Freida McFadden - Housemaid) vezetik az eladásokat. "
+                "Matt Haig és a 'feel-good' regények szintén a topon vannak. Román szerzők közül Theodor Paleologu és a non-fiction (pl. Mafia istória) népszerű. "
+                "Gyerekkönyveknél a Harry Potter és a Roald Dahl kötetek örökzöldek."
+            )
+
             system_prompt = (
-                "Te egy vezetői adatelemző vagy az Antikvarius.ro-nál. Készíts részletes, strukturált, fehér hátterű HTML jelentést a logok alapján. "
-                "1. Átfogó összefoglaló (interakciók száma, RO/HU arány, eszközök).\n"
-                "2. Legkeresettebb témák és trendek.\n"
-                "3. 'Nincs találat' elemzés (UX hibák).\n"
-                "4. Konkrét marketing/beszerzési javaslatok.\n"
-                "Formázás: HTML, fehér háttér, fekete szöveg, professzionális, táblázatokkal, listákkal."
+                f"Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál. "
+                f"Az alábbi PIACI TRENDEK ismeretében kell dolgoznod: {market_context}\n\n"
+                "FELADAT: Készíts egy MÉLYREHATÓ, vezetői HTML napi jelentést az előző napi chat logok alapján.\n"
+                "Szigorúan KÖTELEZŐ az alábbi HTML struktúrát használni (fehér háttér, kék/fekete betűk, letisztult modern corporate dizájn, flexbox kártyák a KPI-oknak).\n\n"
+                "A jelentés KÖTELEZŐ elemei (ne csak számokat írj, hanem szöveges értékelést is minden ponthoz!):\n"
+                "1. Átfogó Összefoglaló: KPI kártyák (Összes interakció, RO/HU arány, Készülékek). Ezt kövesse egy rövid szöveges értékelés a napi forgalom minőségéről.\n"
+                "2. Keresési Trendek és Hőtérkép: Milyen témákat/szerzőket kerestek a legtöbbször? Melyik piacon (RO vagy HU)?\n"
+                "3. 'Nincs találat' (Zero-Match) Elemzés: LISTÁZD KI, hogy mi volt a keresőszó, amikor az AI nem tudott könyvet ajánlani! Értékeld, hogy ezek mekkora bevételkiesést jelentenek.\n"
+                "4. UX és Súrlódási (Friction) Elemzés: Mennyi volt a kosárelhagyás (cart_abandonment) vagy a pénztári hezitálás (checkout_hesitation) trigger? Sikerült a botnak megmentenie ezeket?\n"
+                "5. Stratégiai és Beszerzési Javaslatok: Vesd össze a felhasználói kereséseket a 2026-os piaci trendekkel, és tegyél KONKRÉT javaslatokat, hogy mit kell beszerezni a raktárba, és min kell javítani a weboldalon!\n\n"
+                "FORMAI KÖVETELMÉNYEK:\n"
+                "- Tiszta, 100% érvényes HTML kód (<html><body>...</body></html>).\n"
+                "- Ne legyen semmilyen markdown (pl. ```html) a válaszban.\n"
+                "- Használj professzionális CSS-t a <style> tagben: tiszta fehér háttér, sötétkék fejlécek, modern szürke szövegek, árnyékolt dobozok a számoknak.\n"
+                "- A hangvétel legyen határozott, vezetői (C-level) és lényegretörő."
             )
             
-            # Hiba javítva: Nincs 'temperature' paraméter, a Claude 5 nem támogatja
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
-                max_tokens=3500,
+                max_tokens=4000,
                 system=system_prompt,
-                messages=[{"role": "user", "content": log_summary}]
+                messages=[
+                    {"role": "user", "content": f"Itt vannak a tegnapi logok az elemzéshez:\n{log_summary}"}
+                ]
             )
             
             html_content = ""
             for block in res.content:
-                if block.type == 'text':
+                if getattr(block, 'type', '') == 'text':
                     html_content += block.text
             
             self.db.save_report("daily_analytics", yesterday, html_content)
             
-            # --- SMTP KÜLDÉS ---
+            smtp_server = os.getenv("SMTP_SERVER")
+            smtp_sender = os.getenv("SMTP_SENDER")
+            smtp_pass = os.getenv("SMTP_PASSWORD")
+            
+            if not all([smtp_server, smtp_sender, smtp_pass]):
+                log_event("❌ Hiba: Hiányzó SMTP beállítások, e-mail nem lett elküldve.")
+                return
+
             msg = MIMEMultipart()
-            msg['Subject'] = f"📊 Booksy Napi Analitika - {yesterday}"
-            msg['From'] = os.getenv("SMTP_SENDER")
+            msg['Subject'] = f"📊 Booksy Vezetői AI Analitika - {yesterday}"
+            msg['From'] = smtp_sender
             msg['To'] = ", ".join(ADMIN_EMAILS)
             msg.attach(MIMEText(html_content, 'html'))
             
-            with smtplib.SMTP(os.getenv("SMTP_SERVER"), int(os.getenv("SMTP_PORT", 587))) as server:
+            with smtplib.SMTP(smtp_server, int(os.getenv("SMTP_PORT", 587))) as server:
                 server.starttls()
-                server.login(os.getenv("SMTP_SENDER"), os.getenv("SMTP_PASSWORD"))
+                server.login(smtp_sender, smtp_pass)
                 server.send_message(msg)
             
-            log_event("✅ Riport kész és e-mailben elküldve.")
+            log_event("✅ Napi AI Analitika sikeresen elküldve a vezetőségnek.")
         except Exception as e:
-            log_event(f"❌ Riport Hiba: {e}")
+            log_event(f"❌ Napi Analitika Hiba: {e}")
