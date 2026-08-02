@@ -26,8 +26,8 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # API AZONOSÍTÓK - 2026
 CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
-# A Google kivezette a régi modelleket a generateContent-ből. A legújabb 2026-os trendekhez az új Interactions API-t és a gemini-3-flash-preview modellt kell használni.
-GEMINI_MODEL = "gemini-3-flash-preview"
+# A Google hivatalos 2026-os API frissítése alapján az új modell:
+GEMINI_MODEL = "gemini-3.6-flash"
 
 from database import DBHandler, log_event, get_store_policies, ADMIN_EMAILS
 
@@ -211,13 +211,14 @@ class BooksyAnalyticsReporter:
 
     def get_real_time_market_trends(self):
         """Gemini-vel lekéri az aktuális Google trendeket. 2026-os Interactions API használata."""
-        log_event("🔍 Valós idejű webes trendelemzés indítása a Gemini-vel (Interactions API)...")
+        log_event(f"🔍 Valós idejű webes trendelemzés indítása a Gemini-vel (Modell: {GEMINI_MODEL})...")
         try:
             prompt = (
                 "Készíts egy rövid, 3 pontos webes kutatást az aktuális romániai és erdélyi "
                 "könyveladási trendekről. Fókuszálj arra, hogy milyen könyveket és írókat keresnek a legtöbben."
             )
             
+            # Hivatalos Interactions API hívás
             interaction = gemini_client.interactions.create(
                 model=GEMINI_MODEL,
                 input=prompt,
@@ -228,14 +229,17 @@ class BooksyAnalyticsReporter:
                 }
             )
             
-            # Megkeressük a szöveges kimenetet a válaszobjektumok között
-            text_output = next((o for o in interaction.outputs if o.type == "text"), None)
-            
-            if text_output and text_output.text:
+            # A 2026-os Google SDK dokumentációja alapján a végső szöveg az output_text-ben található:
+            if hasattr(interaction, 'output_text') and interaction.output_text:
                 log_event("✅ Valós idejű trendadatok sikeresen lekérve.")
-                return text_output.text
+                return interaction.output_text
+            # Golyóálló fallback az attribútum hiánya esetén
+            elif hasattr(interaction, 'text') and interaction.text:
+                log_event("✅ Valós idejű trendadatok lekérve (fallback text attribútumon).")
+                return interaction.text
             else:
-                raise Exception("A Gemini API hívás sikeres volt, de nem érkezett szöveges válasz.")
+                log_event("⚠️ Golyóálló fallback: A nyers Interaction objektum stringesítése.")
+                return str(interaction)
                 
         except Exception as e:
             log_event(f"⚠️ Hiba a valós idejű trendek lekérésekor: {e}")
@@ -255,27 +259,25 @@ class BooksyAnalyticsReporter:
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
-            # 1. Trendek lekérése a Google-től (már az új API-val)
+            # 1. Trendek lekérése a Google-től a javított API-val
             real_time_trends = self.get_real_time_market_trends()
 
-            # 2. Claude Prompt - SZIGORÚAN tiszta szöveget / Markdownt kérünk.
-            # Kikapcsoljuk az 'Extended Thinking'-et, hogy ne eméssze fel a max_tokens-t (a 2026-os Sonnet 5 modellnél).
-            # A max_tokens-t feltoljuk 8000-re, hogy esélye se legyen csonkolni a választ.
+            # 2. Claude Prompt - SZIGORÚAN tiszta szöveget (Markdown) kérünk
             system_prompt = (
                 "Te egy Vezetői Adatelemző vagy az Antikvarius.ro-nál.\n\n"
-                f"PIACI KONTEXTUS / TRENDEK:\n{real_time_trends}\n\n"
+                f"PIACI KONTEXTUS / TRENDEK (A Webről):\n{real_time_trends}\n\n"
                 "SÉRTHETETLEN SZABÁLYOK:\n"
                 "1. Készíts egy professzionális, jól tagolt VEZETŐI JELENTÉST tiszta Markdown formátumban!\n"
-                "2. SOHA NE HASZNÁLJ HTML TAGEKET! (Ne használj <html>, <div>, stb. címkéket).\n"
-                "3. Légy lényegretörő, hogy a jelentés biztosan beleférjen a keretbe.\n\n"
+                "2. SOHA NE HASZNÁLJ HTML TAGEKET! (Semmilyen <html>, <div>, stb. címkét ne írj bele).\n"
+                "3. Légy lényegretörő, de mindenképpen fejtsd ki az anomáliákat és a logokban rejlő mintázatokat.\n\n"
                 "A jelentés KÖTELEZŐ szerkezete (használj '# ' címsorokat):\n"
                 "# 1. Átfogó Összefoglaló (Interakciók, arányok, eszközök)\n"
-                "# 2. Keresési Elemzés (Mik voltak a konkrét sikertelen keresések (zero-match), amikre a jövőben figyelnünk kell?)\n"
+                "# 2. Keresési Elemzés (Zero-match elemzés, hiányosságok)\n"
                 "# 3. UX és Vásárlói Súrlódások (Elakadások, kosárelhagyások elemzése)\n"
-                "# 4. Vezetői Stratégia (Konkrét beszerzési javaslatok a helyi trendek és a logok alapján)\n"
+                "# 4. Vezetői Stratégia (Konkrét javaslatok a belső adatok és a trendek alapján)\n"
             )
             
-            log_event("🧠 Claude elemző processz indítása (Tiszta Szöveg Mód, Megnövelt Token Limittel)...")
+            log_event("🧠 Claude elemző processz indítása (Markdown mód, Továbbfejlesztett Token Limit: 8000)...")
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=8000,
@@ -285,37 +287,30 @@ class BooksyAnalyticsReporter:
                 ]
             )
             
-            # Nem szórakozunk attribútumokkal (mert belezavarodhat a ThinkingBlock-ba). 
-            # Stringgé alakítjuk a teljes tartalom-tömböt, aztán megtisztítjuk.
             raw_content = ""
             if hasattr(res, 'content'):
                 for block in res.content:
-                    if hasattr(block, 'text') and getattr(block, 'type', '') == 'text':
+                    # Szigorú ellenőrzés a 'text' típusú blokkra a ThinkingBlock elkerülésére
+                    if hasattr(block, 'type') and block.type == 'text' and hasattr(block, 'text'):
                         raw_content += block.text
-                    elif hasattr(block, 'text'):
+                    elif hasattr(block, 'text') and not hasattr(block, 'type'):
                         raw_content += block.text
                 
-                # Ha minden kötél szakad (pl. az Anthropic teljesen átírta a blokk struktúrát)
+                # Ha a blokkokon való iterálás kudarcot vallott (pl. változott az objektum felépítés)
                 if not raw_content:
+                    log_event("⚠️ Nem sikerült a blokk-iteráció, fallback a teljes content stringesítésére.")
                     raw_content = str(res.content)
             else:
                 raw_content = str(res)
                 
             raw_content = raw_content.strip()
             
-            # Fallback vizsgálat: ha még a brute-force kinyerés is csődöt mondana
-            if len(raw_content) < 50:
-                log_event(f"⚠️ A kinyert szöveg gyanúsan rövid ({len(raw_content)} karakter). Fallback használata.")
-                raw_content = f"A rendszer nem tudta kinyerni az API választ. Nyers adat: {raw_content}"
-            else:
-                # Eltüntetjük az API által esetlegesen bent hagyott objektum-szeméteket (ha str(res.content)-et használtuk)
-                raw_content = re.sub(r"^\[TextBlock\(text='", "", raw_content)
-                raw_content = re.sub(r"', type='text'\)\]$", "", raw_content)
-                # Továbbá a Claude imád "Itt a jelentés:" típusú bevezetőket írni.
-                raw_content = raw_content.replace('Itt a jelentés:\n', '')
-                raw_content = raw_content.replace('Íme a kért jelentés:\n', '')
+            # Fallback tisztítás
+            raw_content = re.sub(r"^\[TextBlock\(text='", "", raw_content)
+            raw_content = re.sub(r"', type='text'\)\]$", "", raw_content)
+            raw_content = raw_content.replace('Itt a jelentés:\n', '')
+            raw_content = raw_content.replace('Íme a kért jelentés:\n', '')
 
-            # Így a Claude-nak nem kell a dizájnnal szenvednie, a levél viszont gyönyörű lesz.
             html_content = raw_content.replace('\n', '<br>')
             html_content = re.sub(r'\*\*(.*?)\*\*', r'<strong style="color: #333;">\1</strong>', html_content)
             html_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', html_content)
@@ -352,20 +347,19 @@ class BooksyAnalyticsReporter:
                 return
 
             try:
-                # Multipart/Alternative formátum a spamszűrők ellen (Text + HTML is megy)
+                # Multipart/Alternative mód kikényszeríti az UTF-8 helyes kódolást és segít kikerülni a spamszűrőt
                 msg = MIMEMultipart('alternative')
                 msg['Subject'] = f"📊 Antikvarius.ro Vezetői AI Analitika - {yesterday}"
                 msg['From'] = smtp_sender
                 msg['To'] = ", ".join(ADMIN_EMAILS)
-                # Az érvényes dátum és üzenet azonosító kötelező a jó spam ratinghez
                 msg['Date'] = formatdate(localtime=True)
                 msg['Message-ID'] = make_msgid()
                 
-                # Csatoljuk a nyers szöveget (Plain text fallback a szigorú levelezőknek)
+                # Tiszta szöveg fallback a levelezőkliensnek
                 text_part = MIMEText(raw_content, 'plain', 'utf-8')
                 msg.attach(text_part)
                 
-                # Csatoljuk a Python által generált profi HTML-t
+                # A formázott HTML csatolása
                 html_part = MIMEText(final_email_html, 'html', 'utf-8')
                 msg.attach(html_part)
                 
@@ -373,7 +367,6 @@ class BooksyAnalyticsReporter:
                 with smtplib.SMTP(smtp_server, port, timeout=20) as server:
                     server.starttls()
                     server.login(smtp_sender, smtp_pass)
-                    # Szigorú sendmail hívás explicit címzett listával
                     server.sendmail(smtp_sender, ADMIN_EMAILS, msg.as_string())
                 
                 log_event("✅ Napi AI Analitika sikeresen elküldve a vezetőségnek.")
