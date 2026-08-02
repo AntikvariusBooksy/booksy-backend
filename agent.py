@@ -301,30 +301,48 @@ class BooksyAnalyticsReporter:
 
             log_summary = f"Dátum: {yesterday}\nÖsszes interakció: {len(logs)}\n\n"
             for log in logs:
-                log_summary += f"- Esemény: {log.get('trigger_type', 'manual')} | Nyelv: {log.get('ui_language', 'ro')} | Üzenet: '{log.get('user_msg', '')[:100]}' | Nincs találat flag: {log.get('zero_match_flag', False)}\n"
+                log_summary += (
+                    f"- Típus: {log.get('trigger_type', 'manual')} | "
+                    f"Nyelv: {log.get('ui_language', 'ro')} | "
+                    f"Geo: {log.get('geo_country', 'Ismeretlen')} ({log.get('geo_region', '')}) | "
+                    f"Eszköz: {log.get('device_type', 'Desktop')} | "
+                    f"Üzenet: '{log.get('user_msg', '')[:150]}' | "
+                    f"Nincs találat: {log.get('zero_match_flag', False)} | "
+                    f"Ajánlott ID-k: {log.get('offered_book_ids', '')}\n"
+                )
             
-            # 2. AI Elemzés (GPT-4o-mini)
+            # 2. AI Elemzés (KIZÁRÓLAG CLAUDE 5 MOTORRAL)
             system_prompt = (
-                "Te egy vezetői adatelemző vagy az Antikvarius.ro-nál. Elemezd a webáruház előző napi chat logjait. "
-                "Készíts egy profi, vizuálisan vonzó, mobilbarát HTML e-mail jelentést magyar nyelven! "
-                "Tartalmazzon: 1. Napi összefoglalót (interakciók száma). 2. Miket kerestek a legtöbbet. "
-                "3. 'Nincs találat' (zero-match) elemzést - mik azok a könyvek/témák, amiket kerestek, de nincsenek. "
-                "4. Javaslatokat beszerzésre vagy UX javításra. "
-                "KIZÁRÓLAG érvényes HTML kódot adj vissza <html> és <body> tagekkel, inline CSS formázással, "
-                "sötétkék/arany színvilággal. Ne tegyél markdown ```html blokkokat a kimenetbe!"
+                "Te egy vezetői adatelemző és e-kereskedelmi stratéga vagy az Antikvarius.ro-nál. "
+                "Készíts egy nagyon mélyreható, részletes, vezetői szintű napi jelentést az előző napi chat és proaktív AI logok alapján. "
+                "A jelentés térjen ki a következőkre:\n"
+                "1. Átfogó összefoglaló (Interakciók száma, RO vs HU piac aránya a nyelv és geolokáció alapján, eszközhasználat).\n"
+                "2. Legkeresettebb témák és trendek (mit keresnek a látogatók).\n"
+                "3. 'Nincs találat' (Zero-Match) elemzés: Miket kerestek, amik jelenleg nincsenek készleten?\n"
+                "4. Konkrét beszerzési és marketing javaslatok (mit vegyünk a piacra, mit emeljünk ki a főoldalon).\n"
+                "5. UX és konverziós javaslatok a proaktív triggerek (kosárelhagyás, kilépési szándék) alapján.\n\n"
+                "KIZÁRÓLAG tiszta, világos és KÖNNYEN OLVASHATÓ HTML formátumban válaszolj! "
+                "Használj <html> és <body> tageket. FEHÉR háttér, fekete vagy sötétszürke betűszín. "
+                "SOHA NE használj sötét hátteret! Legyen professzionális, strukturált (táblázatokkal, listákkal, félkövér kiemelésekkel). "
+                "Ne írj markdown ```html blokkokat a válaszba, csak a tiszta HTML kódot add vissza!"
             )
             
-            res = openai_client.chat.completions.create(
-                model=OPENAI_MODEL,
+            res = claude_client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=3500,
+                temperature=0.4,
+                system=system_prompt,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Itt vannak a napi logok:\n{log_summary}"}
-                ],
-                max_tokens=2500,
-                temperature=0.5
+                    {"role": "user", "content": f"Itt vannak a tegnapi logok az elemzéshez:\n{log_summary}"}
+                ]
             )
             
-            html_content = res.choices[0].message.content.strip()
+            html_content = ""
+            for block in res.content:
+                if getattr(block, 'type', '') == 'text':
+                    html_content += block.text
+                    
+            html_content = html_content.strip()
             if html_content.startswith("```html"):
                 html_content = html_content[7:-3].strip()
             
