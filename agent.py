@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 # Környezeti változók betöltése
 load_dotenv()
 
+# Kliensek inicializálása
 gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -158,7 +159,6 @@ class BooksyProactiveAgent:
                         messages=[{"role": "user", "content": user_content}]
                     )
                     final_text = ""
-                    # Golyóálló kinyerés: csak a text attribútummal rendelkező blokkokat használjuk fel
                     for block in res.content:
                         if getattr(block, 'type', '') == 'text':
                             final_text += block.text
@@ -209,17 +209,15 @@ class BooksyAnalyticsReporter:
         self.db = analytics_db
 
     def get_real_time_market_trends(self):
-        """Gemini-vel lekéri az aktuális Google trendeket. Golyóálló hibakezeléssel."""
+        """Gemini-vel lekéri az aktuális Google trendeket, biztosított fallback opcióval."""
         log_event("🔍 Valós idejű webes trendelemzés indítása a Gemini-vel...")
         try:
             prompt = (
-                "Keress rá a weben a legfrissebb könyveladási és olvasási trendekre Romániában, "
-                "kifejezetten fókuszálva Erdélyre és Marosvásárhely környékére, valamint a magyar nyelvű olvasókra. "
-                "Milyen műfajok, szerzők vagy könyvek pörögnek most a legjobban a könyvesboltokban vagy a Google keresésekben? "
-                "Foglald össze röviden, 3-4 pontban, tényekre támaszkodva."
+                "Készíts egy nagyon rövid, 3 pontos webes kutatást az aktuális romániai és erdélyi "
+                "könyveladási trendekről (Milyen könyveket és írókat keresnek most a leginkább?)."
             )
             
-            # Megpróbáljuk a legfrissebb modellek egyikével
+            # A stabil gemini-2.5-flash modell használata
             response = gemini_client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=prompt,
@@ -235,13 +233,10 @@ class BooksyAnalyticsReporter:
                 raise Exception("Üres választ adott a Gemini.")
                 
         except Exception as e:
-            # GOLYÓÁLLÓ VÉDELEM: Nem szemeteljük tele a Claude promptját a hibaüzenettel.
-            # Ehelyett egy határozott, tiszta instrukciót adunk vissza.
             log_event(f"⚠️ Hiba a valós idejű trendek lekérésekor: {e}")
             return (
-                "KÜLSŐ ADAT JELENLEG NEM ELÉRHETŐ. SÉRTHETETLEN SZABÁLY: "
-                "Mivel a Google Trends adatok most nem elérhetők, KIZÁRÓLAG az alább átadott 'Belső Logok' alapján vonj le következtetéseket. "
-                "Használd a saját általános piaci tudásodat az erdélyi és román könyvpiacról a logokban szereplő keresőszavak értékeléséhez."
+                "KÜLSŐ ADAT NEM ELÉRHETŐ. Kérlek, KIZÁRÓLAG a mellékelt belső "
+                "logokból és a saját tudásodból vonj le következtetéseket a trendekről!"
             )
 
     def generate_and_send_daily_report(self):
@@ -255,86 +250,82 @@ class BooksyAnalyticsReporter:
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
-            # 1. Valós Google Trends (vagy tiszta fallback utasítás)
+            # 1. Trendek lekérése
             real_time_trends = self.get_real_time_market_trends()
 
-            # 2. Szigorú Claude Prompt HTML vázzal
+            # 2. Szigorú MARDKOWN prompt (TILOS A HTML)
             system_prompt = (
-                "Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál.\n\n"
+                "Te egy Vezetői Adatelemző vagy az Antikvarius.ro-nál.\n\n"
                 f"PIACI KONTEXTUS / TRENDEK:\n{real_time_trends}\n\n"
-                "SÉRTHETETLEN SZABÁLY: Bármi is történik, a válaszodnak KIZÁRÓLAG egy teljes, vizuálisan formázott HTML dokumentumnak kell lennie (<html>-től </html>-ig). "
-                "Tilos markdown kódblokkokat (```html) vagy bevezető mondatokat (pl. 'Íme a jelentés') használnod. Csak a nyers HTML kód jöhet!\n\n"
-                "A jelentés KÖTELEZŐ elemei:\n"
-                "1. Átfogó Összefoglaló: KPI kártyák (Összes interakció, RO/HU arány, Készüléktípusok).\n"
-                "2. Zero-Match (Nincs találat) Elemzés: Pontosan mik voltak a sikertelen keresések a logok alapján?\n"
-                "3. UX/Súrlódás Elemzés: Mikor indult be a kosárelhagyás vagy fizetési hezitálás trigger, és sikeres volt-e?\n"
-                "4. Vezetői Stratégia: Milyen könyveket/kategóriákat szerezzünk be a keresések és a trendek alapján?\n\n"
-                "KÖTELEZŐ HTML FORMÁZÁS: Használj modern CSS-t (fehér háttér, sötétkék címsorok #0b57d0, szürke árnyékos dobozok a KPI-oknak). "
-                "A <head> részbe KÖTELEZŐEN tedd be a <meta charset=\"UTF-8\"> taget!"
+                "SÉRTHETETLEN SZABÁLY: Készíts egy professzionális, jól tagolt VEZETŐI JELENTÉST Markdown formátumban!\n"
+                "SOHA, SEMMILYEN KÖRÜLMÉNYEK KÖZÖTT NE HASZNÁLJ HTML TAGEKET! CSAK TISZTA SZÖVEGET ÉS MARKDOWNT ÍRJ!\n"
+                "A jelentés KÖTELEZŐ szerkezete (használj '# ' címsorokat):\n"
+                "# 1. Átfogó Összefoglaló (Interakciók, arányok, készülékek)\n"
+                "# 2. Zero-Match Elemzés (Mik voltak a konkrét sikertelen keresések, amiket meg kell vennünk?)\n"
+                "# 3. UX és Súrlódások (Elakadások, kosárelhagyások elemzése)\n"
+                "# 4. Vezetői Stratégia (Konkrét beszerzési javaslatok a trendek alapján)\n\n"
+                "Légy szakmai, lényegretörő, és emeld ki a legfontosabb szavakat **csillagokkal**."
             )
             
-            log_event("🧠 Claude elemző processz indítása...")
+            log_event("🧠 Claude elemző processz indítása (Tiszta Szöveg Mód)...")
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
-                max_tokens=4000,
+                max_tokens=2500,
                 system=system_prompt,
                 messages=[
-                    {"role": "user", "content": f"Kérlek, elemezd az alábbi belső logokat:\n\n{log_summary}"}
+                    {"role": "user", "content": f"Elemezd a logokat és készítsd el a jelentést:\n\n{log_summary}"}
                 ]
             )
             
-            # Golyóálló parser: ThinkingBlock és TextBlock kezelése
+            # 3. Golyóálló "Brute-Force" adatkinyerés
             raw_content = ""
-            if res.content:
+            if hasattr(res, 'content'):
                 for block in res.content:
-                    # Kinyerjük a szöveget, bárhol is legyen
-                    if getattr(block, 'type', '') == 'text':
+                    if hasattr(block, 'text') and getattr(block, 'type', '') == 'text':
                         raw_content += block.text
                     elif hasattr(block, 'text'):
                         raw_content += block.text
-            
-            raw_content = raw_content.strip()
-
-            clean_html = ""
-            
-            # Biztonsági ellenőrzés: Megtagadta az AI a feladatot (pl. hibaüzenetet adott HTML helyett)?
-            if len(raw_content) < 200:
-                log_event(f"⚠️ A Claude válasza gyanúsan rövid ({len(raw_content)} karakter). Vészhelyzeti HTML generálása.")
-                clean_html = f"""<!DOCTYPE html>
-                <html lang="hu">
-                <head><meta charset="UTF-8"></head>
-                <body style="font-family: Arial, sans-serif; background-color: #fce4e4; padding: 20px; color: #333;">
-                    <div style="background: white; padding: 20px; border-radius: 8px; border-left: 5px solid #d9534f; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                        <h2 style="color: #d9534f; margin-top: 0;">⚠️ Rendszer Figyelmeztetés: AI Elemzési Hiba</h2>
-                        <p>Az elemző modul a várt HTML riport helyett a következő váratlan és rövid választ adta:</p>
-                        <pre style="background: #f4f4f4; padding: 15px; border: 1px solid #ccc; white-space: pre-wrap;">{raw_content}</pre>
-                        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                        <p><strong>Napi feldolgozott interakciók száma:</strong> {len(logs)} db</p>
-                        <p style="font-size: 12px; color: #777;">Ezt az e-mailt a Booksy AI biztonsági modulja generálta, hogy megelőzze az üres e-mailek kiküldését.</p>
-                    </div>
-                </body>
-                </html>"""
+                
+                # Ha minden kötél szakad és továbbra sincs szöveg, a teljes objektumot stringgé alakítjuk
+                if not raw_content:
+                    raw_content = str(res.content)
             else:
-                # Kikeressük az érvényes HTML-t Regex-el
-                html_match = re.search(r'(?i)<html[\s\S]*</html>', raw_content)
-                if html_match:
-                    clean_html = html_match.group(0)
-                else:
-                    log_event("⚠️ A Claude nem rakott <html> taget a válaszba, regexes tisztítás aktiválva.")
-                    clean_text = re.sub(r"^```(html)?\s*", "", raw_content, flags=re.IGNORECASE|re.MULTILINE)
-                    clean_text = re.sub(r"```\s*$", "", clean_text, flags=re.IGNORECASE|re.MULTILINE)
-                    clean_html = f"""<!DOCTYPE html>
-                    <html lang="hu">
-                    <head><meta charset="UTF-8"></head>
-                    <body style="font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f7f6; padding: 20px;">
-                        <div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
-                            {clean_text}
-                        </div>
-                    </body>
-                    </html>"""
+                raw_content = str(res)
+                
+            raw_content = raw_content.strip()
+            
+            if len(raw_content) < 50:
+                log_event(f"⚠️ A kinyert szöveg gyanúsan rövid ({len(raw_content)} karakter). Fallback használata.")
+                raw_content = "A rendszer nem tudta kinyerni az API választ. Nyers adat: " + raw_content
 
-            log_event(f"✅ Riport generálva. Végső HTML hossza: {len(clean_html)} karakter.")
-            self.db.save_report("daily_analytics", yesterday, clean_html)
+            
+            # Ez a Python kód alakítja a tiszta szöveget szép HTML-lé, így a Claude nem ronthatja el
+            html_content = raw_content.replace('\n', '<br>')
+            html_content = re.sub(r'\*\*(.*?)\*\*', r'<strong style="color: #333;">\1</strong>', html_content)
+            html_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', html_content)
+            html_content = re.sub(r'# (.*?)<br>', r'<h2 style="color: #0b57d0; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; margin-top: 25px;">\1</h2>', html_content)
+            html_content = re.sub(r'## (.*?)<br>', r'<h3 style="color: #1a73e8; margin-top: 20px;">\1</h3>', html_content)
+            
+            final_email_html = f"""<!DOCTYPE html>
+            <html lang="hu">
+            <head><meta charset="UTF-8"></head>
+            <body style="font-family: 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #f4f7f6; padding: 20px; color: #444; line-height: 1.6;">
+                <div style="background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 800px; margin: auto;">
+                    <div style="text-align: center; margin-bottom: 30px;">
+                        <h1 style="color: #0b57d0; margin-bottom: 5px;">📊 Vezetői AI Analitika</h1>
+                        <span style="background: #e8f0fe; color: #1a73e8; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 14px;">{yesterday}</span>
+                    </div>
+                    <div style="font-size: 15px;">
+                        {html_content}
+                    </div>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 40px 0 20px 0;">
+                    <p style="font-size: 12px; color: #999; text-align: center;">Ezt a jelentést a Booksy AI Generálta tiszta szöveges (Markdown) alapon.</p>
+                </div>
+            </body>
+            </html>"""
+
+            log_event(f"✅ Riport generálva. Kinyert szöveg hossza: {len(raw_content)} karakter.")
+            self.db.save_report("daily_analytics", yesterday, final_email_html)
             
             smtp_server = os.getenv("SMTP_SERVER")
             smtp_sender = os.getenv("SMTP_SENDER")
@@ -345,24 +336,26 @@ class BooksyAnalyticsReporter:
                 return
 
             try:
+                # Multipart/Alternative formátum a spamszűrők ellen (Text + HTML is megy)
                 msg = MIMEMultipart('alternative')
                 msg['Subject'] = f"📊 Antikvarius.ro Vezetői AI Analitika - {yesterday}"
                 msg['From'] = smtp_sender
                 msg['To'] = ", ".join(ADMIN_EMAILS)
-                
-                # Kötelező levélszemét-szűrő elleni fejlécek
                 msg['Date'] = formatdate(localtime=True)
                 msg['Message-ID'] = make_msgid()
                 
-                # KIFEJEZETT UTF-8 kódolás a magyar és román karakterek miatt
-                html_part = MIMEText(clean_html, 'html', 'utf-8')
+                # Csatoljuk a nyers szöveget (Plain text fallback)
+                text_part = MIMEText(raw_content, 'plain', 'utf-8')
+                msg.attach(text_part)
+                
+                # Csatoljuk a Python által generált profi HTML-t
+                html_part = MIMEText(final_email_html, 'html', 'utf-8')
                 msg.attach(html_part)
                 
                 port = int(os.getenv("SMTP_PORT", 587))
                 with smtplib.SMTP(smtp_server, port, timeout=20) as server:
                     server.starttls()
                     server.login(smtp_sender, smtp_pass)
-                    # Szigorú Envelope Addressing a To fejléc helyett
                     server.sendmail(smtp_sender, ADMIN_EMAILS, msg.as_string())
                 
                 log_event("✅ Napi AI Analitika sikeresen elküldve a vezetőségnek.")
