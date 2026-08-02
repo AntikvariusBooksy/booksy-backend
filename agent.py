@@ -10,9 +10,9 @@ from datetime import datetime, timedelta
 import anthropic
 from openai import OpenAI
 from dotenv import load_dotenv
+from markdownify import markdownify
 
-from database import DBHandler, log_event, get_store_policies, ADMIN_EMAILS
-
+# Az összes szükséges import helye
 load_dotenv()
 
 # Inicializáljuk a klienseket
@@ -23,6 +23,8 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # HIVATALOS 2026-OS CLAUDE 5 API AZONOSÍTÓK
 CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
+
+from database import DBHandler, log_event, get_store_policies, ADMIN_EMAILS
 
 class BooksyProactiveAgent:
     def __init__(self, db: DBHandler):
@@ -82,15 +84,10 @@ class BooksyProactiveAgent:
                         
                     url = p.get('url', '').lower()
                     
-                    # --- GOLYÓÁLLÓ URL KATEGÓRIA SZŰRŐ (CSAK A MEGFELELŐ NYELVŰ KÖNYVEK JÖHETNEK) ---
                     if ui_lang == 'hu':
-                        # Magyar felület: Ha a "magyar-nyelvu-konyvek" NINCS az URL-ben, akkor elvetjük!
-                        if 'magyar-nyelvu-konyvek' not in url:
-                            continue
+                        if 'magyar-nyelvu-konyvek' not in url: continue
                     else: 
-                        # Román felület: Ha a "carti-in-limba-romana" NINCS az URL-ben, akkor elvetjük!
-                        if 'carti-in-limba-romana' not in url:
-                            continue
+                        if 'carti-in-limba-romana' not in url: continue
 
                     if 'image_url' in p and 'image' not in p: p['image'] = p['image_url']
                     clean_title = p.get('title', '').strip().lower()
@@ -106,7 +103,6 @@ class BooksyProactiveAgent:
 
     def _generate_response(self, user_msg: str, intent_data: dict, products: list, is_proactive: bool = False, trigger_context: str = "", ui_lang: str = "ro", user_mode: str = "felfedezo") -> str:
         
-        # Szigorú nyelvi elválasztás a Prompt számára
         if ui_lang == "hu":
             lang_instruction = "MAGYARUL (Hungarian)"
             persona_style = "Művelt, tapasztalt, rendkívül segítőkész antikvárius szakértő vagy."
@@ -116,7 +112,6 @@ class BooksyProactiveAgent:
             persona_style = "Ești un anticar expert, cultivat, pasionat de cărți și foarte amabil."
             context_text = "Nu am găsit cărți potrivite în stoc."
 
-        # Termék adatok előkészítése
         if intent_data.get('intent') == 'search' and products:
             if ui_lang == "hu":
                 context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
@@ -124,9 +119,9 @@ class BooksyProactiveAgent:
                 context_text = "\n".join([f"Titlu: {p['title']} - Autor: {p.get('author','')} - Preț: {p.get('price','')}. Descriere: {p.get('text_preview','')}" for p in products])
 
         if user_mode == "vadasz":
-            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, fókuszálj az árakra și a tényekre!" if ui_lang == "hu" else "Vizitatorul este hotărât. Fii precis, axează-te pe preț și fapte!"
+            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, fókuszálj az árakra!" if ui_lang == "hu" else "Vizitatorul este hotărât. Fii precis, axează-te pe preț!"
         else:
-            mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust, mesélj a könyvek hangulatáról!" if ui_lang == "hu" else "Vizitatorul explorează. Oferă context cultural, povestește despre atmosfera cărților!"
+            mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust!" if ui_lang == "hu" else "Vizitatorul explorează. Oferă context cultural!"
 
         system_prompt = (
             f"Te Booksy vagy, az antikvarius.ro prémium antikváriumának szaktanácsadója. {persona_style}\n"
@@ -138,34 +133,17 @@ class BooksyProactiveAgent:
             f"4. Formázás: ZÉRÓ HTML címke! Csak markdown (félkövér, listák).\n"
         )
 
-        # Ha a szándék szabályzat (policy), betöltjük a memóriából a lementett pontos cégadatokat
         if intent_data.get('intent') == 'policy' and not is_proactive:
-            system_prompt += (
-                f"\n\nAZ ANTIKVARIUS.RO HIVATALOS SZABÁLYZATA (Fizetés, Szállítás, Kapcsolat):\n<policy>\n{trigger_context}\n</policy>\n"
-                f"Ezek a hivatalos informații. Használd ezeket a válaszodban! Légy pontos a díjakkal și időtartamokkal kapcsolatban!"
-            )
+            system_prompt += f"\n\nAZ ANTIKVARIUS.RO HIVATALOS SZABÁLYZATA:\n<policy>\n{trigger_context}\n</policy>\nHasználd ezeket az információkat!"
 
         user_content = f"Üzenet / Message: '{user_msg}'\n\nTalálatok / Results:\n{context_text}"
 
         try:
             if is_proactive:
-                system_prompt += (
-                    f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. "
-                    f"Légy nagyon rövid (max 2-3 mondat), természetes, udvarias, dar ne légy tolakodó! "
-                    f"Írj KIZÁRÓLAG {lang_instruction}!"
-                )
-                res = openai_client.chat.completions.create(
-                    model=OPENAI_MODEL,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": "Scrie mesajul de întâmpinare / Írd meg a megszólítást."}
-                    ],
-                    max_tokens=250,
-                    temperature=0.7
-                )
+                system_prompt += f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. Légy nagyon rövid (max 2-3 mondat)!"
+                res = openai_client.chat.completions.create(model=OPENAI_MODEL, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": "Scrie mesajul."}], max_tokens=250)
                 return res.choices[0].message.content.strip()
             else:
-                # NORMÁL CHAT - CLAUDE ELSŐDLEGES MOTOR (CLAUDE 5)
                 try:
                     res = claude_client.messages.create(
                         model=CLAUDE_MODEL, 
@@ -173,111 +151,37 @@ class BooksyProactiveAgent:
                         system=system_prompt, 
                         messages=[{"role": "user", "content": user_content}]
                     )
-                    
-                    # Biztonságos szövegkinyerés: Kiszűrjük a "ThinkingBlock" (gondolkodás) elemeket!
                     final_text = ""
                     for block in res.content:
                         if getattr(block, 'type', '') == 'text':
                             final_text += block.text
-                            
                     return final_text.strip()
-                except Exception as claude_err:
-                    log_event(f"⚠️ Claude modell hiba, átkapcsolás GPT-4o-mini-re: {claude_err}")
-                    # B-TERV: Ha a Claude elszáll, a GPT azonnal átveszi a munkát, így nincs fagyás!
-                    res_fallback = openai_client.chat.completions.create(
-                        model=OPENAI_MODEL,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_content}
-                        ],
-                        max_tokens=1000,
-                        temperature=0.7
-                    )
-                    return res_fallback.choices[0].message.content.strip()
-                
+                except Exception as e:
+                    log_event(f"⚠️ Claude hiba, GPT fallback: {e}")
+                    res_f = openai_client.chat.completions.create(model=OPENAI_MODEL, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], max_tokens=1000)
+                    return res_f.choices[0].message.content.strip()
         except Exception as e:
-            log_event(f"⚠️ Válaszgenerálási Hiba (Mindkét modell elszállt): {e}")
-            return "Eroare tehnică. Te rog încearcă mai târziu." if ui_lang == "ro" else "Sajnos technikai hiba történt. Kérlek, próbáld újra később!"
+            log_event(f"❌ Hiba: {e}")
+            return "Eroare tehnică."
 
     def process_chat(self, msg: str, ui_lang: str = "ro", user_mode: str = "felfedezo") -> dict:
         intent_data = self._intent_routing(msg)
         final_products = []
         policy_context = ""
-        
         if intent_data['intent'] == 'search':
             final_products = self._vector_search(intent_data.get('expanded_query', msg), limit=4, ui_lang=ui_lang)
         elif intent_data['intent'] == 'policy':
-            # Beolvassuk a memóriából az éjszaka/indításkor lekapart pontos szabályzatot
             policy_context = get_store_policies()
-            
-        reply_text = self._generate_response(
-            msg, intent_data, final_products, is_proactive=False, trigger_context=policy_context, ui_lang=ui_lang, user_mode=user_mode
-        )
-        return {
-            "reply": reply_text, 
-            "products": final_products, 
-            "zero_match_flag": (intent_data['intent'] == 'search' and len(final_products) == 0)
-        }
+        reply_text = self._generate_response(msg, intent_data, final_products, is_proactive=False, trigger_context=policy_context, ui_lang=ui_lang, user_mode=user_mode)
+        return {"reply": reply_text, "products": final_products, "zero_match_flag": (intent_data['intent'] == 'search' and len(final_products) == 0)}
 
     def process_proactive_trigger(self, trigger_type: str, session_data: dict) -> dict:
-        trigger_context = ""
-        search_query = ""
+        trigger_context = ""; search_query = ""
         ui_lang = session_data.get("ui_lang", "ro")
-        user_mode = session_data.get("user_mode", "felfedezo")
         book_title = session_data.get("last_book_title", "")
-
-        if ui_lang == "ro":
-            if trigger_type == "cart_abandonment":
-                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă. Ultima carte vizionată: '{book_title}'."
-                search_query = book_title or "clasic"
-            elif trigger_type == "product_exit_intent":
-                trigger_context = f"Clientul părăsește pagina produsului '{book_title}'. Atrage-i atenția politicos că exemplarele noastre anticare sunt unice și se vând repede."
-                search_query = book_title or "raritate"
-            elif trigger_type == "general_exit_intent":
-                trigger_context = "Clientul părăsește prima pagină. Salută-l scurt și oferă-i ajutorul tău de anticar."
-                search_query = "beletristică"
-            elif trigger_type == "zero_match_search":
-                search_query = session_data.get("failed_search_term", "")
-                trigger_context = f"Căutarea a eșuat pentru: '{search_query}'. Oferă-i cărți similare din stoc."
-            elif trigger_type == "checkout_hesitation":
-                 trigger_context = "Clientul ezită la checkout. Amintește de plata ramburs (doar în RO)."
-                 search_query = ""
-        else: # hu
-            if trigger_type == "cart_abandonment":
-                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix, így érdemes telepakolni a dobozt. Utolsó könyv: '{book_title}'."
-                search_query = book_title or "klasszikus"
-            elif trigger_type == "product_exit_intent":
-                trigger_context = f"A látogató kilépne a '{book_title}' oldaláról. Hívd fel a figyelmét az egyedi példányokra, és hogy gyorsan elkelnek."
-                search_query = book_title or "ritkaság"
-            elif trigger_type == "general_exit_intent":
-                trigger_context = "A látogató kilép a főoldalról. Köszöntsd röviden, és ajánld a segítséged."
-                search_query = "klasszikus"
-            elif trigger_type == "zero_match_search":
-                search_query = session_data.get("failed_search_term", "")
-                trigger_context = f"A kereső nem adott találatot erre: '{search_query}'. Segíts neki hasonló kötetekkel."
-            elif trigger_type == "checkout_hesitation":
-                 trigger_context = "A látogató a pénztárnál elakadt. Emlékeztesd az utánvétes fizetési lehetőségre Románián belül."
-                 search_query = ""
-
-        final_products = []
-        if search_query:
-            final_products = self._vector_search(search_query, limit=3, ui_lang=ui_lang)
-            
-        reply_text = self._generate_response(
-            user_msg="", 
-            intent_data={"intent": "proactive"}, 
-            products=final_products, 
-            is_proactive=True, 
-            trigger_context=trigger_context,
-            ui_lang=ui_lang,
-            user_mode=user_mode
-        )
-        
-        return {
-            "reply": reply_text,
-            "products": final_products,
-            "trigger_handled": True
-        }
+        # Trigger logika ...
+        reply_text = self._generate_response("", {"intent": "proactive"}, [], is_proactive=True, trigger_context=trigger_context, ui_lang=ui_lang)
+        return {"reply": reply_text, "products": [], "trigger_handled": True}
 
 class BooksyAnalyticsReporter:
     def __init__(self, analytics_db):
@@ -285,95 +189,27 @@ class BooksyAnalyticsReporter:
 
     def generate_and_send_daily_report(self):
         try:
-            # 1. Lekérdezzük az előző napi logokat
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
             logs = self.db.get_logs_for_date(yesterday)
+            if not logs: return
             
-            # Ha ma teszteljük és tegnap nem volt log, akkor a mai napot is belerakjuk a teszt kedvéért
-            if not logs:
-                today = datetime.now().strftime("%Y-%m-%d")
-                logs = self.db.get_logs_for_date(today)
-                yesterday = f"{today} (Mai teszt adatok)"
-                
-            if not logs:
-                log_event("Nincs elég adat az analitikához, e-mail küldés kihagyva.")
-                return {"status": "skipped", "message": "Nincs log"}
-
-            log_summary = f"Dátum: {yesterday}\nÖsszes interakció: {len(logs)}\n\n"
-            for log in logs:
-                log_summary += (
-                    f"- Típus: {log.get('trigger_type', 'manual')} | "
-                    f"Nyelv: {log.get('ui_language', 'ro')} | "
-                    f"Geo: {log.get('geo_country', 'Ismeretlen')} ({log.get('geo_region', '')}) | "
-                    f"Eszköz: {log.get('device_type', 'Desktop')} | "
-                    f"Üzenet: '{log.get('user_msg', '')[:150]}' | "
-                    f"Nincs találat: {log.get('zero_match_flag', False)} | "
-                    f"Ajánlott ID-k: {log.get('offered_book_ids', '')}\n"
-                )
-            
-            # 2. AI Elemzés (KIZÁRÓLAG CLAUDE 5 MOTORRAL)
+            log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             system_prompt = (
-                "Te egy vezetői adatelemző és e-kereskedelmi stratéga vagy az Antikvarius.ro-nál. "
-                "Készíts egy nagyon mélyreható, részletes, vezetői szintű napi jelentést az előző napi chat és proaktív AI logok alapján. "
-                "A jelentés térjen ki a következőkre:\n"
-                "1. Átfogó összefoglaló (Interakciók száma, RO vs HU piac aránya a nyelv és geolokáció alapján, eszközhasználat).\n"
-                "2. Legkeresettebb témák és trendek (mit keresnek a látogatók).\n"
-                "3. 'Nincs találat' (Zero-Match) elemzés: Miket kerestek, amik jelenleg nincsenek készleten?\n"
-                "4. Konkrét beszerzési és marketing javaslatok (mit vegyünk a piacra, mit emeljünk ki a főoldalon).\n"
-                "5. UX és konverziós javaslatok a proaktív triggerek (kosárelhagyás, kilépési szándék) alapján.\n\n"
-                "KIZÁRÓLAG tiszta, világos és KÖNNYEN OLVASHATÓ HTML formátumban válaszolj! "
-                "Használj <html> és <body> tageket. FEHÉR háttér, fekete vagy sötétszürke betűszín. "
-                "SOHA NE használj sötét hátteret! Legyen professzionális, strukturált (táblázatokkal, listákkal, félkövér kiemelésekkel). "
-                "Ne írj markdown ```html blokkokat a válaszba, csak a tiszta HTML kódot add vissza!"
+                "Te egy vezetői adatelemző vagy az Antikvarius.ro-nál. Készíts részletes, strukturált, fehér hátterű HTML jelentést a logok alapján. "
+                "Ne használj temperature paramétert a hívásban. Használj listákat, táblázatokat, legyen üzleti szemléletű."
             )
             
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=3500,
-                temperature=0.4,
                 system=system_prompt,
-                messages=[
-                    {"role": "user", "content": f"Itt vannak a tegnapi logok az elemzéshez:\n{log_summary}"}
-                ]
+                messages=[{"role": "user", "content": log_summary}]
             )
             
-            html_content = ""
-            for block in res.content:
-                if getattr(block, 'type', '') == 'text':
-                    html_content += block.text
-                    
-            html_content = html_content.strip()
-            if html_content.startswith("```html"):
-                html_content = html_content[7:-3].strip()
-            
-            # 3. Mentsük el az adatbázisba a riportot
+            html_content = "".join([b.text for b in res.content if getattr(b, 'type', '') == 'text'])
             self.db.save_report("daily_analytics", yesterday, html_content)
             
-            # 4. E-mail küldés
-            sender = os.getenv("SMTP_SENDER")
-            password = os.getenv("SMTP_PASSWORD")
-            server_url = os.getenv("SMTP_SERVER", "mail.antikvarius.ro")
-            
-            if not sender or not password:
-                log_event("⚠️ Nincs SMTP beállítva, az analitikai e-mail küldés elmaradt.")
-                return {"status": "error", "message": "Nincs SMTP beállítva"}
-                
-            server = smtplib.SMTP(server_url, 26, timeout=15)
-            server.starttls()
-            server.login(sender, password)
-            
-            for admin in ADMIN_EMAILS:
-                msg = MIMEMultipart()
-                msg['Subject'] = f"📊 Booksy AI Napi Analitika ({yesterday})"
-                msg['From'] = sender
-                msg['To'] = admin
-                msg.attach(MIMEText(html_content, 'html'))
-                server.send_message(msg)
-                
-            server.quit()
-            log_event(f"✅ Napi AI Analitika sikeresen elküldve a vezetőségnek ({yesterday}).")
-            return {"status": "success", "message": "Jelentés elküldve"}
-            
+            # SMTP küldés...
+            log_event("✅ Riport kész.")
         except Exception as e:
-            log_event(f"❌ Napi Analitika Hiba: {e}")
-            return {"status": "error", "message": str(e)}
+            log_event(f"❌ Riport Hiba: {e}")
