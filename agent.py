@@ -159,9 +159,9 @@ class BooksyProactiveAgent:
                         messages=[{"role": "user", "content": user_content}]
                     )
                     final_text = ""
-                    # Golyóálló kinyerés Claude 5 esetére
+                    # Golyóálló kinyerés Claude 5 esetére, ignorálva a ThinkingBlock-okat
                     for block in res.content:
-                        if getattr(block, 'type', '') == 'text':
+                        if hasattr(block, 'type') and block.type == 'text':
                             final_text += block.text
                     return final_text.strip()
                 except Exception as e:
@@ -217,9 +217,9 @@ class BooksyAnalyticsReporter:
                 "Foglald össze röviden, 3-4 pontban, tényekre támaszkodva."
             )
             
-            # A Gemini új generációs API hívása beépített Google Search groundinggal
+            # Javítva a kivezetett (deprecated) modellnév az aktuálisra (gemini-2.0-flash)
             response = gemini_client.models.generate_content(
-                model='gemini-1.5-flash',
+                model='gemini-2.0-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[{"google_search": {}}]
@@ -234,7 +234,7 @@ class BooksyAnalyticsReporter:
                 
         except Exception as e:
             log_event(f"⚠️ Hiba a valós idejű trendek lekérésekor: {e}")
-            return "Az élő internetes trendadatok lekérése nem sikerült. Kérlek, támaszkodj az általános könyvpiaci tudásodra a jelentésnél."
+            return "Az élő internetes trendadatok lekérése jelenleg nem sikerült. Kérlek, támaszkodj a széleskörű könyvpiaci tudásodra."
 
     def generate_and_send_daily_report(self):
         try:
@@ -250,68 +250,19 @@ class BooksyAnalyticsReporter:
             # 1. Lekérjük a valós Google Trends adatokat a Gemini-vel
             real_time_trends = self.get_real_time_market_trends()
 
-            # 2. Átadjuk az adatokat és a fix HTML sablont a Claude-nak
-            html_skeleton = """
-            <!DOCTYPE html>
-            <html lang="hu">
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
-                    .container { max-width: 800px; margin: auto; background: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
-                    h1 { color: #0b57d0; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; font-size: 24px; }
-                    h2 { color: #1a73e8; margin-top: 30px; font-size: 18px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
-                    h3 { color: #333; font-size: 16px; margin-top: 20px; }
-                    .kpi-container { display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; }
-                    .kpi-card { flex: 1; background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px; padding: 15px; text-align: center; min-width: 150px; }
-                    .kpi-value { font-size: 24px; font-weight: bold; color: #0b57d0; }
-                    .kpi-label { font-size: 12px; color: #666; text-transform: uppercase; }
-                    .highlight { background-color: #e8f0fe; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0; border-radius: 4px; }
-                    .warning { background-color: #fef0f0; border-left: 4px solid #d93025; padding: 15px; margin: 15px 0; border-radius: 4px;}
-                    ul { padding-left: 20px; }
-                    li { margin-bottom: 8px; }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>📊 Antikvarius.ro – Vezetői AI Analitika</h1>
-                    <p><strong>Dátum:</strong> {yesterday}</p>
-                    
-                    <!-- KPI SZEKCIÓ -->
-                    <div class="kpi-container">
-                        <!-- Töltsd ki a KPI kártyákat az interakciókkal és arányokkal -->
-                    </div>
-
-                    <h2>🌍 1. Piaci Trendek (Google Keresések alapján)</h2>
-                    <div class="highlight">
-                        <!-- Írd le a valós idejű trendeket és elemzésüket itt -->
-                    </div>
-
-                    <h2>🔍 2. Keresési Elemzés és 'Nincs Találat' (Zero-Match)</h2>
-                    <div class="warning">
-                        <!-- Emeled ki, mit kerestek sikertelenül, és miért probléma ez -->
-                    </div>
-                    
-                    <h2>📉 3. UX és Súrlódás (Kosárelhagyás, Fizetés)</h2>
-                    <!-- Emezd ki a proaktív triggereket (cart abandonment, stb) -->
-
-                    <h2>💡 4. Beszerzési Javaslatok a Vezetőségnek</h2>
-                    <!-- A Zero-match és a Piaci trendek összevetése -->
-                </div>
-            </body>
-            </html>
-            """
-
+            # 2. Átadjuk az adatokat a Claude-nak, szigorú utasításokkal
             system_prompt = (
-                f"Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál. "
-                "A feladatod egy profitábilis, vezetői jelentés megírása a mellékelt HTML sablon (Skeleton) alapján.\n\n"
-                f"1. VALÓS IDEJŰ WEBES TRENDEK (Ezt a Google biztosította most, használd fel az elemzésben!):\n{real_time_trends}\n\n"
-                "UTASÍTÁSOK:\n"
-                "- Fogd a megadott HTML vázat, és TÖLTSD KI a megfelelő adatokkal és a te elemző, C-level szövegeddel a megjegyzések (<!-- ... -->) helyén.\n"
-                "- A kimeneted KIZÁRÓLAG az érvényes, kiegészített HTML kód lehet! Szigorúan a <html> taggel kell kezdődnie és a </html> taggel végződnie.\n"
-                "- TILOS bármilyen markdown kódblokkot (pl. ```html) vagy magyarázó szöveget tenni a HTML elé vagy mögé!\n"
-                "- Végezz mély elemzést: Keresd meg a logokban a hiánycikkeket (Zero-match), és vesd össze azokat a megadott valós webes trendekkel. Tegyél javaslatot a beszerzésre!\n"
-                "- Értékeld a kosárelhagyási és fizetési akadályokat (friction)."
+                "Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál. "
+                "A feladatod egy profitábilis, vezetői jelentés megírása HTML formátumban.\n\n"
+                f"VALÓS IDEJŰ WEBES TRENDEK (A Google biztosította, használd fel az elemzésben!):\n{real_time_trends}\n\n"
+                "UTASÍTÁSOK A JELENTÉSHEZ:\n"
+                "A kimeneted KIZÁRÓLAG egy érvényes HTML kód lehet! (Nem kell markdown blokk, csak a nyers HTML).\n"
+                "Készíts egy profi kinézetű jelentést a következőkről:\n"
+                "1. Átfogó Összefoglaló (statisztikák az interakciókról és nyelvhasználatról).\n"
+                "2. 'Nincs Találat' (Zero-Match) Elemzés: Keresd meg a logokban, mik voltak a sikertelen keresések, és miért.\n"
+                "3. Súrlódási pontok: Kosárelhagyások, fizetési nehézségek elemzése.\n"
+                "4. Beszerzési Javaslatok: Vesd össze a felhasználói kereséseket a biztosított piaci trendekkel, és javasolj konkrét könyveket/kategóriákat beszerezni!\n"
+                "Formázás: Használj modern, letisztult CSS-t (fehér háttér, kék címsorok, szürke árnyékok a táblázatoknak/kártyáknak)."
             )
             
             log_event("🧠 Claude elemző processz indítása...")
@@ -320,36 +271,41 @@ class BooksyAnalyticsReporter:
                 max_tokens=4000,
                 system=system_prompt,
                 messages=[
-                    {"role": "user", "content": f"Itt vannak a tegnapi logok. Kérlek, add vissza a kitöltött HTML-t.\n\nLogok:\n{log_summary}\n\nHTML Sablon:\n{html_skeleton}"}
+                    {"role": "user", "content": f"Itt vannak a tegnapi logok. Kérlek, írd meg az elemző HTML-t.\n\nLogok:\n{log_summary}"}
                 ]
             )
             
-            # Golyóálló kinyerés a Claude válaszból
+            # Golyóálló kinyerés a Claude 5 ThinkingBlock-jai miatt
             raw_content = ""
             if res.content:
-                raw_content = res.content[0].text.strip()
+                for block in res.content:
+                    # Szigorúan csak a TextBlock típusú elemeket vesszük ki (ignoraljuk a thinking blokkokat)
+                    if hasattr(block, 'type') and block.type == 'text':
+                        raw_content += block.text
             
-            # Reguláris kifejezéssel levadásszuk a tiszta HTML-t, kizárva a markdown szemetet
+            raw_content = raw_content.strip()
+
+            # HTML tisztítás és validálás (Regex alapú)
             clean_html = ""
             html_match = re.search(r'(?i)<html[\s\S]*</html>', raw_content)
             
             if html_match:
                 clean_html = html_match.group(0)
             else:
-                # Ha a Claude mégis "elfelejtette" a html taget, letisztítjuk és mi csomagoljuk be
                 log_event("⚠️ A Claude nem rakott <html> taget a válaszba, kényszerített csomagolás aktiválva.")
                 clean_text = re.sub(r"^```(html)?\s*", "", raw_content, flags=re.IGNORECASE|re.MULTILINE)
                 clean_text = re.sub(r"```\s*$", "", clean_text, flags=re.IGNORECASE|re.MULTILINE)
-                clean_html = f"<!DOCTYPE html>\n<html lang=\"hu\">\n<head>\n<meta charset=\"UTF-8\">\n<style>body {{ font-family: Arial, sans-serif; padding: 20px; }}</style>\n</head>\n<body>\n{clean_text}\n</body>\n</html>"
+                clean_html = f"<!DOCTYPE html>\n<html lang=\"hu\">\n<head>\n<meta charset=\"UTF-8\">\n<style>body {{ font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }} h1 {{ color: #0b57d0; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; font-size: 24px; }}</style>\n</head>\n<body>\n{clean_text}\n</body>\n</html>"
 
-            if len(clean_html) < 100:
-                log_event(f"❌ A megtisztított HTML túl rövid (Hossz: {len(clean_html)}). Generálás megszakítva.")
+            if len(clean_html) < 200:
+                log_event(f"❌ A megtisztított HTML gyanúsan rövid (Hossz: {len(clean_html)}). Generálás megszakítva.")
+                log_event(f"Claude Nyers válasz: {raw_content}")
                 return
 
             log_event(f"✅ Riport generálva. HTML hossza: {len(clean_html)} karakter.")
             self.db.save_report("daily_analytics", yesterday, clean_html)
             
-            # 3. SMTP E-mail Küldés Szigorú UTF-8 Kódolással és Sendmail formátummal
+            # 3. SMTP E-mail Küldés Szigorú UTF-8 Kódolással és Envelope formátummal
             smtp_server = os.getenv("SMTP_SERVER")
             smtp_sender = os.getenv("SMTP_SENDER")
             smtp_pass = os.getenv("SMTP_PASSWORD")
@@ -368,7 +324,7 @@ class BooksyAnalyticsReporter:
                 msg['Date'] = formatdate(localtime=True)
                 msg['Message-ID'] = make_msgid()
                 
-                # KIFEJEZETT UTF-8 kódolás (A Spam szűrők és ékezetek miatt KÖTELEZŐ)
+                # KIFEJEZETT UTF-8 kódolás
                 html_part = MIMEText(clean_html, 'html', 'utf-8')
                 msg.attach(html_part)
                 
