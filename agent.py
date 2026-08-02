@@ -26,6 +26,8 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # API AZONOSÍTÓK - 2026
 CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
+# A Google kivezette a régi modelleket a generateContent-ből. A legújabb 2026-os trendekhez az új Interactions API-t és a gemini-3-flash-preview modellt kell használni.
+GEMINI_MODEL = "gemini-3-flash-preview"
 
 from database import DBHandler, log_event, get_store_policies, ADMIN_EMAILS
 
@@ -105,7 +107,6 @@ class BooksyProactiveAgent:
             return []
 
     def _generate_response(self, user_msg: str, intent_data: dict, products: list, is_proactive: bool = False, trigger_context: str = "", ui_lang: str = "ro", user_mode: str = "felfedezo") -> str:
-        
         if ui_lang == "hu":
             lang_instruction = "MAGYARUL (Hungarian)"
             persona_style = "Művelt, tapasztalt, rendkívül segítőkész antikvárius szakértő vagy."
@@ -209,34 +210,38 @@ class BooksyAnalyticsReporter:
         self.db = analytics_db
 
     def get_real_time_market_trends(self):
-        """Gemini-vel lekéri az aktuális Google trendeket, biztosított fallback opcióval."""
-        log_event("🔍 Valós idejű webes trendelemzés indítása a Gemini-vel...")
+        """Gemini-vel lekéri az aktuális Google trendeket. 2026-os Interactions API használata."""
+        log_event("🔍 Valós idejű webes trendelemzés indítása a Gemini-vel (Interactions API)...")
         try:
             prompt = (
-                "Készíts egy nagyon rövid, 3 pontos webes kutatást az aktuális romániai és erdélyi "
-                "könyveladási trendekről (Milyen könyveket és írókat keresnek most a leginkább?)."
+                "Készíts egy rövid, 3 pontos webes kutatást az aktuális romániai és erdélyi "
+                "könyveladási trendekről. Fókuszálj arra, hogy milyen könyveket és írókat keresnek a legtöbben."
             )
             
-            # A stabil gemini-2.5-flash modell használata
-            response = gemini_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[{"google_search": {}}]
-                )
+            interaction = gemini_client.interactions.create(
+                model=GEMINI_MODEL,
+                input=prompt,
+                tools=[{"type": "google_search"}],
+                generation_config={
+                    "temperature": 0.7,
+                    "max_output_tokens": 1000
+                }
             )
             
-            if response and response.text:
+            # Megkeressük a szöveges kimenetet a válaszobjektumok között
+            text_output = next((o for o in interaction.outputs if o.type == "text"), None)
+            
+            if text_output and text_output.text:
                 log_event("✅ Valós idejű trendadatok sikeresen lekérve.")
-                return response.text
+                return text_output.text
             else:
-                raise Exception("Üres választ adott a Gemini.")
+                raise Exception("A Gemini API hívás sikeres volt, de nem érkezett szöveges válasz.")
                 
         except Exception as e:
             log_event(f"⚠️ Hiba a valós idejű trendek lekérésekor: {e}")
             return (
-                "KÜLSŐ ADAT NEM ELÉRHETŐ. Kérlek, KIZÁRÓLAG a mellékelt belső "
-                "logokból és a saját tudásodból vonj le következtetéseket a trendekről!"
+                "INTERNETES ADAT NEM ELÉRHETŐ. Kérlek, KIZÁRÓLAG a mellékelt belső "
+                "logokból és a saját tudásodból vonj le következtetéseket az esetleges trendekről."
             )
 
     def generate_and_send_daily_report(self):
@@ -250,34 +255,38 @@ class BooksyAnalyticsReporter:
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
-            # 1. Trendek lekérése
+            # 1. Trendek lekérése a Google-től (már az új API-val)
             real_time_trends = self.get_real_time_market_trends()
 
-            # 2. Szigorú MARDKOWN prompt (TILOS A HTML)
+            # 2. Claude Prompt - SZIGORÚAN tiszta szöveget / Markdownt kérünk.
+            # Kikapcsoljuk az 'Extended Thinking'-et, hogy ne eméssze fel a max_tokens-t (a 2026-os Sonnet 5 modellnél).
+            # A max_tokens-t feltoljuk 8000-re, hogy esélye se legyen csonkolni a választ.
             system_prompt = (
                 "Te egy Vezetői Adatelemző vagy az Antikvarius.ro-nál.\n\n"
                 f"PIACI KONTEXTUS / TRENDEK:\n{real_time_trends}\n\n"
-                "SÉRTHETETLEN SZABÁLY: Készíts egy professzionális, jól tagolt VEZETŐI JELENTÉST Markdown formátumban!\n"
-                "SOHA, SEMMILYEN KÖRÜLMÉNYEK KÖZÖTT NE HASZNÁLJ HTML TAGEKET! CSAK TISZTA SZÖVEGET ÉS MARKDOWNT ÍRJ!\n"
+                "SÉRTHETETLEN SZABÁLYOK:\n"
+                "1. Készíts egy professzionális, jól tagolt VEZETŐI JELENTÉST tiszta Markdown formátumban!\n"
+                "2. SOHA NE HASZNÁLJ HTML TAGEKET! (Ne használj <html>, <div>, stb. címkéket).\n"
+                "3. Légy lényegretörő, hogy a jelentés biztosan beleférjen a keretbe.\n\n"
                 "A jelentés KÖTELEZŐ szerkezete (használj '# ' címsorokat):\n"
-                "# 1. Átfogó Összefoglaló (Interakciók, arányok, készülékek)\n"
-                "# 2. Zero-Match Elemzés (Mik voltak a konkrét sikertelen keresések, amiket meg kell vennünk?)\n"
-                "# 3. UX és Súrlódások (Elakadások, kosárelhagyások elemzése)\n"
-                "# 4. Vezetői Stratégia (Konkrét beszerzési javaslatok a trendek alapján)\n\n"
-                "Légy szakmai, lényegretörő, és emeld ki a legfontosabb szavakat **csillagokkal**."
+                "# 1. Átfogó Összefoglaló (Interakciók, arányok, eszközök)\n"
+                "# 2. Keresési Elemzés (Mik voltak a konkrét sikertelen keresések (zero-match), amikre a jövőben figyelnünk kell?)\n"
+                "# 3. UX és Vásárlói Súrlódások (Elakadások, kosárelhagyások elemzése)\n"
+                "# 4. Vezetői Stratégia (Konkrét beszerzési javaslatok a helyi trendek és a logok alapján)\n"
             )
             
-            log_event("🧠 Claude elemző processz indítása (Tiszta Szöveg Mód)...")
+            log_event("🧠 Claude elemző processz indítása (Tiszta Szöveg Mód, Megnövelt Token Limittel)...")
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
-                max_tokens=2500,
+                max_tokens=8000,
                 system=system_prompt,
                 messages=[
-                    {"role": "user", "content": f"Elemezd a logokat és készítsd el a jelentést:\n\n{log_summary}"}
+                    {"role": "user", "content": f"Elemezd a következő logokat és készítsd el a Markdown jelentést:\n\n{log_summary}"}
                 ]
             )
             
-            # 3. Golyóálló "Brute-Force" adatkinyerés
+            # Nem szórakozunk attribútumokkal (mert belezavarodhat a ThinkingBlock-ba). 
+            # Stringgé alakítjuk a teljes tartalom-tömböt, aztán megtisztítjuk.
             raw_content = ""
             if hasattr(res, 'content'):
                 for block in res.content:
@@ -286,7 +295,7 @@ class BooksyAnalyticsReporter:
                     elif hasattr(block, 'text'):
                         raw_content += block.text
                 
-                # Ha minden kötél szakad és továbbra sincs szöveg, a teljes objektumot stringgé alakítjuk
+                # Ha minden kötél szakad (pl. az Anthropic teljesen átírta a blokk struktúrát)
                 if not raw_content:
                     raw_content = str(res.content)
             else:
@@ -294,12 +303,19 @@ class BooksyAnalyticsReporter:
                 
             raw_content = raw_content.strip()
             
+            # Fallback vizsgálat: ha még a brute-force kinyerés is csődöt mondana
             if len(raw_content) < 50:
                 log_event(f"⚠️ A kinyert szöveg gyanúsan rövid ({len(raw_content)} karakter). Fallback használata.")
-                raw_content = "A rendszer nem tudta kinyerni az API választ. Nyers adat: " + raw_content
+                raw_content = f"A rendszer nem tudta kinyerni az API választ. Nyers adat: {raw_content}"
+            else:
+                # Eltüntetjük az API által esetlegesen bent hagyott objektum-szeméteket (ha str(res.content)-et használtuk)
+                raw_content = re.sub(r"^\[TextBlock\(text='", "", raw_content)
+                raw_content = re.sub(r"', type='text'\)\]$", "", raw_content)
+                # Továbbá a Claude imád "Itt a jelentés:" típusú bevezetőket írni.
+                raw_content = raw_content.replace('Itt a jelentés:\n', '')
+                raw_content = raw_content.replace('Íme a kért jelentés:\n', '')
 
-            
-            # Ez a Python kód alakítja a tiszta szöveget szép HTML-lé, így a Claude nem ronthatja el
+            # Így a Claude-nak nem kell a dizájnnal szenvednie, a levél viszont gyönyörű lesz.
             html_content = raw_content.replace('\n', '<br>')
             html_content = re.sub(r'\*\*(.*?)\*\*', r'<strong style="color: #333;">\1</strong>', html_content)
             html_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', html_content)
@@ -341,10 +357,11 @@ class BooksyAnalyticsReporter:
                 msg['Subject'] = f"📊 Antikvarius.ro Vezetői AI Analitika - {yesterday}"
                 msg['From'] = smtp_sender
                 msg['To'] = ", ".join(ADMIN_EMAILS)
+                # Az érvényes dátum és üzenet azonosító kötelező a jó spam ratinghez
                 msg['Date'] = formatdate(localtime=True)
                 msg['Message-ID'] = make_msgid()
                 
-                # Csatoljuk a nyers szöveget (Plain text fallback)
+                # Csatoljuk a nyers szöveget (Plain text fallback a szigorú levelezőknek)
                 text_part = MIMEText(raw_content, 'plain', 'utf-8')
                 msg.attach(text_part)
                 
@@ -356,6 +373,7 @@ class BooksyAnalyticsReporter:
                 with smtplib.SMTP(smtp_server, port, timeout=20) as server:
                     server.starttls()
                     server.login(smtp_sender, smtp_pass)
+                    # Szigorú sendmail hívás explicit címzett listával
                     server.sendmail(smtp_sender, ADMIN_EMAILS, msg.as_string())
                 
                 log_event("✅ Napi AI Analitika sikeresen elküldve a vezetőségnek.")
