@@ -12,6 +12,7 @@ import sqlite3
 import traceback
 import chromadb
 import pytz
+import json
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 import markdownify
@@ -40,9 +41,13 @@ def clean_price_raw(raw_price):
     return f"{cleaned} RON" if cleaned else str(raw_price)
 
 def html_to_markdown_clean(raw_html):
+    """HTML táblázatokat és listákat AI által olvasható markdownba alakít."""
     if not raw_html: return ""
-    try: return markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style']).strip()
-    except: return str(raw_html)
+    try: 
+        # A markdownify segít megtartani a táblázat szerkezetét
+        return markdownify.markdownify(raw_html, heading_style="ATX", strip=['script', 'style']).strip()
+    except: 
+        return str(raw_html)
 
 def clean_pii(text):
     if not text: return ""
@@ -59,6 +64,52 @@ def get_geo_from_ip(ip_address):
             return data.get("countryCode", "Ismeretlen"), data.get("regionName", "Ismeretlen")
     except: pass
     return "Ismeretlen", "Ismeretlen"
+
+def update_store_policies():
+    """Letölti a céges szabályzatokat, kinyeri a lényeget és JSON-ba menti a gyors eléréshez."""
+    log_event("🔄 Céges Szabályzatok (Policies) háttérfrissítése indul...")
+    urls = [
+        "https://www.antikvarius.ro/contact/",
+        "https://www.antikvarius.ro/termeni-si-conditii-de-utilizare/",
+        "https://www.antikvarius.ro/informatii-despre-plata/",
+        "https://www.antikvarius.ro/informatii-despre-livrare/"
+    ]
+    policies_data = ""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, 'html.parser')
+                # A WooCommerce/Breakdance oldalak fő tartalmi része
+                content = soup.select_one('.entry-content') or soup.find('main') or soup.find('body')
+                if content:
+                    # Letisztítjuk a felesleges HTML-t, de a táblázatokat megtartjuk!
+                    md_text = html_to_markdown_clean(str(content))
+                    # Csak a lényeget tartjuk meg, hogy ne szálljon el a prompt mérete
+                    policies_data += f"--- FORRÁS: {url} ---\n{md_text[:2500]}\n\n"
+        except Exception as e:
+            log_event(f"⚠️ Hiba a {url} beolvasásakor: {e}")
+            
+    if policies_data:
+        try:
+            with open(STORE_POLICIES_FILE, "w", encoding="utf-8") as f:
+                json.dump({"last_updated": str(datetime.now(LOCAL_TZ)), "content": policies_data}, f, ensure_ascii=False, indent=4)
+            log_event("✅ Céges Szabályzatok sikeresen elmentve!")
+        except Exception as e:
+            log_event(f"⚠️ Hiba a szabályzat mentésekor: {e}")
+
+def get_store_policies() -> str:
+    """Gyorsan beolvassa a lementett szabályzatot a memóriából."""
+    try:
+        if os.path.exists(STORE_POLICIES_FILE):
+            with open(STORE_POLICIES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("content", "")
+    except Exception as e:
+        log_event(f"⚠️ Hiba a szabályzat betöltésekor: {e}")
+    return "A szabályzatok jelenleg nem elérhetők."
 
 def extract_metadata_from_html(raw_html):
     meta = {"publisher": "Ismeretlen", "author": "Ismeretlen"}
@@ -99,11 +150,10 @@ class AnalyticsDB:
                          (id INTEGER PRIMARY KEY AUTOINCREMENT, report_type TEXT, target_date TEXT,
                           content TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
             
-            # Automatikus SQL migráció a hiányzó oszlophoz
             try:
                 c.execute("ALTER TABLE chat_logs ADD COLUMN trigger_type TEXT DEFAULT 'manual'")
             except sqlite3.OperationalError:
-                pass # Az oszlop már létezik
+                pass 
                 
             conn.commit(); conn.close()
         except Exception as e: log_event(f"❌ AnalyticsDB Init Hiba: {e}")
