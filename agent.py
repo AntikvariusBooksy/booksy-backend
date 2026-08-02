@@ -3,11 +3,15 @@ import requests
 from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
-from database import DBHandler, log_event, get_store_policies, ADMIN_EMAILS
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
+import anthropic
+from openai import OpenAI
+from dotenv import load_dotenv
+
+from database import DBHandler, log_event, get_store_policies, ADMIN_EMAILS
 
 load_dotenv()
 
@@ -16,7 +20,7 @@ gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# HIVATALOS 2026-OS CLAUDE 5 API AZONOSÍTÓK! (Javítva)
+# HIVATALOS 2026-OS CLAUDE 5 API AZONOSÍTÓK
 CLAUDE_MODEL = "claude-sonnet-5" 
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -138,7 +142,7 @@ class BooksyProactiveAgent:
         if intent_data.get('intent') == 'policy' and not is_proactive:
             system_prompt += (
                 f"\n\nAZ ANTIKVARIUS.RO HIVATALOS SZABÁLYZATA (Fizetés, Szállítás, Kapcsolat):\n<policy>\n{trigger_context}\n</policy>\n"
-                f"Ezek a hivatalos információk. Használd ezeket a válaszodban! Légy pontos a díjakkal és időtartamokkal kapcsolatban!"
+                f"Ezek a hivatalos informații. Használd ezeket a válaszodban! Légy pontos a díjakkal și időtartamokkal kapcsolatban!"
             )
 
         user_content = f"Üzenet / Message: '{user_msg}'\n\nTalálatok / Results:\n{context_text}"
@@ -147,7 +151,7 @@ class BooksyProactiveAgent:
             if is_proactive:
                 system_prompt += (
                     f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. "
-                    f"Légy nagyon rövid (max 2-3 mondat), természetes, udvarias, de ne légy tolakodó! "
+                    f"Légy nagyon rövid (max 2-3 mondat), természetes, udvarias, dar ne légy tolakodó! "
                     f"Írj KIZÁRÓLAG {lang_instruction}!"
                 )
                 res = openai_client.chat.completions.create(
