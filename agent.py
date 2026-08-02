@@ -1,6 +1,7 @@
 import os, time, json
 import requests
 import smtplib
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -212,7 +213,6 @@ class BooksyAnalyticsReporter:
             
             log_summary = f"Dátum: {yesterday}\nÖsszesen {len(logs)} interakció.\n{json.dumps(logs, indent=2)}"
             
-            # A 2026-os romániai és erdélyi könyvpiaci trendek beépítése a kontextusba
             market_context = (
                 "A 2026-os romániai és erdélyi (főleg Marosvásárhely környéki) könyvpiaci trendek (Bookfest 2026 adatai alapján): "
                 "Hatalmas az érdeklődés a skandináv és nemzetközi thrillerek iránt (pl. Anders & Anette de la Motte, Ragnar Jónasson). "
@@ -225,23 +225,25 @@ class BooksyAnalyticsReporter:
                 f"Te egy Vezetői Adatelemző és E-kereskedelmi Stratéga vagy az Antikvarius.ro-nál. "
                 f"Az alábbi PIACI TRENDEK ismeretében kell dolgoznod: {market_context}\n\n"
                 "FELADAT: Készíts egy MÉLYREHATÓ, vezetői HTML napi jelentést az előző napi chat logok alapján.\n"
-                "A formátum KÖTELEZŐEN tiszta HTML legyen. Fehér háttér, sötétkék és fekete betűk, letisztult modern corporate dizájn (árnyékolt dobozok, táblázatok).\n\n"
-                "A jelentés KÖTELEZŐ elemei (MINDEN ponthoz írj szöveges értékelést!):\n"
-                "1. Átfogó Összefoglaló: KPI adatok (Összes interakció, RO/HU arány, Készülékek). Ezt kövesse egy szöveges értékelés a napi forgalom minőségéről.\n"
-                "2. Keresési Trendek: Milyen témákat/szerzőket kerestek a legtöbbször? \n"
-                "3. 'Nincs találat' (Zero-Match) Elemzés: LISTÁZD KI, hogy miket kerestek, amikor az AI nem talált könyvet! Értékeld a kiesést.\n"
-                "4. UX és Súrlódási (Friction) Elemzés: Mennyi volt a kosárelhagyás (cart_abandonment) vagy a pénztári hezitálás (checkout_hesitation)? Mit jelez ez a weboldal működéséről?\n"
-                "5. Stratégiai és Beszerzési Javaslatok: Vesd össze a napi 'nincs találat' kereséseket a fenti 2026-os piaci trendekkel, és tegyél KONKRÉT javaslatokat beszerzésre és a főoldali kiemelésekre!\n\n"
-                "Szigorúan TILOS markdown kódblokkokat (pl. ```html) használni a válaszban! Csak a nyers HTML kódot add vissza (<html><body>...)."
+                "KÖTELEZŐ elvárás: Fehér háttér, sötétkék és fekete betűk, letisztult modern corporate dizájn.\n"
+                "KÖTELEZŐ az alábbi 5 pont kifejtése:\n"
+                "1. Átfogó Összefoglaló (Napi forgalom értékelése).\n"
+                "2. Keresési Trendek (Milyen témákat/szerzőket kerestek a legtöbbször?).\n"
+                "3. 'Nincs találat' (Zero-Match) Elemzés: Sorold fel a logokból a hiánycikkeket (miket kerestek, ami nem volt), és értékeld a kiesést.\n"
+                "4. UX és Súrlódási Elemzés: Értékeld a logokban szereplő 'cart_abandonment' és 'checkout_hesitation' trigger eseményeket.\n"
+                "5. Beszerzési Javaslatok: Vesd össze a hiánycikkeket a 2026-os piaci trendekkel, és tegyél konkrét javaslatot beszerzésre!\n\n"
+                "Szigorú formai előírás:\n"
+                "A válaszod KIZÁRÓLAG tiszta HTML kód legyen, amely a <html> taggel kezdődik és a </html> taggel végződik. "
+                "TILOS markdown backtickeket (```html) vagy bármilyen más bevezető szöveget írni a kód köré. "
+                "Garantáld, hogy a HTML kód teljes és nem vágod le a végét."
             )
             
-            # Claude 5 hívás (temperature nélkül)
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=4000,
                 system=system_prompt,
                 messages=[
-                    {"role": "user", "content": f"Készítsd el az e-mail HTML jelentést az alábbi logokból:\n{log_summary}"}
+                    {"role": "user", "content": f"Itt vannak a tegnapi logok az elemzéshez:\n{log_summary}"}
                 ]
             )
             
@@ -249,13 +251,14 @@ class BooksyAnalyticsReporter:
             for block in res.content:
                 if getattr(block, 'type', '') == 'text':
                     html_content += block.text
-            
-            # Markdown tisztítás (biztonsági okokból)
-            html_content = html_content.strip()
-            if html_content.startswith("```html"):
-                html_content = html_content[7:]
-            if html_content.endswith("```"):
-                html_content = html_content[:-3]
+
+            # Kőkemény Regex a tisztításra: Csak a <html> és </html> közötti részt tartjuk meg
+            match = re.search(r'(?i)<html.*?>.*</html>', html_content, re.DOTALL)
+            if match:
+                html_content = match.group(0)
+            else:
+                # Ha véletlenül mégsem rakott html taget, legalább a backtickeket irtsuk ki
+                html_content = html_content.replace("```html", "").replace("```", "").strip()
             
             self.db.save_report("daily_analytics", yesterday, html_content)
             
@@ -275,7 +278,6 @@ class BooksyAnalyticsReporter:
             msg.attach(MIMEText(html_content, 'html'))
             
             try:
-                # Az SMTP_PORT opcionális a .env-ben, alapértelmezettként 587
                 port = int(os.getenv("SMTP_PORT", 587))
                 with smtplib.SMTP(smtp_server, port, timeout=15) as server:
                     server.starttls()
