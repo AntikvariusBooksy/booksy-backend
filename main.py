@@ -18,7 +18,8 @@ agent = BooksyProactiveAgent(db_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Nincsenek háttérfolyamatok, mert az AutoUpdater és Analytics modulok nincsenek bekötve.
+    # Jelenleg nincsenek háttérfolyamatok (cron jobok), 
+    # mert az AutoUpdater és Analytics modulok nincsenek bekötve.
     yield
 
 app = FastAPI(lifespan=lifespan)

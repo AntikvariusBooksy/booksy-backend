@@ -13,7 +13,7 @@ gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-CLAUDE_MODEL = "claude-sonnet-5" 
+CLAUDE_MODEL = "claude-3-5-sonnet-latest" 
 OPENAI_MODEL = "gpt-4o-mini"
 
 class BooksyProactiveAgent:
@@ -57,7 +57,7 @@ class BooksyProactiveAgent:
             )
             vec = vec_req.embeddings[0].values
             
-            # Kérünk több találatot, hogy legyen miből szűrni a nyelvet
+            # Kérünk több találatot (15 db), hogy a szűrés után is maradjon könyv
             db_res = self.db.collection.query(
                 query_embeddings=[vec], 
                 n_results=15, 
@@ -75,11 +75,15 @@ class BooksyProactiveAgent:
                         
                     url = p.get('url', '').lower()
                     
-                    # --- NYELVI SZŰRÉS (ALAPÉRTELMEZETT ROMÁN) ---
-                    if ui_lang == 'ro':
-                        if '/hu/' in url: continue # Román oldalon ne legyen /hu/ könyv
-                    else: # ui_lang == 'hu'
-                        if '/hu/' not in url: continue # Magyar oldalon KÖTELEZŐ a /hu/ könyv
+                    # --- A TE PONOTÍTOTT NYELVI URL SZŰRŐD ---
+                    if ui_lang == 'hu':
+                        # Ha a látogató magyarul böngész, az URL-ben KÖTELEZŐ lennie a /hu/ résznek
+                        if '/hu/' not in url: 
+                            continue 
+                    else: # ui_lang == 'ro' (alapértelmezett)
+                        # Ha a látogató románul böngész, az URL-ben TILOS lennie a /hu/ résznek
+                        if '/hu/' in url: 
+                            continue 
 
                     if 'image_url' in p and 'image' not in p: p['image'] = p['image_url']
                     clean_title = p.get('title', '').strip().lower()
@@ -95,42 +99,46 @@ class BooksyProactiveAgent:
 
     def _generate_response(self, user_msg: str, intent_data: dict, products: list, is_proactive: bool = False, trigger_context: str = "", ui_lang: str = "ro", user_mode: str = "felfedezo") -> str:
         policy_text = self._get_policies()
-        context_text = "Nem találtam megfelelő könyvet a raktárban."
-        if products:
-            context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
-
+        
+        # Szigorú nyelvi elválasztás a Prompt számára
         if ui_lang == "hu":
             lang_instruction = "MAGYARUL (Hungarian)"
             persona_style = "Művelt, tapasztalt, rendkívül segítőkész antikvárius szakértő vagy."
+            context_text = "Nem találtam megfelelő könyvet a raktárban."
+            if products:
+                context_text = "\n".join([f"Könyv: {p['title']} - {p.get('author','')} - Ár: {p.get('price','')}. Infó: {p.get('text_preview','')}" for p in products])
         else:
             lang_instruction = "ROMÂNĂ (Romanian - în limba română)"
             persona_style = "Ești un anticar expert, cultivat, pasionat de cărți și foarte amabil."
+            context_text = "Nu am găsit cărți potrivite în stoc."
+            if products:
+                context_text = "\n".join([f"Titlu: {p['title']} - Autor: {p.get('author','')} - Preț: {p.get('price','')}. Descriere: {p.get('text_preview','')}" for p in products])
 
         if user_mode == "vadasz":
-            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra, a raktárkészletre și a rapiditate!"
+            mode_instruction = "A látogató céltudatos (vadász). Légy lényegretörő, pontos, fókuszálj az árakra és a raktárkészletre!" if ui_lang == "hu" else "Vizitatorul este hotărât. Fii precis, axează-te pe preț și stoc!"
         else:
-            mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust, mesélj a cărților hangulatáról, légy inspiráló!"
+            mode_instruction = "A látogató böngészik (felfedező). Adj kulturális kontextust, mesélj a könyvek hangulatáról!" if ui_lang == "hu" else "Vizitatorul explorează. Oferă context cultural, povestește despre atmosfera cărților!"
 
         system_prompt = (
             f"Te Booksy vagy, az antikvarius.ro prémium antikváriumának szaktanácsadója. {persona_style}\n"
             f"Vásárlói profil: {mode_instruction}\n\n"
-            f"Céges tudásbázisod (ÁSZF, szállítás, kapcsolat):\n<company_policies>\n{policy_text}\n</company_policies>\n\n"
-            f"SÉRTHETETLEN ÜZLETI ÉS ETIKAI SZABÁLYOK:\n"
+            f"Céges tudásbázisod:\n<company_policies>\n{policy_text}\n</company_policies>\n\n"
+            f"SÉRTHETETLEN SZABÁLYOK:\n"
             f"1. A szállítási díj zónánként FIX! SOHA NICS INGYENES SZÁLLÍTÁS!\n"
             f"2. Utánvétes fizetés KIZÁRÓLAG Románián belül lehetséges!\n"
-            f"3. KIZÁRÓLAG a raktári találatokban szereplő létező cărților hivatkozhatsz!\n"
-            f"4. A VÁLASZT KÖTELEZŐEN ÉS KIZÁRÓLAG {lang_instruction} FOGALMAZD MEG!\n"
-            f"5. Formázás: ZÉRÓ MARKDOWN kódblokk, zéró HTML címke!\n"
+            f"3. A VÁLASZT KÖTELEZŐEN ÉS KIZÁRÓLAG {lang_instruction} FOGALMAZD MEG!\n"
+            f"4. Formázás: ZÉRÓ HTML címke!\n"
         )
 
-        user_content = f"Felhasználó üzenete: '{user_msg}'\n\nRaktári találatok:\n{context_text}"
+        user_content = f"Üzenet / Message: '{user_msg}'\n\nTalálatok / Results:\n{context_text}"
 
         try:
             if is_proactive:
-                # Sebesség optimalizálás: GPT-4o-mini a proaktív üzenetekhez (1-2s válaszidő)
+                # SEBESSÉG OPTIMALIZÁLÁS: A proaktív megkeresések a villámgyors GPT-4o-mini-n futnak (1-2 másodperc)
                 system_prompt += (
                     f"\nFIGYELEM: Ez egy PROAKTÍV megszólítás. A helyzet: {trigger_context}. "
-                    f"Légy nagyon scurt (max 3-4 mondat), természetes, udvarias!"
+                    f"Légy nagyon rövid (max 3-4 mondat), természetes, udvarias! "
+                    f"Írj KIZÁRÓLAG {lang_instruction}!"
                 )
                 res = openai_client.chat.completions.create(
                     model=OPENAI_MODEL,
@@ -143,7 +151,7 @@ class BooksyProactiveAgent:
                 )
                 return res.choices[0].message.content.strip()
             else:
-                # Normál, mély beszélgetés: Claude 3.5 Sonnet
+                # Normál Chat logikához megmarad a Claude a mély és okos beszélgetéshez
                 res = claude_client.messages.create(
                     model=CLAUDE_MODEL, 
                     max_tokens=1000, 
@@ -178,10 +186,10 @@ class BooksyProactiveAgent:
         user_mode = session_data.get("user_mode", "felfedezo")
         book_title = session_data.get("last_book_title", "")
 
-        # Nyelvi kontextus beállítása a triggerhez (hogy a modell biztosan értse, milyen nyelven kell reagálnia)
+        # Nyelvi kontextus a modellnek
         if ui_lang == "ro":
             if trigger_type == "cart_abandonment":
-                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă (poate adăuga mai multe cărți). Ultima carte: '{book_title}'."
+                trigger_context = f"Atenție: clientul este în coș și vrea să plece. Amintește-i politicos că taxa de livrare este fixă. Ultima carte: '{book_title}'."
                 search_query = book_title or "clasic"
             elif trigger_type == "product_exit_intent":
                 trigger_context = f"Clientul părăsește pagina produsului '{book_title}'. Atrage-i atenția politicos că exemplarele noastre anticare sunt unice."
@@ -197,7 +205,7 @@ class BooksyProactiveAgent:
                  search_query = ""
         else: # hu
             if trigger_type == "cart_abandonment":
-                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix (több könyvvel megéri). Utolsó könyv: '{book_title}'."
+                trigger_context = f"A látogató a kosár oldalon van, de el akarja hagyni az oldalt. Emlékeztesd, hogy a szállítási díj fix. Utolsó könyv: '{book_title}'."
                 search_query = book_title or "klasszikus"
             elif trigger_type == "product_exit_intent":
                 trigger_context = f"A látogató kilépne a '{book_title}' oldaláról. Hívd fel a figyelmét az egyedi példányokra."
@@ -211,7 +219,6 @@ class BooksyProactiveAgent:
             elif trigger_type == "checkout_hesitation":
                  trigger_context = "A látogató a pénztárnál elakadt. Emlékeztesd az utánvétes fizetési lehetőségre."
                  search_query = ""
-
 
         final_products = []
         if search_query:
