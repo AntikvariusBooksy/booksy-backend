@@ -210,36 +210,39 @@ class BooksyAnalyticsReporter:
         self.db = analytics_db
 
     def get_real_time_market_trends(self):
-        """Gemini-vel lekéri az aktuális Google trendeket. 2026-os Interactions API használata."""
+        """Gemini-vel lekéri az aktuális Google trendeket. Interactions API használata, golyóálló attribútumkereséssel."""
         log_event(f"🔍 Valós idejű webes trendelemzés indítása a Gemini-vel (Modell: {GEMINI_MODEL})...")
         try:
             prompt = (
-                "Készíts egy rövid, 3 pontos webes kutatást az aktuális romániai és erdélyi "
+                "Készíts egy nagyon rövid, 3 pontos webes kutatást az aktuális romániai és erdélyi "
                 "könyveladási trendekről. Fókuszálj arra, hogy milyen könyveket és írókat keresnek a legtöbben."
             )
             
-            # Hivatalos Interactions API hívás
             interaction = gemini_client.interactions.create(
                 model=GEMINI_MODEL,
                 input=prompt,
                 tools=[{"type": "google_search"}],
                 generation_config={
                     "temperature": 0.7,
-                    "max_output_tokens": 1000
+                    "max_output_tokens": 1500
                 }
             )
             
-            # A 2026-os Google SDK dokumentációja alapján a végső szöveg az output_text-ben található:
+            # Hivatalos dokumentáció szerinti 2026-os API kinyerés a Gemini-től
             if hasattr(interaction, 'output_text') and interaction.output_text:
                 log_event("✅ Valós idejű trendadatok sikeresen lekérve.")
-                return interaction.output_text
-            # Golyóálló fallback az attribútum hiánya esetén
+                return str(interaction.output_text)
             elif hasattr(interaction, 'text') and interaction.text:
                 log_event("✅ Valós idejű trendadatok lekérve (fallback text attribútumon).")
-                return interaction.text
+                return str(interaction.text)
             else:
-                log_event("⚠️ Golyóálló fallback: A nyers Interaction objektum stringesítése.")
-                return str(interaction)
+                raw_str = str(interaction)
+                if len(raw_str) > 20:
+                    log_event("✅ Valós idejű trendadatok kinyerve string castolással.")
+                    return raw_str
+                
+                log_event("⚠️ A Gemini API nem adott vissza értelmezhető adatot.")
+                return "Jelenleg nem állnak rendelkezésre valós idejű trendadatok a webről."
                 
         except Exception as e:
             log_event(f"⚠️ Hiba a valós idejű trendek lekérésekor: {e}")
@@ -262,22 +265,23 @@ class BooksyAnalyticsReporter:
             # 1. Trendek lekérése a Google-től a javított API-val
             real_time_trends = self.get_real_time_market_trends()
 
-            # 2. Claude Prompt - SZIGORÚAN tiszta szöveget (Markdown) kérünk
+            # 2. Claude Prompt - Tiszta Szöveges (Markdown) Kényszerítés Dedikált Struktúrával
             system_prompt = (
                 "Te egy Vezetői Adatelemző vagy az Antikvarius.ro-nál.\n\n"
                 f"PIACI KONTEXTUS / TRENDEK (A Webről):\n{real_time_trends}\n\n"
                 "SÉRTHETETLEN SZABÁLYOK:\n"
                 "1. Készíts egy professzionális, jól tagolt VEZETŐI JELENTÉST tiszta Markdown formátumban!\n"
                 "2. SOHA NE HASZNÁLJ HTML TAGEKET! (Semmilyen <html>, <div>, stb. címkét ne írj bele).\n"
-                "3. Légy lényegretörő, de mindenképpen fejtsd ki az anomáliákat és a logokban rejlő mintázatokat.\n\n"
+                "3. KÖTELEZŐ SZINTÉZIS: Vesd össze a PIACI KONTEXTUS-t a BELSŐ LOGOKKAL! Keresd meg, hogy a weben pörgő trendek megjelennek-e a saját kereséseink között, és ha nem, emeld ki ezt mint üzleti hiányosságot (opportunity gap)!\n\n"
                 "A jelentés KÖTELEZŐ szerkezete (használj '# ' címsorokat):\n"
-                "# 1. Átfogó Összefoglaló (Interakciók, arányok, eszközök)\n"
-                "# 2. Keresési Elemzés (Zero-match elemzés, hiányosságok)\n"
-                "# 3. UX és Vásárlói Súrlódások (Elakadások, kosárelhagyások elemzése)\n"
-                "# 4. Vezetői Stratégia (Konkrét javaslatok a belső adatok és a trendek alapján)\n"
+                "# 1. Piaci Környezet és Webes Trendek (A kapott webről származó adatok összefoglalása)\n"
+                "# 2. Átfogó Összefoglaló (Belső logok: Interakciók, arányok, eszközök, hibák)\n"
+                "# 3. Keresési Elemzés és Szintézis (Zero-match elemzés, hiányosságok, ÉS a webes trendek összevetése a belső keresésekkel)\n"
+                "# 4. UX és Vásárlói Súrlódások (Elakadások, technikai hibák, kosárelhagyások)\n"
+                "# 5. Vezetői Stratégia (Konkrét beszerzési, technikai és marketing javaslatok a belső adatok és a külső trendek alapján)\n"
             )
             
-            log_event("🧠 Claude elemző processz indítása (Markdown mód, Továbbfejlesztett Token Limit: 8000)...")
+            log_event("🧠 Claude elemző processz indítása (Tiszta Szöveg Mód, Megnövelt Token Limittel)...")
             res = claude_client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=8000,
@@ -287,53 +291,71 @@ class BooksyAnalyticsReporter:
                 ]
             )
             
+            # Golyóálló kinyerés
             raw_content = ""
             if hasattr(res, 'content'):
                 for block in res.content:
-                    # Szigorú ellenőrzés a 'text' típusú blokkra a ThinkingBlock elkerülésére
                     if hasattr(block, 'type') and block.type == 'text' and hasattr(block, 'text'):
                         raw_content += block.text
                     elif hasattr(block, 'text') and not hasattr(block, 'type'):
                         raw_content += block.text
-                
-                # Ha a blokkokon való iterálás kudarcot vallott (pl. változott az objektum felépítés)
-                if not raw_content:
-                    log_event("⚠️ Nem sikerült a blokk-iteráció, fallback a teljes content stringesítésére.")
-                    raw_content = str(res.content)
-            else:
+            
+            # Végső fallback, ha a Claude teljesen kifordult magából
+            if not raw_content:
                 raw_content = str(res)
                 
             raw_content = raw_content.strip()
             
-            # Fallback tisztítás
+            # Tisztítás a Python string reprezentációk ellen (Ha mégis nyers Message object maradt volna)
+            raw_content = re.sub(r"^Message\(.*?content=\[TextBlock\(text='", "", raw_content)
             raw_content = re.sub(r"^\[TextBlock\(text='", "", raw_content)
+            raw_content = re.sub(r"', type='text'\)\]\)$", "", raw_content)
             raw_content = re.sub(r"', type='text'\)\]$", "", raw_content)
-            raw_content = raw_content.replace('Itt a jelentés:\n', '')
-            raw_content = raw_content.replace('Íme a kért jelentés:\n', '')
-
-            html_content = raw_content.replace('\n', '<br>')
-            html_content = re.sub(r'\*\*(.*?)\*\*', r'<strong style="color: #333;">\1</strong>', html_content)
-            html_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', html_content)
-            html_content = re.sub(r'# (.*?)<br>', r'<h2 style="color: #0b57d0; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; margin-top: 25px;">\1</h2>', html_content)
-            html_content = re.sub(r'## (.*?)<br>', r'<h3 style="color: #1a73e8; margin-top: 20px;">\1</h3>', html_content)
+            raw_content = raw_content.replace('\\n', '\n')
             
-            final_email_html = f"""<!DOCTYPE html>
-            <html lang="hu">
-            <head><meta charset="UTF-8"></head>
-            <body style="font-family: 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #f4f7f6; padding: 20px; color: #444; line-height: 1.6;">
-                <div style="background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 800px; margin: auto;">
-                    <div style="text-align: center; margin-bottom: 30px;">
-                        <h1 style="color: #0b57d0; margin-bottom: 5px;">📊 Vezetői AI Analitika</h1>
-                        <span style="background: #e8f0fe; color: #1a73e8; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 14px;">{yesterday}</span>
+            # Fallback ellenőrzés és vészhelyzeti e-mail
+            if len(raw_content) < 200:
+                log_event(f"⚠️ A Claude válasza gyanúsan rövid ({len(raw_content)} karakter). Vészhelyzeti HTML generálása.")
+                final_email_html = f"""<!DOCTYPE html>
+                <html lang="hu">
+                <head><meta charset="UTF-8"></head>
+                <body style="font-family: Arial, sans-serif; background-color: #fce4e4; padding: 20px;">
+                    <div style="background: white; padding: 30px; border-left: 10px solid #d9534f; border-radius: 8px;">
+                        <h2 style="color: #d9534f;">⚠️ Rendszer Figyelmeztetés: AI Elemzési Hiba</h2>
+                        <p>Az elemző modul a várt HTML riport helyett a következő váratlan és rövid választ adta:</p>
+                        <div style="background: #f5f5f5; padding: 15px; border: 1px solid #ddd; font-family: monospace;">
+                            {raw_content}
+                        </div>
+                        <p style="margin-top: 20px;"><strong>Napi feldolgozott interakciók száma:</strong> {len(logs)} db</p>
+                        <p style="font-size: 11px; color: #888;">Ezt az e-mailt a Booksy AI biztonsági modulja generálta, hogy megelőzze az üres e-mailek kiküldését.</p>
                     </div>
-                    <div style="font-size: 15px;">
-                        {html_content}
+                </body>
+                </html>"""
+            else:
+                # 3. Python Konverzió (Markdown -> Szép HTML)
+                html_content = raw_content.replace('\n', '<br>')
+                html_content = re.sub(r'\*\*(.*?)\*\*', r'<strong style="color: #333;">\1</strong>', html_content)
+                html_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', html_content)
+                html_content = re.sub(r'# (.*?)<br>', r'<h2 style="color: #0b57d0; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; margin-top: 25px;">\1</h2>', html_content)
+                html_content = re.sub(r'## (.*?)<br>', r'<h3 style="color: #1a73e8; margin-top: 20px;">\1</h3>', html_content)
+                
+                final_email_html = f"""<!DOCTYPE html>
+                <html lang="hu">
+                <head><meta charset="UTF-8"></head>
+                <body style="font-family: 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #f4f7f6; padding: 20px; color: #444; line-height: 1.6;">
+                    <div style="background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 800px; margin: auto;">
+                        <div style="text-align: center; margin-bottom: 30px;">
+                            <h1 style="color: #0b57d0; margin-bottom: 5px;">📊 Vezetői AI Analitika</h1>
+                            <span style="background: #e8f0fe; color: #1a73e8; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 14px;">{yesterday}</span>
+                        </div>
+                        <div style="font-size: 15px;">
+                            {html_content}
+                        </div>
+                        <hr style="border: 0; border-top: 1px solid #eee; margin: 40px 0 20px 0;">
+                        <p style="font-size: 12px; color: #999; text-align: center;">Ezt a jelentést a Booksy AI Generálta tiszta szöveges (Markdown) alapon.</p>
                     </div>
-                    <hr style="border: 0; border-top: 1px solid #eee; margin: 40px 0 20px 0;">
-                    <p style="font-size: 12px; color: #999; text-align: center;">Ezt a jelentést a Booksy AI Generálta tiszta szöveges (Markdown) alapon.</p>
-                </div>
-            </body>
-            </html>"""
+                </body>
+                </html>"""
 
             log_event(f"✅ Riport generálva. Kinyert szöveg hossza: {len(raw_content)} karakter.")
             self.db.save_report("daily_analytics", yesterday, final_email_html)
@@ -347,7 +369,7 @@ class BooksyAnalyticsReporter:
                 return
 
             try:
-                # Multipart/Alternative mód kikényszeríti az UTF-8 helyes kódolást és segít kikerülni a spamszűrőt
+                # Multipart mód a tökéletes kódolásért
                 msg = MIMEMultipart('alternative')
                 msg['Subject'] = f"📊 Antikvarius.ro Vezetői AI Analitika - {yesterday}"
                 msg['From'] = smtp_sender
@@ -355,11 +377,9 @@ class BooksyAnalyticsReporter:
                 msg['Date'] = formatdate(localtime=True)
                 msg['Message-ID'] = make_msgid()
                 
-                # Tiszta szöveg fallback a levelezőkliensnek
                 text_part = MIMEText(raw_content, 'plain', 'utf-8')
                 msg.attach(text_part)
                 
-                # A formázott HTML csatolása
                 html_part = MIMEText(final_email_html, 'html', 'utf-8')
                 msg.attach(html_part)
                 
